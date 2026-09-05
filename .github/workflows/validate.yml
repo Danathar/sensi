@@ -27,12 +27,10 @@ jobs:
   hacs:
     name: HACS
     runs-on: ubuntu-latest
-    # HACS validates repository-level metadata - topics, an enabled issue
-    # tracker, brands registration - none of which a fork inherits from its
-    # parent, so on a fork it reports on the fork's settings rather than on the
-    # integration. Enable Issues and add repository topics to make this job
-    # meaningful here, then drop this condition.
-    if: github.event.repository.fork != true
+    # HACS validates repository-level metadata as well as the integration -
+    # topics, an enabled issue tracker, brands registration - none of which a
+    # fork inherits from its parent. This fork has been given the topics and
+    # issue tracker it checks for, so the job runs here too.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
