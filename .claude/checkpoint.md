@@ -15,8 +15,9 @@ measured is defined by the committed `.coveragerc`.
 
 ## In flight
 
-ACMM remediation, working the Hive-filed gap issues from L0 upward. L0 (#39),
-L2 (#41) and L3 (#44) are merged; L4 is the change this checkpoint ships with.
+Nothing. The ACMM remediation is complete - #39 (L0), #41 (L2), #44 (L3) and
+#45 (L4) are merged, and #46 closed the quality and security findings that
+followed. Every issue that was open at the start of this work is closed.
 
 ## Automation that is now live
 
