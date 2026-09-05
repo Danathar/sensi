@@ -29,8 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     # HACS validates repository-level metadata - topics, an enabled issue
     # tracker, brands registration - none of which a fork inherits from its
-    # parent. Running it on a fork reports failures about the fork's settings
-    # rather than about the integration, so restrict it to the canonical repo.
+    # parent, so on a fork it reports on the fork's settings rather than on the
+    # integration. Enable Issues and add repository topics to make this job
+    # meaningful here, then drop this condition.
     if: github.event.repository.fork != true
     steps:
       - name: Checkout
