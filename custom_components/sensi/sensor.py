@@ -12,12 +12,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import (
-    PERCENTAGE,
-    SIGNAL_STRENGTH_DECIBELS,
-    EntityCategory,
-    UnitOfTemperature,
-)
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -118,13 +113,17 @@ SENSOR_TYPES: Final = [
         value_fn=lambda device: device.state.demand_status.fan,
     ),
     SensiSensorEntityDescription(
-        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        # No device_class: wifi_connection_quality is a 0-100 quality
+        # percentage, not a signal level. SIGNAL_STRENGTH would be a claim that
+        # the number is in dB or dBm, and Home Assistant has no device class
+        # for a bare percentage. The key stays "wifi_strength" because it is
+        # part of the unique_id; only what is reported changes.
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         icon="mdi:wifi-strength-outline",
         key="wifi_strength",
-        name="Wifi strength",
-        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS,
+        name="Wifi quality",
+        native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda device: device.state.wifi_connection_quality,
     ),

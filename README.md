@@ -84,7 +84,7 @@ Data refreshes every 30 seconds.
 
 **Enabled by default:** Temperature, Humidity, Online.
 
-**Disabled by default** (enable them per-entity if you want them): Active Savings Event, Battery, Min/Max setpoints, Fan speed, WiFi strength.
+**Disabled by default** (enable them per-entity if you want them): Active Savings Event, Battery, Min/Max setpoints, Fan speed, WiFi quality.
 
 **Configuration entities**, all of which vary by thermostat model: Auxiliary Heating, Continuous Backlight, Display Humidity, Display Time, Fan, Humidification, Keypad Lockout, and Temperature/Humidity offsets.
 
@@ -176,6 +176,12 @@ CI enforces the same checks on every pull request: the pytest suite (`ci.yml`), 
 Further reading in [docs/](docs/): [quality.md](docs/quality.md), [metrics.md](docs/metrics.md), [review-rubric.md](docs/review-rubric.md), [risk-tiers.md](docs/risk-tiers.md), and [SECURITY-AI.md](docs/SECURITY-AI.md) for how agent-assisted changes are handled.
 
 ## Breaking changes
+
+### This fork
+
+**WiFi strength is now WiFi quality, in %.** The `wifi_strength` diagnostic sensor reports the thermostat's `wifi_connection_quality`, a 0-100 value, but declared it as a `signal_strength` measurement in `dB`. Real signal strength is negative dBm, so the sensor was recording and charting a mislabelled quantity. It now reports a percentage with no device class, and is named *Wifi quality*.
+
+Its entity ID and unique ID are unchanged, so there is nothing to re-add. The recorder cannot convert statistics compiled under the old unit and will warn once, as the 1.1.1 battery change did: `The unit of sensor.sensi_..._wifi_strength (%) cannot be converted to the unit of previously compiled statistics (dB)`. Clearing that sensor's long-term statistics under **Developer tools -> Statistics** silences it. The sensor is disabled by default, so most installs are not affected at all.
 
 <details>
 <summary>Upstream release history with breaking changes</summary>
