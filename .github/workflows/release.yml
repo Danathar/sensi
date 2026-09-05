@@ -2,6 +2,12 @@ name: Release
 on:
   workflow_dispatch:
 
+# This job pushes a commit and a tag and creates a release. Granted explicitly
+# so it does not inherit whatever the organisation default happens to be, and
+# does not silently widen if that default changes.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -9,9 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Third-party actions below are pinned to a commit SHA rather than a tag.
+      # A tag can be moved; a SHA cannot. The trailing comment records which
+      # version each SHA is, so the pin stays readable.
       - name: Gets semantic release info
         id: semantic_release_info
-        uses: jossef/action-semantic-release-info@v2
+        uses: jossef/action-semantic-release-info@6cf3ceeb3254e56fa643f25f1796cd114c2970ff # v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -28,31 +37,31 @@ jobs:
 
       - name: Push changes
         if: ${{steps.semantic_release_info.outputs.version != ''}}
-        uses: ad-m/github-push-action@v0.8.0
+        uses: ad-m/github-push-action@d91a481090679876dfc4178fef17f286781251df # v0.8.0
         with:
           github_token: ${{ github.token }}
           tags: true
 
-      - name: Create GitHub Release
-        if: ${{steps.semantic_release_info.outputs.version != ''}}
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          tag_name: ${{ steps.semantic_release_info.outputs.git_tag }}
-          release_name: ${{ steps.semantic_release_info.outputs.git_tag }}
-          body: ${{ steps.semantic_release_info.outputs.notes }}
-          draft: false
-          prerelease: false
-
       - name: "ZIP the integration directory"
+        if: ${{steps.semantic_release_info.outputs.version != ''}}
         shell: "bash"
         run: |
           cd "${{ github.workspace }}/custom_components/sensi"
           zip sensi.zip -r ./
 
-      - name: "Upload the ZIP file to the release"
-        uses: "softprops/action-gh-release@v2.0.8"
+      # One step, not two. This previously created the release with
+      # actions/create-release@v1 - archived upstream since 2021 - and then
+      # updated it with softprops/action-gh-release to attach the asset, so the
+      # workflow depended on two release-creation actions, one unmaintained.
+      # softprops/action-gh-release creates the release and uploads the asset in
+      # a single call.
+      - name: Create the GitHub release and upload the ZIP
+        if: ${{steps.semantic_release_info.outputs.version != ''}}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.semantic_release_info.outputs.git_tag }}
+          name: ${{ steps.semantic_release_info.outputs.git_tag }}
+          body: ${{ steps.semantic_release_info.outputs.notes }}
+          draft: false
+          prerelease: false
           files: ${{ github.workspace }}/custom_components/sensi/sensi.zip

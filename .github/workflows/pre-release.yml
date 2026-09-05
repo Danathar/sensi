@@ -6,21 +6,29 @@ on:
         description: 'Pre-release version'
         required: true
 
+# Creating a release writes to the repository. Granted explicitly so the job
+# does not inherit whatever the organisation default happens to be, and does not
+# silently widen if that default changes.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v2.1.0
+      - uses: actions/checkout@v4
 
-      - name: Create GitHub Release
-        uses: aaiezza/create-release@master
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      # Was aaiezza/create-release@master - an unmaintained action behind a
+      # mutable branch ref, so a push to that repository would have changed what
+      # runs here, with a contents:write token, and no diff on our side.
+      # softprops/action-gh-release is what release.yml and manual_release.yml
+      # already use; pinned to the commit behind its v2 tag rather than the tag,
+      # because a tag can be moved.
+      - name: Create GitHub pre-release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          release_branch: ${{ github.ref_name }}
-          tag: ${{ github.event.inputs.pre_release_version }}
+          tag_name: ${{ github.event.inputs.pre_release_version }}
+          target_commitish: ${{ github.ref_name }}
           draft: false
           prerelease: true
-

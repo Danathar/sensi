@@ -115,7 +115,7 @@ Two things about that fake that are easy to get wrong:
   captured payloads report `display_scale: "f"`. Without it, temperature
   assertions are really assertions about Home Assistant's F-to-C rounding.
 
-Coverage is gated at 90% by `.github/workflows/coverage-gate.yml`. Do not lower
+Coverage is gated at 93% by `.github/workflows/coverage-gate.yml`. Do not lower
 the threshold to make a change pass.
 
 Prefer adding a payload fixture under `tests/` over hand-building a dict inline
