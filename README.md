@@ -11,7 +11,7 @@
 
 A Home Assistant custom integration for [Sensi](https://sensi.emerson.com/en-us) smart thermostats. It reads temperature, humidity and thermostat state, and lets you control operating mode, setpoints, fan and the thermostat's own configuration switches from Home Assistant.
 
-There is no public Sensi API. The integration talks to the same backend the mobile app does, worked out by earlier work in [`w1ll1am23/pysensi`](https://github.com/w1ll1am23/pysensi). Emerson can change that backend at any time, so treat this as something that can break without warning.
+There is no public Sensi API. The integration talks to the same backend the mobile app does. Emerson can change that backend at any time, so treat this as something that can break without warning.
 
 > [!NOTE]
 > **This is a fork of [`iprak/sensi`](https://github.com/iprak/sensi).** See [About this fork](#about-this-fork) for what differs, [How this repository is maintained](#how-this-repository-is-maintained) for the agent fleet that reviews it, and [Thanks](#thanks) for credit where it belongs.
