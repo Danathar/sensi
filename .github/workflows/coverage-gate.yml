@@ -29,6 +29,8 @@ jobs:
     name: line coverage >= threshold
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      percent: ${{ steps.summarise.outputs.percent }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,6 +58,7 @@ jobs:
             --cov-fail-under="${MIN_COVERAGE}"
 
       - name: Summarise
+        id: summarise
         if: always()
         run: |
           if [ -f coverage.xml ]; then
@@ -70,6 +73,11 @@ jobs:
           print(f"### Coverage {verdict}\n")
           print(f"- Line coverage: **{percent:.2f}%**")
           print(f"- Threshold: **{threshold:.0f}%**")
+
+          # Handed to the publish job below. Written here rather than
+          # re-parsed there so the badge and the summary can never disagree.
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"percent={percent:.2f}\n")
           PY
           else
             echo "No coverage.xml was produced - the suite did not run." >> "$GITHUB_STEP_SUMMARY"
@@ -82,3 +90,74 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: ignore
+
+  # Publishes the number the gate just measured to a data-only `coverage-data`
+  # branch, where the README badge reads it from. Push to master only: a pull
+  # request must never be able to move the published number, least of all one
+  # from a fork, and `needs: coverage` means a run that failed the gate does
+  # not get to overwrite a good number with a bad one.
+  #
+  # The branch holds two files and no code - `coverage-unit.json` for the
+  # badge, `coverage-trend.csv` as the history the per-run artifact cannot be.
+  publish:
+    name: publish badge and trend
+    needs: coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Serialised, and deliberately not cancel-in-progress: two pushes landing
+    # together must append two trend rows, not race and drop one.
+    concurrency:
+      group: coverage-data
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write and push the badge data
+        env:
+          COVERAGE_PERCENT: ${{ needs.coverage.outputs.percent }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${COVERAGE_PERCENT}" ]; then
+            echo "The coverage job produced no percentage; nothing to publish." >&2
+            exit 1
+          fi
+
+          work="$(mktemp -d)"
+          tree="$work/coverage-data"
+          trap 'git worktree remove --force "$tree" 2>/dev/null || true' EXIT
+
+          # First ever run has no branch to build on, so start an orphan one.
+          if git fetch origin coverage-data:refs/remotes/origin/coverage-data 2>/dev/null; then
+            git worktree add --detach "$tree" refs/remotes/origin/coverage-data
+          else
+            git worktree add --detach "$tree"
+            git -C "$tree" switch --orphan coverage-data
+            git -C "$tree" rm -rq --cached . 2>/dev/null || true
+            find "$tree" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+
+          python3 scripts/coverage_badge.py "${COVERAGE_PERCENT}" \
+            --high "${MIN_COVERAGE}" \
+            --date "$(date -u +%Y-%m-%d)" \
+            --sha "${GITHUB_SHA}" \
+            --badge-out "$tree/coverage-unit.json" \
+            --trend-out "$tree/coverage-trend.csv"
+
+          git -C "$tree" config user.name "github-actions[bot]"
+          git -C "$tree" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$tree" add coverage-unit.json coverage-trend.csv
+
+          if git -C "$tree" diff --cached --quiet; then
+            echo "Coverage unchanged at ${COVERAGE_PERCENT}%; nothing to commit."
+            exit 0
+          fi
+
+          git -C "$tree" commit -m "chore: record unit coverage ${COVERAGE_PERCENT}% for ${GITHUB_SHA::12}"
+          git -C "$tree" push origin HEAD:coverage-data
+
+          echo "Published **${COVERAGE_PERCENT}%** to the coverage-data branch." >> "$GITHUB_STEP_SUMMARY"
