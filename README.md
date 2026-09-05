@@ -42,14 +42,7 @@ Copy `custom_components/sensi/` into `<config directory>/custom_components/sensi
 
 ### Getting a refresh token
 
-1. Open Chrome or Edge and go to <https://manager.sensicomfort.com/>.
-2. Press <kbd>F12</kbd> to open DevTools and select the **Network** tab.
-3. Log in with your Sensi credentials. You do not need to subscribe or go any further.
-4. Find the `token?device=` request and copy the `refresh_token` value from its **Response**.
-
-You may see two `token?device=` requests — use the one that has a Response body. Other browsers work the same way. Repeat this whenever you change your Sensi password.
-
-![How to get a refresh token](https://github.com/iprak/sensi/assets/6459774/3d33a6c1-6c07-4886-b4f0-3289e62d41e4)
+Follow upstream's walkthrough, which has the DevTools steps and a screenshot: **[Refresh Token](https://github.com/iprak/sensi#refresh-token)**. Repeat it whenever you change your Sensi password.
 
 > [!WARNING]
 > A refresh token is a **bearer credential for your Sensi account** and is long-lived. Treat it like a password: do not paste it into issues, screenshots, or logs. If you have run an older build of this integration with debug logging on, your `home-assistant.log` may contain the token — see [Security](#security).
