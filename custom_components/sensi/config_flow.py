@@ -15,7 +15,13 @@ from .auth import (
     SensiConnectionError,
     refresh_access_token,
 )
-from .const import CONFIG_REFRESH_TOKEN, LOGGER, SENSI_DOMAIN, SENSI_NAME
+from .const import (
+    CONFIG_REFRESH_TOKEN,
+    LOGGER,
+    SENSI_DOMAIN,
+    SENSI_LOGIN_URL,
+    SENSI_NAME,
+)
 
 AUTH_DATA_SCHEMA = vol.Schema(
     {
@@ -33,7 +39,7 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
         """Start a config flow."""
         self._reauth_unique_id = None
 
-    async def _try_login(self, config: AuthenticationConfig) -> LoginResponse:
+    async def _try_login(self, config: AuthenticationConfig) -> "LoginResponse":
         """Try login with supplied credentials."""
         try:
             new_config = await refresh_access_token(self.hass, config.refresh_token)
@@ -70,6 +76,7 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
             step_id="user",
             data_schema=AUTH_DATA_SCHEMA,
             errors=errors,
+            description_placeholders={"sensi_url": SENSI_LOGIN_URL},
         )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
@@ -105,6 +112,7 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
             step_id="user",
             data_schema=AUTH_DATA_SCHEMA,
             errors=errors,
+            description_placeholders={"sensi_url": SENSI_LOGIN_URL},
         )
 
 

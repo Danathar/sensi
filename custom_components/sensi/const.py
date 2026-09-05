@@ -7,6 +7,9 @@ CONFIG_REFRESH_TOKEN: Final = "refresh_token"
 
 SENSI_DOMAIN: Final = "sensi"
 SENSI_NAME: Final = "Sensi Thermostat"
+# Rendered into the config flow description; hassfest rejects literal
+# URLs inside translation strings.
+SENSI_LOGIN_URL: Final = "https://manager.sensicomfort.com/"
 SENSI_ATTRIBUTION: Final = "Data provided by Sensi"
 
 SENSI_FAN_AUTO: Final = "auto"
