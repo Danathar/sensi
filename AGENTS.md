@@ -58,8 +58,10 @@ image supplies one. Ruff config belongs in `ruff.toml`, pytest config in
 **Keep `manifest.json` `requirements` in sync with `requirements_component.txt`.**
 `scripts/check_requirements_sync.py` enforces this and CI fails on drift.
 
-**Do not bump `manifest.json` `version` by hand.** The release workflow derives
-it from commit messages.
+**Do not bump `manifest.json` `version` by hand.** `release.yml` sets it from
+the version given when the release is run. This fork uses CalVer
+(`YYYY.M.PATCH`, no `v` prefix) on its own line, not upstream's 2.x semver -
+see CONTRIBUTING.md, "Releases".
 
 **`strings.json` cannot contain literal URLs.** hassfest rejects them. Pass them
 through `description_placeholders` instead — `SENSI_LOGIN_URL` in `const.py` is
@@ -129,16 +131,19 @@ it first.
 
 ## Commits and pull requests
 
-[Conventional Commits](https://www.conventionalcommits.org/). The prefix decides
-the released version, so choose it on that basis:
+[Conventional Commits](https://www.conventionalcommits.org/). The prefix no
+longer decides the version - CalVer is chosen when the release is cut - but it
+decides how the change reads in the generated release notes, which is what
+users actually see:
 
-| Prefix | Effect |
+| Prefix | Use for |
 | --- | --- |
-| `feat:` | minor version bump — user-visible integration capability only |
-| `fix:` | patch bump — user-visible bug fix only |
-| `ci:` `docs:` `test:` `refactor:` `chore:` | no version bump |
+| `feat:` | a user-visible integration capability |
+| `fix:` | a user-visible bug fix |
+| `ci:` `docs:` `test:` `refactor:` `chore:` | everything else |
 
 Tooling, CI, lint config, and agent instruction files are **not** `feat:`.
+Mislabelling them puts maintenance work in front of users as a new feature.
 
 Fill in `.github/pull_request_template.md`. The *How it was verified* and *Risk*
 sections are the ones reviewers act on.
