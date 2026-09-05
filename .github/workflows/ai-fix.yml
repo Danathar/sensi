@@ -1,0 +1,127 @@
+name: AI fix
+
+# Two entry points, both explicit:
+#
+#   1. an issue labelled `ai-fix-requested`
+#   2. a comment on an issue or pull request that mentions @claude
+#
+# Both are inert by default. The workflow requires BOTH an ANTHROPIC_API_KEY
+# secret AND a repository variable AI_FIX_ENABLED set to "true". Two switches
+# rather than one is deliberate: `ai-fix-requested` is applied automatically by
+# the issue-filing bot, so a key added for some unrelated purpose must not
+# silently start autonomous work on every issue that bot files.
+#
+# See docs/SECURITY-AI.md for what this is allowed to do and what it is not.
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue or pull request number to work on"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-fix-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: check whether AI fixing is enabled
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.decide.outputs.enabled }}
+    # Cheap trigger filter first, so the job does not start on every comment in
+    # the repository.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'issues'
+          && github.event.label.name == 'ai-fix-requested')
+      || (github.event_name != 'issues'
+          && contains(github.event.comment.body, '@claude'))
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          HAVE_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          OPTED_IN: ${{ vars.AI_FIX_ENABLED == 'true' }}
+        run: |
+          if [ "$HAVE_KEY" = "true" ] && [ "$OPTED_IN" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "AI fixing is enabled for this repository." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### AI fix is not enabled"
+            echo
+            echo "This workflow was triggered but is inert."
+            echo
+            echo "| Switch | State |"
+            echo "| --- | --- |"
+            echo "| ANTHROPIC_API_KEY secret | $HAVE_KEY |"
+            echo "| AI_FIX_ENABLED variable is \"true\" | $OPTED_IN |"
+            echo
+            echo "Both are required. Enabling only the secret is not enough:"
+            echo "the ai-fix-requested label is applied automatically by the"
+            echo "issue-filing bot, so a key added for another purpose would"
+            echo "otherwise start autonomous work on every issue it files."
+            echo
+            echo "See docs/SECURITY-AI.md before turning this on."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fix:
+    name: run the agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Read AGENTS.md before doing anything else, and follow it.
+
+            Work the referenced issue or review feedback. Constraints that are
+            not negotiable, from docs/SECURITY-AI.md and docs/review-rubric.md:
+
+            - Never put a token, refresh token, or real icd_id into code, logs,
+              fixtures, a commit message, or a comment.
+            - Do not change an entity unique_id, the config flow, the stored
+              credential shape, or manifest.json's version. If the task needs
+              one of those, stop and say so instead.
+            - Do not edit files under .github/workflows/, .claude/, or
+              docs/SECURITY-AI.md.
+            - Payload parsing degrades, never raises.
+            - Run `pytest`, `ruff check .` and `ruff format --check .` before
+              opening anything, and report the real numbers.
+            - Open a pull request for review. Never push to master.
+
+            If the issue is ambiguous, or fixing it properly would require any
+            of the forbidden changes, say so in a comment and stop. A comment
+            explaining why you did not act is a correct outcome.
+          claude_args: |
+            --allowed-tools "Bash(pytest:*),Bash(ruff:*),Bash(git:*),Bash(gh pr:*),Edit,Write,Read,Glob,Grep"

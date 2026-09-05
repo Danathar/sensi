@@ -21,8 +21,9 @@ prompted it. For a fix, say what the user-visible symptom was.
 ## Risk
 
 <!--
-See docs/risk-tiers.md if this repository has one. Otherwise, in a sentence:
-what breaks for existing users if this is wrong, and how would they notice?
+A tier/* label is applied automatically - see docs/risk-tiers.md for what each
+one requires. In a sentence: what breaks for existing users if this is wrong,
+and how would they notice?
 -->
 
 - [ ] This changes the config flow, stored credentials, or entity unique IDs

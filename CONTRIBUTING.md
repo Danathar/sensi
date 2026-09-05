@@ -49,6 +49,8 @@ CI runs the same things:
 | `.github/workflows/ci.yml` | the pytest suite |
 | `.github/workflows/coverage-gate.yml` | line coverage stays at or above the threshold |
 | `.github/workflows/validate.yml` | `ruff`, hassfest, HACS, and requirements sync |
+| `.github/workflows/labeler.yml` | applies path, risk-tier and size labels |
+| `.github/workflows/nightly.yml` | the whole gate nightly, plus a run against the *latest* Home Assistant as advance warning |
 
 ## Layout
 
@@ -122,6 +124,10 @@ credentials, or entity unique IDs, since those break existing installs.
   deliberately not covered
 - [`docs/metrics.md`](docs/metrics.md) — change acceptance, and how to read it
   honestly on a single-maintainer repository
+- [`docs/risk-tiers.md`](docs/risk-tiers.md) — what the automatic `tier/*` label
+  on your pull request means, and what each tier asks of you
+- [`docs/SECURITY-AI.md`](docs/SECURITY-AI.md) — what automated agents are
+  permitted to do here, and the two switches that gate the AI-fix workflow
 
 ## Reporting a problem
 
