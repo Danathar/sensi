@@ -1,0 +1,41 @@
+{
+  "$comment": [
+    "Self-tuning policy for the quality gates. scripts/auto_qa_tuner.py reads",
+    "this file plus a coverage report and proposes an adjustment; it never",
+    "applies one. A threshold that moves on its own is a threshold nobody",
+    "trusts, and a ratchet that can loosen is not a ratchet.",
+    "Prose: docs/quality.md."
+  ],
+  "version": 1,
+  "gates": {
+    "line_coverage": {
+      "source": "coverage.xml",
+      "enforced_in": ".github/workflows/coverage-gate.yml",
+      "variable": "MIN_COVERAGE",
+      "current": 90,
+      "floor": 85,
+      "ceiling": 97,
+      "policy": {
+        "direction": "up_only",
+        "headroom": 5,
+        "step": 1,
+        "min_observations": 5,
+        "rationale": [
+          "Raise only when the measured coverage has stayed at least `headroom`",
+          "points above the threshold across `min_observations` consecutive runs,",
+          "and then only by `step`. Headroom exists so an unrelated change is not",
+          "blocked by a line it did not touch; without it the gate tracks the",
+          "measurement exactly and every PR becomes a coverage negotiation.",
+          "`ceiling` stops the ratchet before the last few percent, which on this",
+          "codebase is defensive error handling that cannot be exercised without",
+          "a real thermostat."
+        ]
+      }
+    }
+  },
+  "review": {
+    "owner": "human",
+    "cadence": "when the tuner proposes a change in the nightly job summary",
+    "note": "Proposals appear in the nightly run summary. Applying one is a pull request like any other."
+  }
+}

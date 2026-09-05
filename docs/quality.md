@@ -66,6 +66,24 @@ Stating these plainly is part of the signal.
 - **Performance.** No benchmarks; the integration polls every 30 seconds and
   that has never been the constraint.
 
+## Nightly
+
+`.github/workflows/nightly.yml` runs the whole gate once a day, and separately
+runs the suite against the **latest** Home Assistant rather than the pinned one.
+Home Assistant ships monthly and deprecates aggressively; that second leg is how
+an upcoming break arrives as a nightly notice instead of as a user's broken
+installation. It is informational and never gates a pull request.
+
+A failure of the *pinned* leg means something broke without a code change — a
+transitive dependency, a yanked release. It opens a single issue that later runs
+reuse and that closes itself when the run goes green again.
+
+The same job runs `scripts/auto_qa_tuner.py`, which reads the measured coverage
+against the policy in `.github/auto-qa-tuning.json` and reports whether the
+threshold could be raised. It only ever proposes: a gate that raises itself
+fails on a change nobody connected to it, and the person who has to understand
+that failure was not in the loop when it moved.
+
 ## Trend
 
 There is no coverage service and no history beyond the per-run artifact, which

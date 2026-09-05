@@ -25,6 +25,8 @@ satisfy a file-existence check.
 | --- | --- | --- |
 | #39 | L0 | `tests/e2e/`, coverage gate, `ruff.toml` + lint job, `CONTRIBUTING.md`, PR template |
 | #41 | L2 | `AGENTS.md`, `CLAUDE.md`, Copilot instructions, Cursor rules, `.editorconfig`, prompt catalog, slash commands, correction memory |
+| #44 | L3 | review rubric, quality and metrics docs, `.claude/settings.json` + format hook, `tests.yml` → `ci.yml`, job timeouts |
+| this | L4 | labeller and risk tiers, nightly compliance, gated AI-fix workflow, AI security policy, reflections |
 
 **Coverage moved materially.** `tests/e2e/` was the first coverage of the
 connect handshake, the emit loop, and the reconnect path. `client.py` went 52% →
@@ -54,13 +56,20 @@ client must implement `shutdown()`; `except ValueError, TypeError:` is valid on
 3.14; the `hass` fixture must be created before anything that patches
 `Store.async_load`; temperature assertions need `US_CUSTOMARY_SYSTEM`.
 
+### Deliberately left inert
+
+The L4 issues asked for automation that acts on the repository. The labeller and
+the nightly run are live — they only add labels and open one self-closing issue.
+`ai-fix.yml` is not: it needs an `ANTHROPIC_API_KEY` secret **and** an
+`AI_FIX_ENABLED` variable. Two switches, because `ai-fix-requested` is applied
+automatically by the issue-filing bot, so one switch would mean a key added for
+an unrelated purpose silently starts autonomous work on every issue it files.
+
 ### Still open at the end of this entry
 
-- ACMM L4 issues #26–#34.
 - #36 and #38 — quality findings about `client.py` coverage and the missing
   end-to-end tier. Both were largely addressed by #39; they need a final pass to
   confirm what remains rather than being closed on assumption.
-- #40 — `timeout-minutes` on workflow jobs.
 
 ### Notes for whoever is next
 

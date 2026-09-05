@@ -1,0 +1,102 @@
+name: Triage
+
+on:
+  # pull_request_target so the workflow has a write token and works for pull
+  # requests from forks. Nothing here checks out or executes code from the pull
+  # request - the checkout below is the base repository, and the change is only
+  # ever read as a list of paths through the API.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  paths:
+    name: path labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Apply path labels
+        uses: actions/labeler@v5
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: true
+
+  classify:
+    name: risk tier and size
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the base repository
+        uses: actions/checkout@v4
+        with:
+          # Explicit: never the pull request's head.
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install PyYAML
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Classify
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/classify_pr.py --pr "$PR" > classification.json
+          cat classification.json
+
+      - name: Apply the labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          wanted=$(python3 - <<'PY'
+          import json
+
+          result = json.load(open("classification.json"))
+          for key in ("tier", "size"):
+              entry = result.get(key)
+              if entry:
+                  print(f"{entry['name']}\t{entry['colour']}\t{entry['description']}")
+          PY
+          )
+
+          # Create each label if it does not exist yet, so it gets the colour and
+          # description from .github/risk-tiers.yml rather than a random one.
+          while IFS=$'\t' read -r name colour description; do
+            [ -n "$name" ] || continue
+            gh label create "$name" --color "$colour" --description "$description" \
+              || gh label edit "$name" --color "$colour" --description "$description" \
+              || true
+          done <<< "$wanted"
+
+          # A pull request has exactly one tier and one size. Drop any stale ones
+          # left over from an earlier push before adding the current pair.
+          current=$(gh pr view "$PR" --json labels --jq '.labels[].name')
+          keep=$(cut -f1 <<< "$wanted" | paste -sd, -)
+
+          for label in $current; do
+            case "$label" in
+              tier/*|size/*)
+                if [[ ",$keep," != *",$label,"* ]]; then
+                  gh pr edit "$PR" --remove-label "$label"
+                fi
+                ;;
+            esac
+          done
+
+          gh pr edit "$PR" --add-label "$keep"
+          echo "Applied: $keep" >> "$GITHUB_STEP_SUMMARY"

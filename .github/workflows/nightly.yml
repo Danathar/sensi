@@ -1,0 +1,164 @@
+name: Nightly compliance
+
+on:
+  schedule:
+    # 06:17 UTC. Off the hour on purpose - GitHub's scheduler is heavily
+    # contended at :00 and runs get delayed.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  pinned:
+    name: pinned Home Assistant
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements_test.txt
+            requirements_component.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+
+      - name: Record resolved versions
+        run: |
+          pip list --format=freeze \
+            | grep -iE '^(homeassistant|pytest-homeassistant-custom-component|python-socketio|ruff)=' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Lint and format
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Requirements sync
+        run: python3 scripts/check_requirements_sync.py
+
+      - name: Tests with coverage
+        run: |
+          pytest \
+            --cov=custom_components.sensi \
+            --cov-report=term-missing \
+            --cov-report=xml
+
+      - name: Propose a gate adjustment
+        if: always()
+        run: |
+          if [ -f coverage.xml ]; then
+            python3 scripts/auto_qa_tuner.py --markdown >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  latest:
+    name: latest Home Assistant (advance warning)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Informational. Home Assistant ships every month and deprecates
+    # aggressively; this leg is how that lands as a nightly notice rather than
+    # as a user's broken installation. It must never gate a pull request, so its
+    # failure is recorded rather than propagated.
+    continue-on-error: true
+    outputs:
+      result: ${{ steps.run.outcome }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the newest test harness
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_component.txt
+          pip install --upgrade pytest-homeassistant-custom-component pytest-cov
+
+      - name: Record resolved versions
+        run: |
+          {
+            echo "### Latest Home Assistant leg"
+            echo
+            pip list --format=freeze \
+              | grep -iE '^(homeassistant|pytest-homeassistant-custom-component)='
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tests
+        id: run
+        # -ra surfaces the warnings summary, which on this leg is the point:
+        # a Home Assistant deprecation shows up here before it shows up as a
+        # broken installation.
+        run: pytest -q -ra
+
+  report:
+    name: report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [pinned, latest]
+    if: always() && github.event_name == 'schedule'
+    steps:
+      - name: Open, update or close the nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PINNED: ${{ needs.pinned.result }}
+          LATEST: ${{ needs.latest.outputs.result }}
+        run: |
+          set -euo pipefail
+
+          TITLE="Nightly compliance failing"
+
+          existing=$(gh issue list --repo "$REPO" --state open \
+            --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ "$PINNED" = "success" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$REPO" \
+                --body "Nightly is green again as of [this run]($RUN_URL). Closing."
+              gh issue close "$existing" --repo "$REPO"
+            fi
+            echo "Nightly green; nothing to report." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          body=$(cat <<BODY
+          The nightly compliance run failed against the **pinned** Home Assistant,
+          which is the same configuration pull requests are gated on. Something
+          broke without a code change - a transitive dependency, a yanked
+          release, or an environment change.
+
+          - Pinned leg: \`$PINNED\`
+          - Latest-Home-Assistant leg: \`${LATEST:-not run}\`
+          - Run: $RUN_URL
+
+          This issue is reused by later nightly runs and closes itself when the
+          run goes green again.
+          BODY
+          )
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh label create ci --repo "$REPO" --color 1d76db \
+              --description "Continuous integration" >/dev/null 2>&1 || true
+            gh issue create --repo "$REPO" --title "$TITLE" --label ci --body "$body"
+          fi
