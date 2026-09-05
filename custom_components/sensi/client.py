@@ -340,7 +340,10 @@ class SensiClient:
 
         if not action_response.error:
             # Doesn't look like the mode can change at server end, no response was received.
-            device.state.fan_mode = try_parse_enum(FanMode, mode)
+            # Fall back to UNKNOWN rather than None for a mode the enum does
+            # not recognise: State parsing does the same, and a None here would
+            # make SensiThermostat.fan_mode raise on `.value`.
+            device.state.fan_mode = try_parse_enum(FanMode, mode) or FanMode.UNKNOWN
 
         return action_response
 
