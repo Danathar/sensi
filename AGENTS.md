@@ -138,6 +138,23 @@ Tooling, CI, lint config, and agent instruction files are **not** `feat:`.
 Fill in `.github/pull_request_template.md`. The *How it was verified* and *Risk*
 sections are the ones reviewers act on.
 
+## Reference
+
+| Document | What it is for |
+| --- | --- |
+| [`docs/review-rubric.md`](docs/review-rubric.md) | what a review checks, in priority order |
+| [`docs/quality.md`](docs/quality.md) | what each CI gate proves, and what is not covered at all |
+| [`docs/metrics.md`](docs/metrics.md) | change acceptance, and how to read it here |
+| [`.claude/checkpoint.md`](.claude/checkpoint.md) | where the repository stands right now |
+| [`.claude/session-summary.md`](.claude/session-summary.md) | decisions already made, so they are not re-litigated |
+| [`.claude/memory/`](.claude/memory/) | corrections that came out of real mistakes on this codebase |
+| [`.github/prompts/`](.github/prompts/) | reusable prompts for triage, protocol changes, upgrades, review, release |
+
+`.claude/settings.json` is checked in: it allows read-only inspection and the
+test/lint commands without asking, asks before anything that pushes or
+publishes, and runs a PostToolUse hook that sorts imports and formats any
+edited `.py` file.
+
 ## When you are unsure
 
 - A payload field you cannot find in `tests/sample.json` — say so rather than
