@@ -12,7 +12,7 @@
       "source": "coverage.xml",
       "enforced_in": ".github/workflows/coverage-gate.yml",
       "variable": "MIN_COVERAGE",
-      "current": 90,
+      "current": 93,
       "floor": 85,
       "ceiling": 97,
       "policy": {

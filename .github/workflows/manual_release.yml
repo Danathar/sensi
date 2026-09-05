@@ -72,7 +72,9 @@ jobs:
           (cd "${{ github.workspace }}/custom_components/sensi" && zip -r "${{ github.workspace }}/release/sensi.zip" .)
 
       - name: Create GitHub Release and upload ZIP
-        uses: softprops/action-gh-release@v2
+        # Pinned to a commit SHA rather than the tag, matching release.yml
+        # and pre-release.yml: a tag can be moved, a SHA cannot.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.event.inputs.release_version }}
           files: release/sensi.zip

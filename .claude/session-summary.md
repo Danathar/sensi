@@ -30,7 +30,8 @@ satisfy a file-existence check.
 
 **Coverage moved materially.** `tests/e2e/` was the first coverage of the
 connect handshake, the emit loop, and the reconnect path. `client.py` went 52% →
-90%; the repository total 85% → 96%. The gate is set at 90%, below the current
+90%; a follow-up took it to 100% and the repository total to 98%. The gate is
+set at 93%, below the current
 number on purpose, so an unrelated change is not blocked by a line it did not
 touch.
 
@@ -65,11 +66,20 @@ the nightly run are live — they only add labels and open one self-closing issu
 automatically by the issue-filing bot, so one switch would mean a key added for
 an unrelated purpose silently starts autonomous work on every issue it files.
 
-### Still open at the end of this entry
+### Follow-up that closed the quality findings
 
-- #36 and #38 — quality findings about `client.py` coverage and the missing
-  end-to-end tier. Both were largely addressed by #39; they need a final pass to
-  confirm what remains rather than being closed on assumption.
+#36 and #38 asked for the connection lifecycle to be covered and for coverage
+regressions to stop being invisible. The final pass took `client.py` to 100%,
+committed a `.coveragerc` so local and CI runs measure the same thing, and
+raised the gate to 93%.
+
+Writing those tests found a real bug: `_async_invoke_setter` read
+`future.result()` after `asyncio.wait_for` had cancelled the future, so a
+thermostat that never acknowledged a setter produced an unhandled
+`CancelledError` rather than the intended `HomeAssistantError`. The line meant
+to handle it was unreachable, which is exactly why coverage had never flagged
+it - an unreachable line and a covered line are indistinguishable in a
+percentage.
 
 ### Notes for whoever is next
 

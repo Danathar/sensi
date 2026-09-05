@@ -3,9 +3,14 @@
 # The tier is the highest one whose paths the pull request touches - it is not
 # additive and not a score. Prose and rationale: docs/risk-tiers.md.
 
+# GitHub caps a label description at 100 characters, so each tier carries a
+# short `label_description` for the label itself and a long `description` for
+# humans reading this file. scripts/classify_pr.py enforces the 100-character
+# limit, so an over-long one fails locally rather than in CI.
 tiers:
   - name: tier/breaking
     label_colour: b60205
+    label_description: Can break an existing install on upgrade - needs an explicit Risk note
     description: >-
       Can break an existing install on upgrade. Needs an explicit note in the
       pull request Risk section and in the release notes.
@@ -17,6 +22,7 @@ tiers:
 
   - name: tier/runtime
     label_colour: d93f0b
+    label_description: Runs against the live Sensi service - cannot be fully verified in CI
     description: >-
       Runs against the live Sensi service or drives entity state. Cannot be
       fully verified in CI; hardware verification should be stated.
@@ -30,6 +36,7 @@ tiers:
 
   - name: tier/behaviour
     label_colour: fbca04
+    label_description: Changes what an entity reports or accepts - user-visible
     description: >-
       Changes what an entity reports or accepts. Covered by tests; user-visible.
     paths:
@@ -43,6 +50,7 @@ tiers:
 
   - name: tier/support
     label_colour: 0e8a16
+    label_description: Tests, CI, tooling and docs - cannot reach a user's installation
     description: >-
       Tests, CI, tooling and documentation. Cannot reach a user's installation.
     paths:

@@ -18,7 +18,7 @@ Then:
 - If `ruff check` fails, prefer `ruff check --fix` for the mechanical rules
   (import sorting, redundant annotations) and fix the rest by hand. Do not add
   `# noqa` to silence a rule without saying why in the same line comment.
-- If coverage is below 90% the `coverage-gate` workflow will fail. Name the
+- If coverage is below 93% the `coverage-gate` workflow will fail. Name the
   modules that lost coverage and the specific missing lines — do not just report
   the total.
 - Report the actual numbers (tests passed, coverage percentage). Do not say

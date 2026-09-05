@@ -459,8 +459,16 @@ class SensiClient:
         with contextlib.suppress(asyncio.exceptions.TimeoutError):
             await asyncio.wait_for(future, SET_EVENT_TIMEOUT)
 
-        # Treat this as failure
-        if not future.done():
+        # Treat this as failure.
+        #
+        # `future.cancelled()` matters as much as `future.done()`: on timeout
+        # `asyncio.wait_for` cancels the future before raising, so a cancelled
+        # future reports done() is True and result() then raises
+        # CancelledError. Without this check a thermostat that never
+        # acknowledges a setter surfaces as an unhandled CancelledError -
+        # which, being a BaseException, is not caught by the entity layer -
+        # instead of the intended "Unable to set ..." HomeAssistantError.
+        if future.cancelled() or not future.done():
             return ActionResponse("Future not done", None)
 
         (response_error, response_data) = future.result()
@@ -813,7 +821,7 @@ def get_error_description_from_event_callback(error: dict) -> str:
 def is_token_expired(error_details):
     """Determine if the error details indicate an expired token."""
     if isinstance(error_details, dict):
-        return error_details and error_details.get("message") == "jwt expired"
+        return error_details.get("message") == "jwt expired"
     return False
 
 

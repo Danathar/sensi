@@ -1,0 +1,31 @@
+# Coverage configuration.
+#
+# Committed so that what gets measured is defined by this repository rather
+# than by whatever the devcontainer image's gitignored pyproject.toml happens
+# to say. Before this file existed, coverage outside that image was only
+# whatever `--cov=custom_components.sensi` picked up, which meant the number in
+# CI and the number a contributor saw locally were not guaranteed to be the
+# same measurement.
+#
+# The threshold itself lives in .github/workflows/coverage-gate.yml, not here,
+# so that a local run reports honestly instead of failing.
+
+[run]
+source = custom_components/sensi
+branch = false
+
+[report]
+show_missing = true
+skip_covered = false
+exclude_also =
+    # Unreachable by construction.
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    ^\s*\.\.\.$
+
+    # Debug representations. Exercised by the logging calls in client.py, but a
+    # missing __str__ is not the kind of gap the gate exists to catch.
+    def __repr__
+
+[xml]
+output = coverage.xml
