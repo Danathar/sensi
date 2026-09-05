@@ -26,7 +26,8 @@ satisfy a file-existence check.
 | #39 | L0 | `tests/e2e/`, coverage gate, `ruff.toml` + lint job, `CONTRIBUTING.md`, PR template |
 | #41 | L2 | `AGENTS.md`, `CLAUDE.md`, Copilot instructions, Cursor rules, `.editorconfig`, prompt catalog, slash commands, correction memory |
 | #44 | L3 | review rubric, quality and metrics docs, `.claude/settings.json` + format hook, `tests.yml` → `ci.yml`, job timeouts |
-| this | L4 | labeller and risk tiers, nightly compliance, gated AI-fix workflow, AI security policy, reflections |
+| #45 | L4 | labeller and risk tiers, nightly compliance, gated AI-fix workflow, AI security policy, reflections |
+| #46 | - | `client.py` to 100%, `.coveragerc`, gate to 93%, release workflow hardening, one production bug fix |
 
 **Coverage moved materially.** `tests/e2e/` was the first coverage of the
 connect handshake, the emit loop, and the reconnect path. `client.py` went 52% →
@@ -65,6 +66,19 @@ the nightly run are live — they only add labels and open one self-closing issu
 `AI_FIX_ENABLED` variable. Two switches, because `ai-fix-requested` is applied
 automatically by the issue-filing bot, so one switch would mean a key added for
 an unrelated purpose silently starts autonomous work on every issue it files.
+
+### What the automation caught on its own first run
+
+The triage labeller failed the first time it ran for real: `gh label create`
+returned HTTP 422 because the tier descriptions exceed GitHub's 100-character
+label limit, and a `|| true` swallowed that, so the visible error was an
+unrelated-looking "label not found" one line later. Recorded in
+[`.claude/memory/`](memory/); the generalisation is that `|| true` on a command
+the next step depends on turns a clear error into a confusing one.
+
+A `pull_request_target` workflow also runs from the *base* branch, so a fix to
+one cannot go green on the pull request containing it. Verify against the real
+API by hand, merge, then confirm on the next pull request.
 
 ### Follow-up that closed the quality findings
 
