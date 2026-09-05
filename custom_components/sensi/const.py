@@ -15,6 +15,9 @@ SENSI_ATTRIBUTION: Final = "Data provided by Sensi"
 SENSI_FAN_AUTO: Final = "auto"
 SENSI_FAN_ON: Final = "on"
 SENSI_FAN_CIRCULATE: Final = "Circulate"
+# Only offered when the thermostat advertises fan_mode_settings.smart. The
+# string is FanMode.SMART, which is what the thermostat reports and accepts.
+SENSI_FAN_SMART: Final = "smart"
 FAN_CIRCULATE_DEFAULT_DUTY_CYCLE = 10
 
 

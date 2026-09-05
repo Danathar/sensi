@@ -15,6 +15,8 @@ from custom_components.sensi.const import (
     FAN_CIRCULATE_DEFAULT_DUTY_CYCLE,
     SENSI_FAN_AUTO,
     SENSI_FAN_CIRCULATE,
+    SENSI_FAN_ON,
+    SENSI_FAN_SMART,
 )
 from custom_components.sensi.data import FanMode, OperatingMode, SensiDevice
 from homeassistant.components.climate import (
@@ -203,6 +205,57 @@ async def test_set_fan_mode_invalid(
         await mock_thermostat.async_set_fan_mode("INVALID")
 
 
+async def test_set_fan_mode_smart(
+    hass: HomeAssistant, mock_device, mock_thermostat
+) -> None:
+    """A device that advertises 'smart' can be put into it."""
+
+    mock_device.capabilities.fan_mode_settings.smart = True
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_circulating_fan_mode"
+        ) as mock_set_circulating_fan_mode,
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_fan_mode"
+        ) as mock_set_fan_mode,
+    ):
+        mock_set_circulating_fan_mode.return_value = ActionResponse(None, "")
+        mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+        await mock_thermostat.async_set_fan_mode(SENSI_FAN_SMART)
+
+        mock_set_circulating_fan_mode.assert_called_once_with(
+            mock_device, False, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
+        )
+        mock_set_fan_mode.assert_called_once_with(mock_device, SENSI_FAN_SMART)
+
+
+async def test_set_fan_mode_smart_rejected_when_not_advertised(
+    hass: HomeAssistant, mock_device, mock_thermostat
+) -> None:
+    """'smart' is not settable on a device that never offered it."""
+
+    mock_device.capabilities.fan_mode_settings.smart = False
+
+    with pytest.raises(ValueError):
+        await mock_thermostat.async_set_fan_mode(SENSI_FAN_SMART)
+
+
+async def test_set_fan_mode_when_fan_support_is_off(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """A None fan_modes rejects the call instead of raising TypeError."""
+
+    set_config_option(
+        hass, mock_device, mock_coordinator.config_entry, CONFIG_FAN_SUPPORT, False
+    )
+
+    with pytest.raises(ValueError):
+        await mock_thermostat.async_set_fan_mode(SENSI_FAN_AUTO)
+
+
 class TestSensiThermostatInitialization:
     """Test cases for SensiThermostat initialization."""
 
@@ -345,6 +398,97 @@ class TestSensiThermostatFanModes:
         mock_device.state.circulating_fan.enabled = True
 
         assert mock_thermostat.fan_mode == SENSI_FAN_CIRCULATE
+
+    def test_fan_mode_unknown_is_reported_as_none(self, mock_device, mock_thermostat):
+        """An unrecognised fan_mode is 'not known', not an invalid option."""
+
+        mock_device.state.fan_mode = FanMode.UNKNOWN
+        mock_device.state.circulating_fan.enabled = False
+
+        assert mock_thermostat.fan_mode is None
+
+    def test_fan_mode_smart_is_none_when_not_advertised(
+        self, mock_device, mock_thermostat
+    ):
+        """'smart' is not reported unless the device says it supports it."""
+
+        mock_device.capabilities.fan_mode_settings.smart = False
+        mock_device.state.fan_mode = FanMode.SMART
+        mock_device.state.circulating_fan.enabled = False
+
+        assert SENSI_FAN_SMART not in mock_thermostat.fan_modes
+        assert mock_thermostat.fan_mode is None
+
+    def test_fan_mode_smart_is_reported_when_advertised(
+        self, mock_device, mock_thermostat
+    ):
+        """A device that advertises 'smart' reports it as a real mode."""
+
+        mock_device.capabilities.fan_mode_settings.smart = True
+        mock_device.state.fan_mode = FanMode.SMART
+        mock_device.state.circulating_fan.enabled = False
+
+        assert mock_thermostat.fan_mode == SENSI_FAN_SMART
+        assert SENSI_FAN_SMART in mock_thermostat.fan_modes
+
+    @pytest.mark.parametrize("smart", [False, True])
+    @pytest.mark.parametrize("circulating_capable", [False, True])
+    @pytest.mark.parametrize("mode", list(FanMode))
+    def test_fan_mode_is_always_one_of_fan_modes(
+        self, mock_device, mock_thermostat, mode, circulating_capable, smart
+    ):
+        """The invariant behind issue #58, over every combination there is.
+
+        Home Assistant logs the current option as invalid whenever fan_mode is
+        not in fan_modes, so the only two acceptable answers are a listed mode
+        or None.
+        """
+
+        mock_device.capabilities.circulating_fan.capable = circulating_capable
+        mock_device.capabilities.fan_mode_settings.smart = smart
+        mock_device.state.fan_mode = mode
+
+        for circulating_enabled in (False, True):
+            mock_device.state.circulating_fan.enabled = circulating_enabled
+
+            reported = mock_thermostat.fan_mode
+            assert reported is None or reported in mock_thermostat.fan_modes
+
+    def test_fan_modes_without_circulating_fan(self, mock_device, mock_thermostat):
+        """A device with no circulating fan does not offer Circulate."""
+
+        mock_device.capabilities.circulating_fan.capable = False
+        mock_device.capabilities.fan_mode_settings.smart = False
+
+        assert mock_thermostat.fan_modes == [SENSI_FAN_AUTO, SENSI_FAN_ON]
+
+    def test_fan_modes_with_circulating_fan_and_smart(
+        self, mock_device, mock_thermostat
+    ):
+        """Both optional modes are offered when the device advertises both."""
+
+        mock_device.capabilities.circulating_fan.capable = True
+        mock_device.capabilities.fan_mode_settings.smart = True
+
+        assert mock_thermostat.fan_modes == [
+            SENSI_FAN_AUTO,
+            SENSI_FAN_ON,
+            SENSI_FAN_CIRCULATE,
+            SENSI_FAN_SMART,
+        ]
+
+    def test_fan_mode_is_none_when_fan_support_is_off(
+        self, hass, mock_device, mock_thermostat, mock_coordinator
+    ):
+        """With fan support turned off there are no modes to report."""
+
+        set_config_option(
+            hass, mock_device, mock_coordinator.config_entry, CONFIG_FAN_SUPPORT, False
+        )
+        mock_device.state.fan_mode = FanMode.ON
+
+        assert mock_thermostat.fan_modes is None
+        assert mock_thermostat.fan_mode is None
 
     def test_max_temp_in_heat_mode(self, mock_device, mock_thermostat):
         """Test max_temp when in heat mode."""

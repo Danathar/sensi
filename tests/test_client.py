@@ -420,6 +420,27 @@ class TestSetters:
             assert response.error is None
             assert mock_device.state.fan_mode == FanMode.ON
 
+    async def test_set_fan_mode_unrecognised(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A mode the enum does not know falls back to UNKNOWN, not None.
+
+        A None here would make SensiThermostat.fan_mode raise on `.value`;
+        State parsing already applies the same fallback.
+        """
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, "")
+
+            response = await mock_coordinator.client.async_set_fan_mode(
+                mock_device, "not_a_fan_mode"
+            )
+
+            assert response.error is None
+            assert mock_device.state.fan_mode == FanMode.UNKNOWN
+
     @pytest.mark.parametrize(
         ("response_error", "response_data", "expect_error"),
         [
