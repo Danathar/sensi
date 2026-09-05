@@ -102,7 +102,10 @@ jobs:
         if: steps.enabled.outputs.go == 'true'
         run: |
           set -euo pipefail
-          last="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+          # `|| true` is load-bearing: with no tags yet, git prints nothing,
+          # grep -v exits 1 on empty input, and pipefail turns that into a
+          # failed step. The no-tags case is exactly the first release.
+          last="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
 
           if [ -z "$last" ]; then
             echo "No previous release; this is the first."
@@ -163,7 +166,7 @@ jobs:
           fi
 
           month="$(date -u +%Y).$(date -u +%-m)"
-          latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+          latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
 
           if [ -z "$latest" ]; then
             version="${month}.0"
@@ -216,7 +219,7 @@ jobs:
           # Stable tags only - a beta may be "older" than the last stable, and
           # must never become the number a later stable is measured against.
           current="$(python3 -c "import json;print(json.load(open('custom_components/sensi/manifest.json'))['version'])")"
-          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
           echo "manifest: $current | newest stable tag: ${newest:-none} | releasing: $VERSION"
 
           if [ -n "$newest" ]; then
