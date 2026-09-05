@@ -1,5 +1,9 @@
 # Contributing
 
+> Working on this repository with a coding assistant? [AGENTS.md](AGENTS.md) is
+> the machine-readable version of this guide, and is what `CLAUDE.md`,
+> `.github/copilot-instructions.md` and `.cursor/rules/` all point at.
+
 This is a [Home Assistant](https://www.home-assistant.io/) custom integration for
 [Sensi](https://sensi.emerson.com/en-us) thermostats. It talks to the same
 socket.io endpoint the Sensi mobile app uses, which was reverse engineered - so
