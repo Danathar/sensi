@@ -12,7 +12,7 @@ from custom_components.sensi.sensor import (
     async_setup_entry,
     calculate_battery_level,
 )
-from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 
@@ -246,6 +246,48 @@ class TestSensorTypes:
         """Test that wifi strength sensor is defined."""
         wifi_sensors = [s for s in SENSOR_TYPES if s.key == "wifi_strength"]
         assert len(wifi_sensors) == 1
+
+    def test_wifi_sensor_reports_a_percentage(self):
+        """The value is wifi_connection_quality, a 0-100 percentage.
+
+        It is not a signal level, so it must not claim SIGNAL_STRENGTH - that
+        device class means dB or dBm, and would have Home Assistant record a
+        quality reading as a decibel measurement.
+        """
+        wifi_sensor = next(s for s in SENSOR_TYPES if s.key == "wifi_strength")
+
+        assert wifi_sensor.device_class is None
+        assert wifi_sensor.native_unit_of_measurement == PERCENTAGE
+        assert wifi_sensor.state_class == SensorStateClass.MEASUREMENT
+
+    def test_wifi_sensor_keeps_its_key(self):
+        """The key is part of the unique_id, so renaming it would be breaking."""
+        wifi_sensor = next(s for s in SENSOR_TYPES if s.key == "wifi_strength")
+
+        assert wifi_sensor.key == "wifi_strength"
+        assert wifi_sensor.name == "Wifi quality"
+
+    def test_wifi_sensor_value_function(self, mock_json):
+        """The reported value is in the 0-100 range a percentage promises."""
+
+        _have_state, device = SensiDevice.create(mock_json)
+        wifi_sensor = next(s for s in SENSOR_TYPES if s.key == "wifi_strength")
+
+        value = wifi_sensor.value_fn(device)
+
+        assert value == device.state.wifi_connection_quality
+        assert 0 <= value <= 100
+
+    def test_percentage_sensors_are_not_negative(self, mock_json):
+        """A sensor in % must not report the negative range dBm uses."""
+
+        _have_state, device = SensiDevice.create(mock_json)
+
+        for sensor in SENSOR_TYPES:
+            if sensor.native_unit_of_measurement != PERCENTAGE:
+                continue
+            value = sensor.value_fn(device)
+            assert value is None or 0 <= value <= 100, sensor.key
 
     def test_temperature_sensor_configuration(self):
         """Test temperature sensor configuration."""
