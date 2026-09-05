@@ -107,14 +107,65 @@ raise it when the suite improves, and do not lower it to make a PR pass.
 ## Commits and pull requests
 
 Commit subjects use [Conventional Commits](https://www.conventionalcommits.org/)
-(`fix:`, `feat:`, `ci:`, `docs:`, `test:`, `refactor:`). Releases are generated
-from them by `.releaserc`, so `feat:` and `fix:` are what produce a version bump -
-choose the prefix on that basis.
+(`fix:`, `feat:`, `ci:`, `docs:`, `test:`, `refactor:`). The prefix no longer
+selects a version number - see [Releases](#releases) - but release notes are
+generated from the merged pull requests, so it decides how the change reads to
+a user. `feat:` and `fix:` are the two that describe something they can
+observe; everything else is maintenance.
 
 Fill in the pull request template. The two sections reviewers rely on most are
 *How it was verified* and *Risk*: say whether you exercised the change against a
 real thermostat, and say plainly if it touches the config flow, stored
 credentials, or entity unique IDs, since those break existing installs.
+
+## Releases
+
+This fork publishes **CalVer**: `YYYY.M.PATCH`, no `v` prefix - `2026.9.0`,
+`2026.9.1`, `2026.10.0`. Pre-releases add a `b1` or `rc1` suffix.
+
+It deliberately does not continue upstream's `v2.x` semver line. Upstream keeps
+releasing from a different tree, and a shared numbering would mean two
+different releases called `v2.1.7`; "I'm on 2.1.7" would stop identifying which
+code someone is running. A year-based line cannot collide, the differing tag
+shape (`2026.9.0` against upstream's `v2.1.6`) makes the two obvious at a
+glance, and Home Assistant itself uses CalVer. Because `2026.x` compares as
+newer than `2.1.x`, an existing install upgrades cleanly rather than stranding.
+
+Releases happen **monthly, on the 1st**, from the `Release` workflow. It derives
+the version from the date - this month's `.0` if there has not been one yet,
+otherwise the next patch - and publishes with notes generated from the merged
+pull requests. You can also run it by hand at any time, optionally passing an
+explicit version.
+
+Three things have to be true before a scheduled run publishes anything:
+
+| Guard | Why |
+| --- | --- |
+| The repository variable `AUTO_RELEASE_ENABLED` is `true` | Merging the workflow must not, by itself, start publishing to everyone on HACS. Someone decides that. A manual run ignores this - a person is already in the loop. |
+| Something under `custom_components/sensi` changed since the last release | About half the commits here are CI and docs. Releasing a month of those trains people to ignore the update prompt, which is the thing that has to keep working when a release does matter. Override with **force**. |
+| Every check on the commit is green | An automatic release ships to everyone without a person looking first. The least it can do is refuse when master is not green. |
+
+Then, as for a manual run, it validates before writing anything - the CalVer
+shape, that the tag is free, that the number is newer than the latest stable
+tag, and that a `b1`/`rc1` suffix agrees with the pre-release checkbox - and
+only then sets `manifest.json`, commits, tags, and publishes. **dry_run**
+validates and stops.
+
+Do not tag by hand: the manifest version and the tag have to move together, and
+the workflow is what guarantees that.
+
+The attached `sensi.zip` is for people installing by hand. HACS does not use
+it - that would need `zip_release` and `filename` in `hacs.json`, both
+deliberately unset - so HACS installs `custom_components/sensi/` from the tag
+and there is one fewer thing to get wrong.
+
+### Syncing with upstream
+
+Land an upstream sync as a **single merge commit** titled
+`chore(upstream): sync iprak/sensi vX.Y.Z`. Release notes are generated from
+merged pull requests, so a sync that arrives as thirty individual commits lists
+iprak's work as though it were this fork's. One merge, one line, credit where
+it belongs.
 
 ## Further reading
 

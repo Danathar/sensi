@@ -1,67 +1,299 @@
 name: Release
-on:
-  workflow_dispatch:
 
-# This job pushes a commit and a tag and creates a release. Granted explicitly
-# so it does not inherit whatever the organisation default happens to be, and
-# does not silently widen if that default changes.
+# CalVer, YYYY.M.PATCH - 2026.9.0, 2026.9.1, 2026.10.0.
+#
+# This fork deliberately does NOT continue upstream's 2.x semver line. Upstream
+# keeps publishing v2.1.7, v2.2.0 and so on from a different tree; sharing the
+# numbering would mean two different releases called the same thing, and
+# "I'm on 2.1.7" would stop identifying which code someone is running.
+# A year-based line can never collide, and Home Assistant itself uses CalVer.
+#
+# Tags carry no "v" prefix, which is the other half of telling the two lines
+# apart at a glance: upstream tags look like `v2.1.6`, ours like `2026.9.0`.
+#
+# Two ways in:
+#
+#   * Monthly, on a schedule, deriving the version from the date. Guarded -
+#     see "Decide whether to release" below - because most months here change
+#     only CI and docs, and a release users are prompted to install should
+#     contain something they can observe.
+#   * By hand, with an explicit version, for anything off-cycle.
+#
+# The version is never derived from commit messages. semantic-release cannot
+# produce CalVer, and this repository has no tags for it to count from - its
+# first release on a tagless repo would be 1.0.0, below the 2.1.6 already in
+# the manifest.
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st. GitHub disables scheduled workflows after 60 days
+    # with no repository activity, which is worth knowing but not a concern
+    # while agents are opening pull requests here.
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CalVer YYYY.M.PATCH (e.g. 2026.9.0). Leave blank to derive it."
+        required: false
+      prerelease:
+        description: "Publish as a pre-release (version must end b1, rc2, ...)"
+        type: boolean
+        default: false
+      force:
+        description: "Release even if nothing user-visible changed"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Validate only - do not tag, push, or publish"
+        type: boolean
+        default: false
+
+# Pushes a commit and a tag, and creates a release. Granted explicitly so it
+# does not inherit an organisation default and does not widen if that changes.
 permissions:
   contents: write
+  checks: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build:
+  release:
+    name: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      # Third-party actions below are pinned to a commit SHA rather than a tag.
-      # A tag can be moved; a SHA cannot. The trailing comment records which
-      # version each SHA is, so the pin stays readable.
-      - name: Gets semantic release info
-        id: semantic_release_info
-        uses: jossef/action-semantic-release-info@6cf3ceeb3254e56fa643f25f1796cd114c2970ff # v2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Update Version and Commit
-        if: ${{steps.semantic_release_info.outputs.version != ''}}
-        run: |
-          echo "Version: ${{steps.semantic_release_info.outputs.version}}"
-          sed -i "s/\"version\": \".*\"/\"version\": \"${{steps.semantic_release_info.outputs.version}}\"/g" custom_components/sensi/manifest.json
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add -A
-          git commit -m "chore: bumping version to ${{steps.semantic_release_info.outputs.version}}"
-          git tag ${{ steps.semantic_release_info.outputs.git_tag }}
-
-      - name: Push changes
-        if: ${{steps.semantic_release_info.outputs.version != ''}}
-        uses: ad-m/github-push-action@d91a481090679876dfc4178fef17f286781251df # v0.8.0
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          github_token: ${{ github.token }}
-          tags: true
+          fetch-depth: 0
+          persist-credentials: true
 
-      - name: "ZIP the integration directory"
-        if: ${{steps.semantic_release_info.outputs.version != ''}}
-        shell: "bash"
+      # The scheduled path is opt-in. Merging this workflow must not, by
+      # itself, start publishing releases to everyone on HACS; someone has to
+      # decide that and set the variable. A manual run is always allowed -
+      # a person is already in the loop.
+      - name: Check the schedule is enabled
+        id: enabled
+        env:
+          OPTED_IN: ${{ vars.AUTO_RELEASE_ENABLED == 'true' }}
         run: |
-          cd "${{ github.workspace }}/custom_components/sensi"
-          zip sensi.zip -r ./
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$OPTED_IN" = "true" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Monthly releases are off. Set the repository variable" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`AUTO_RELEASE_ENABLED\` to \`true\` to enable them." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      # One step, not two. This previously created the release with
-      # actions/create-release@v1 - archived upstream since 2021 - and then
-      # updated it with softprops/action-gh-release to attach the asset, so the
-      # workflow depended on two release-creation actions, one unmaintained.
-      # softprops/action-gh-release creates the release and uploads the asset in
-      # a single call.
-      - name: Create the GitHub release and upload the ZIP
-        if: ${{steps.semantic_release_info.outputs.version != ''}}
+      # A month whose only commits are CI and docs has nothing for a user to
+      # install. Releasing anyway trains people to ignore the update prompt,
+      # which is the one thing that has to keep working when a release does
+      # matter. Roughly half the commits in this repository do not touch the
+      # component, so this is the common case, not an edge one.
+      - name: Decide whether to release
+        id: decide
+        if: steps.enabled.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          last="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+
+          if [ -z "$last" ]; then
+            echo "No previous release; this is the first."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "$last"..HEAD -- custom_components/sensi | wc -l)"
+          echo "Commits since $last touching the component: $changed file(s)."
+
+          if [ "$changed" -gt 0 ] || [ "${{ inputs.force }}" = "true" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### No release"
+              echo
+              echo "Nothing under \`custom_components/sensi\` changed since **$last**."
+              echo "Re-run by hand with \`force\` if you want one anyway."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # An automatic release publishes whatever is on master to everyone on
+      # HACS without a person looking first. The least this can do is refuse
+      # when master's own checks are not green.
+      - name: Require green checks on this commit
+        if: steps.decide.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bad="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --jq '[.check_runs[]
+                   | select(.name != "release")
+                   | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
+                   | "\(.name): \(.conclusion // .status)"] | .[]')"
+
+          if [ -n "$bad" ]; then
+            echo "::error::Not releasing - checks on ${GITHUB_SHA::12} are not green:" >&2
+            printf '%s\n' "$bad" >&2
+            exit 1
+          fi
+          echo "All checks on ${GITHUB_SHA::12} are green."
+
+      # Derived from the date, not from commit messages: this month's line if
+      # it has not been released yet, otherwise the next patch in it.
+      - name: Decide the version
+        id: version
+        if: steps.decide.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          given="${{ inputs.version }}"
+
+          if [ -n "$given" ]; then
+            echo "version=$given" >> "$GITHUB_OUTPUT"
+            echo "Using the version given: $given"
+            exit 0
+          fi
+
+          month="$(date -u +%Y).$(date -u +%-m)"
+          latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+
+          if [ -z "$latest" ]; then
+            version="${month}.0"
+          else
+            version="${month}.$(( ${latest##*.} + 1 ))"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Derived $version (latest this month: ${latest:-none})."
+
+      # Everything that can be wrong is checked before anything is written.
+      # A release is the one operation here that users can already have
+      # consumed by the time a mistake is noticed: deleting a tag does not
+      # un-download it from HACS.
+      - name: Validate the version
+        if: steps.decide.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)((b|rc)[1-9][0-9]*)?$'; then
+            echo "::error::'$VERSION' is not CalVer YYYY.M.PATCH (e.g. 2026.9.0)," >&2
+            echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+            echo "Month must not be zero-padded; no 'v' prefix." >&2
+            exit 1
+          fi
+
+          # The suffix and the checkbox have to agree. Either one alone is a
+          # mistake that publishes the wrong kind of release: a stable tag
+          # named 2026.9.0b1, or a beta that HACS offers to everyone.
+          case "$VERSION" in
+            *b[0-9]*|*rc[0-9]*) has_suffix=true ;;
+            *) has_suffix=false ;;
+          esac
+          if [ "$has_suffix" != "${{ inputs.prerelease }}" ]; then
+            echo "::error::version '$VERSION' and prerelease=${{ inputs.prerelease }} disagree." >&2
+            echo "A pre-release version must end b1/rc1, and a stable one must not." >&2
+            exit 1
+          fi
+
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag $VERSION already exists." >&2
+            exit 1
+          fi
+
+          # A release older than the one people already have is worse than no
+          # release: HACS offers the newest version it can see, so a backwards
+          # number either strands users or, worse, looks like an update.
+          # Stable tags only - a beta may be "older" than the last stable, and
+          # must never become the number a later stable is measured against.
+          current="$(python3 -c "import json;print(json.load(open('custom_components/sensi/manifest.json'))['version'])")"
+          newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1)"
+          echo "manifest: $current | newest stable tag: ${newest:-none} | releasing: $VERSION"
+
+          if [ -n "$newest" ]; then
+            older="$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | head -1)"
+            if [ "$older" = "$VERSION" ]; then
+              echo "::error::$VERSION is not newer than the latest tag $newest." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Set the manifest version
+        if: steps.decide.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="custom_components/sensi/manifest.json"
+          # jq, not sed: it cannot corrupt the JSON, and it fails loudly.
+          jq --arg v "$VERSION" '.version = $v' "$manifest" > "$manifest.tmp"
+          mv "$manifest.tmp" "$manifest"
+          python3 -c "import json;assert json.load(open('$manifest'))['version']=='$VERSION'"
+          git --no-pager diff -- "$manifest"
+
+      - name: Commit and tag
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git diff --quiet; then
+            git add custom_components/sensi/manifest.json
+            git commit -m "chore(release): $VERSION"
+          else
+            echo "Manifest already at $VERSION; tagging the current commit."
+          fi
+
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+          git push origin "refs/tags/$VERSION"
+
+      # A convenience asset for people installing by hand. HACS does NOT use
+      # it - that needs "zip_release" and "filename" in hacs.json, which are
+      # deliberately unset, so HACS installs custom_components/sensi/ from the
+      # tag itself and there is only one thing to get wrong.
+      - name: Build the manual-install ZIP
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          (cd custom_components/sensi && zip -qr "$GITHUB_WORKSPACE/release/sensi.zip" .)
+          unzip -l release/sensi.zip | tail -3
+
+      # Notes are generated from the merged pull requests since the last tag.
+      # Keeping an upstream sync to a single merge commit is what stops
+      # iprak's work being listed here as if it were this fork's - see
+      # CONTRIBUTING.md, "Syncing with upstream".
+      - name: Publish the release
+        if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ steps.semantic_release_info.outputs.git_tag }}
-          name: ${{ steps.semantic_release_info.outputs.git_tag }}
-          body: ${{ steps.semantic_release_info.outputs.notes }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
           draft: false
-          prerelease: false
-          files: ${{ github.workspace }}/custom_components/sensi/sensi.zip
+          prerelease: ${{ inputs.prerelease }}
+          files: release/sensi.zip
+
+      - name: Summarise
+        if: steps.decide.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "Dry run: **$VERSION** is valid. Nothing was tagged or published." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Released **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+          fi
