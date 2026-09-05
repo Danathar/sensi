@@ -116,9 +116,12 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
             else:
                 errors = result.errors
 
-        # The input for user and re_config is the same
+        # The schema is the same as the user step, but the step_id is not:
+        # Home Assistant routes a submitted form to async_step_<step_id>, so
+        # "user" would hand the reply to async_step_user, which aborts with
+        # already_configured because this unique_id is already set up.
         return self.async_show_form(
-            step_id="user",
+            step_id="reauth_confirm",
             data_schema=AUTH_DATA_SCHEMA,
             errors=errors,
             description_placeholders={"sensi_url": SENSI_LOGIN_URL},
