@@ -2,9 +2,9 @@
 
 **Take-away.** The connection layer of a reverse-engineered client is testable,
 cheaply, by scripting a fake server rather than by mocking the client's own
-methods. Doing that took `client.py` from 52% to 90% line coverage in one
-change. It still does not prove the integration works — only that it handles the
-payloads we have seen.
+methods. Doing that took `client.py` from 52% to 100% line coverage across two
+changes, and found a live bug on the way. It still does not prove the
+integration works — only that it handles the payloads we have seen.
 
 ## The situation
 
@@ -67,16 +67,56 @@ points. It is a better coupling than the alternative, which was no coverage.
 
 ## What this bought
 
-| | before | after |
-| --- | --- | --- |
-| `client.py` | 52% | 90% |
-| repository total | 85% | 96% |
+| | before | after the fake | after the error paths |
+| --- | --- | --- | --- |
+| `client.py` | 52% | 90% | **100%** |
+| repository total | 85% | 96% | 98% |
 
 Twelve tests, covering the handshake, entity and device registry population,
 unload, setup retry on connection failure, setter round-trips asserted on the
 emitted wire payload, an error ack surfacing as `HomeAssistantError`, an
 unsupported capability staying unavailable, and a coordinator refresh
 reconnecting and applying new state.
+
+## The second pass, and the bug it found
+
+The fake reaches everything that happens when the connection behaves. What it
+could not reach were the branches that only fire when something goes wrong at an
+awkward moment — an ack arriving after its future was cancelled, an emit loop
+finding the socket gone mid-drain, a token expiring between two connection
+attempts.
+
+Two things closed that. The failure *scripting* went into the fake — a queue of
+per-attempt connect failures, a way to fire the `disconnect` handler the way a
+server drop does, an override for the whole `state` body — so a "rejected with
+`jwt expired`, refreshed, reconnected" sequence is four lines in a test. The
+genuinely in-process branches went into `tests/test_client_events.py` as unit
+tests, because contorting the fake into producing them would have tested the
+fake.
+
+That pass found a real bug. `_async_invoke_setter` guarded its timeout with:
+
+```python
+with contextlib.suppress(asyncio.exceptions.TimeoutError):
+    await asyncio.wait_for(future, SET_EVENT_TIMEOUT)
+
+if not future.done():
+    return ActionResponse("Future not done", None)
+
+(response_error, response_data) = future.result()
+```
+
+`asyncio.wait_for` **cancels** the future before raising `TimeoutError`. A
+cancelled future reports `done() is True`, so the guard passed and
+`future.result()` raised `CancelledError` — a `BaseException`, so the entity
+layer's `except Exception` never saw it. A thermostat that accepted a setter and
+never acknowledged it produced an unhandled cancellation instead of the intended
+"Unable to set …" error. Adding `future.cancelled() or` to the guard fixes it.
+
+Worth noting how it surfaced: the test was written to assert the documented
+behaviour ("no ack is reported as a failure"), and it failed. The line it was
+aiming at was unreachable, which is why coverage had never flagged it — an
+unreachable line and a covered line look the same from a percentage.
 
 It also found a real defect in the test approach itself:
 `SensiClient._async_disconnect` calls `sio.shutdown()`, not `sio.disconnect()`,

@@ -70,7 +70,7 @@ something that will recur. One file per correction; see
 image. Do not create one — ruff config goes in `ruff.toml`, pytest config in
 `pytest.ini`.
 
-**Coverage is gated at 90%.** `pytest --cov=custom_components.sensi` tells you
+**Coverage is gated at 93%.** `pytest --cov=custom_components.sensi` tells you
 where you stand. `tests/e2e/` is usually the cheapest way to move it, because it
 covers the connect handshake and emit loop that unit tests cannot reach.
 

@@ -16,12 +16,13 @@ concurrency:
 env:
   # Line coverage of custom_components/sensi must not fall below this.
   #
-  # The suite sits comfortably above it (96% at the time this gate was added -
-  # tests/e2e took client.py from 52% to 90%). The threshold is set below the
-  # current number on purpose, so an unrelated PR is not blocked by a one-line
-  # branch it did not touch. Raise it when the suite genuinely improves; do not
-  # lower it to make a PR pass.
-  MIN_COVERAGE: 90
+  # The suite sits above it (98% at the time of writing, with client.py at
+  # 100%). The threshold is set below the current number on purpose, so an
+  # unrelated PR is not blocked by a one-line branch it did not touch - the
+  # policy in .github/auto-qa-tuning.json calls for 5 points of headroom.
+  # Raise it when the suite genuinely improves; do not lower it to make a PR
+  # pass.
+  MIN_COVERAGE: 93
 
 jobs:
   coverage:

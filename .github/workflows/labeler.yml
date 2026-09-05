@@ -74,13 +74,18 @@ jobs:
           PY
           )
 
-          # Create each label if it does not exist yet, so it gets the colour and
-          # description from .github/risk-tiers.yml rather than a random one.
+          # --force creates the label or updates an existing one, so it always
+          # ends up with the colour and description from
+          # .github/risk-tiers.yml rather than a random generated colour.
+          #
+          # Not tolerant of failure on purpose: when this silently swallowed
+          # errors, an over-long description produced an HTTP 422 here and then
+          # an unrelated-looking "'tier/runtime' not found" from the add-label
+          # call below. classify_pr.py now rejects a description GitHub would,
+          # and this step reports anything else.
           while IFS=$'\t' read -r name colour description; do
             [ -n "$name" ] || continue
-            gh label create "$name" --color "$colour" --description "$description" \
-              || gh label edit "$name" --color "$colour" --description "$description" \
-              || true
+            gh label create "$name" --force --color "$colour" --description "$description"
           done <<< "$wanted"
 
           # A pull request has exactly one tier and one size. Drop any stale ones

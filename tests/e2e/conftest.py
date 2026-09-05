@@ -89,11 +89,12 @@ class FakeSensiSocket:
         ``SensiClient`` only creates the future it waits on *after*
         ``connect()`` returns.
         """
-        if self._backend.connect_error is not None:
-            error = self._backend.connect_error
+        failure = self._backend.next_connect_failure()
+        if failure is not None:
+            error, data = failure
             connect_error = self._handlers.get("connect_error")
             if connect_error:
-                await connect_error(self._backend.connect_error_data)
+                await connect_error(data)
             raise error
 
         self._backend.connections.append({"url": url, **kwargs})
@@ -104,6 +105,17 @@ class FakeSensiSocket:
             await connect_handler()
 
         self._backend.schedule(self.deliver("state", self._backend.state_payload()))
+
+    async def fire_disconnect(self, reason: str) -> None:
+        """Invoke the client's ``disconnect`` handler, as socket.io would.
+
+        The server dropping the connection is not the same as the client
+        calling ``disconnect()``; only the former runs that handler.
+        """
+        self.connected = False
+        handler = self._handlers.get("disconnect")
+        if handler:
+            await handler(reason)
 
     async def disconnect(self) -> None:
         """Mark the socket disconnected."""
@@ -165,9 +177,19 @@ class FakeSensiBackend:
         self.disconnects = 0
         self.sockets: list[FakeSensiSocket] = []
 
-        # Set to an exception instance to make the next connect attempt fail.
+        # Set to an exception instance to make *every* connect attempt fail.
         self.connect_error: BaseException | None = None
         self.connect_error_data: Any = None
+
+        # Or queue per-attempt failures as (exception, connect_error_data).
+        # Each connect consumes one entry; once the queue is empty, connects
+        # succeed. This is how a "fails once, then works after a token
+        # refresh" sequence is scripted.
+        self.connect_failures: list[tuple[BaseException, Any]] = []
+
+        # Replaces the whole `state` event body when set, so a test can serve
+        # a malformed or empty payload.
+        self.state_override: list[dict] | None = None
 
         # Overrides keyed by emitted event name. Each value is the tuple of
         # positional arguments the socket.io ack callback receives.
@@ -175,10 +197,22 @@ class FakeSensiBackend:
 
         self._tasks: set[asyncio.Task] = set()
 
+    # -- connection scripting ----------------------------------------------
+
+    def next_connect_failure(self) -> tuple[BaseException, Any] | None:
+        """Return the failure the next connect should raise, if any."""
+        if self.connect_failures:
+            return self.connect_failures.pop(0)
+        if self.connect_error is not None:
+            return (self.connect_error, self.connect_error_data)
+        return None
+
     # -- payloads ---------------------------------------------------------
 
     def state_payload(self) -> list[dict]:
         """Return the ``state`` event body - a list of device documents."""
+        if self.state_override is not None:
+            return copy.deepcopy(self.state_override)
         return copy.deepcopy(list(self.devices.values()))
 
     def info_payload(self, icd_id: str) -> dict:

@@ -30,4 +30,4 @@ Raise test coverage. Target: $ARGUMENTS (if empty, pick the weakest module).
 5. Report before/after per module and for the total, from the actual command
    output.
 
-Do not lower the 90% threshold in `.github/workflows/coverage-gate.yml`.
+Do not lower the 93% threshold in `.github/workflows/coverage-gate.yml`.
