@@ -40,7 +40,7 @@ following a pointer.
 - `tests/e2e/` drives the whole integration against a scripted fake socket.io
   backend — use it when the assertion is about what went out on the wire.
 - New behaviour needs a test. A bug fix needs a test that fails before the fix.
-- Coverage is gated at 90%.
+- Coverage is gated at 93%.
 
 Before treating a change as complete: `pytest && ruff check . && ruff format --check .`
 

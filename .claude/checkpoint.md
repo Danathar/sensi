@@ -7,10 +7,11 @@ history is in [`session-summary.md`](session-summary.md).
 
 ## State
 
-Master is green: `pytest` (415 tests), `ruff`, the 90% coverage gate, hassfest,
+Master is green: `pytest` (464 tests), `ruff`, the 93% coverage gate, hassfest,
 HACS validation, and the requirements sync check all pass.
 
-Coverage: **96%** overall, `client.py` at **90%**. Gate is 90%.
+Coverage: **98%** overall, `client.py` at **100%**. Gate is 93%, and what is
+measured is defined by the committed `.coveragerc`.
 
 ## In flight
 
@@ -29,9 +30,8 @@ L2 (#41) and L3 (#44) are merged; L4 is the change this checkpoint ships with.
 
 ## Next
 
-1. #36 / #38 — re-measure what the e2e tier actually closed before deciding what
-   is left; do not close them on assumption.
-2. Widening the ruff rule set beyond the starts-green subset, as its own change.
+1. Widening the ruff rule set beyond the starts-green subset, as its own change.
+2. `climate.py` (92%) and `sensor.py` (94%) are now the weakest modules.
 
 ## Before you touch anything
 

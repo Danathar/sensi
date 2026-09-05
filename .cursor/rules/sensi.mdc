@@ -52,7 +52,7 @@ pytest && ruff check . && ruff format --check .
 ```
 
 New behaviour needs a test; a bug fix needs a test that fails before the fix.
-Coverage is gated at 90%. Use `tests/e2e/` when the assertion is about what went
+Coverage is gated at 93%. Use `tests/e2e/` when the assertion is about what went
 out on the wire.
 
 ## Commits
