@@ -1,0 +1,53 @@
+name: Validate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate manifest with hassfest
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    # HACS validates repository-level metadata - topics, an enabled issue
+    # tracker, brands registration - none of which a fork inherits from its
+    # parent, so on a fork it reports on the fork's settings rather than on the
+    # integration. Enable Issues and add repository topics to make this job
+    # meaningful here, then drop this condition.
+    if: github.event.repository.fork != true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate with HACS
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  requirements-sync:
+    name: manifest requirements match requirements_component.txt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare manifest requirements against requirements_component.txt
+        run: python3 scripts/check_requirements_sync.py
