@@ -8,6 +8,10 @@ token that expires between two connection attempts.
 
 Those are pure in-process logic, so they are covered here directly rather than
 by contorting the fake backend into producing them.
+
+The event-registry, dispatcher and state-handler cases came from PR #37, which
+covered them more thoroughly than the first version of this file did - it
+asserts the payload each waiter receives rather than only that it completed.
 """
 
 import asyncio
@@ -32,7 +36,12 @@ ICD_ID = "36-6f-92-ff-fe-0c-0b-07"
 
 @pytest.fixture
 def client(hass: HomeAssistant) -> SensiClient:
-    """Return a client with credentials that are valid and not near expiry."""
+    """Return a client with credentials that are valid and not near expiry.
+
+    Unexpired on purpose: the token-refresh tests below drive `_connect`, and a
+    client whose stored token is already expired would try to refresh it for
+    real before reaching the branch under test.
+    """
     config = AuthenticationConfig(
         refresh_token="refresh",
         access_token="access",
@@ -68,146 +77,312 @@ class TestContextManager:
                 raise ValueError("boom")
 
 
-class TestStateDispatch:
-    """`_update_state` turns raw `state` payloads into devices."""
+class TestEventFutures:
+    """Test cases for the (event, icd_id) future registry."""
 
-    def test_empty_payload_is_ignored(self, client: SensiClient) -> None:
-        """An empty state event creates nothing and resolves nothing."""
-        future = client._hass.loop.create_future()
-        client._futures[("state", None)] = [future]
+    async def test_create_event_future_registers_future(self, client) -> None:
+        """A created future is registered under its (event, icd_id) key."""
+        future = await client._create_event_future("info", "icd-1")
 
-        client._update_state([])
+        assert client._futures[("info", "icd-1")] == [future]
+        assert not future.done()
+
+        future.cancel()
+
+    async def test_create_event_future_appends_to_existing_key(self, client) -> None:
+        """Two waiters on the same key share one future list."""
+        first = await client._create_event_future("info", "icd-1")
+        second = await client._create_event_future("info", "icd-1")
+
+        assert client._futures[("info", "icd-1")] == [first, second]
+        assert first is not second
+
+        first.cancel()
+        second.cancel()
+
+    async def test_create_event_future_separates_keys(self, client) -> None:
+        """The same event for two devices uses two separate keys."""
+        first = await client._create_event_future("info", "icd-1")
+        second = await client._create_event_future("info", "icd-2")
+
+        assert client._futures[("info", "icd-1")] == [first]
+        assert client._futures[("info", "icd-2")] == [second]
+
+        first.cancel()
+        second.cancel()
+
+    async def test_resolve_futures_resolves_and_clears(self, client) -> None:
+        """Resolving hands the data to every waiter and drops the key."""
+        first = await client._create_event_future("info", "icd-1")
+        second = await client._create_event_future("info", "icd-1")
+
+        client._resolve_futures("info", "icd-1", {"payload": 1})
+
+        assert await first == {"payload": 1}
+        assert await second == {"payload": 1}
+        assert ("info", "icd-1") not in client._futures
+
+    async def test_resolve_futures_without_waiters(self, client) -> None:
+        """Resolving an unknown key is a no-op rather than a KeyError."""
+        client._resolve_futures("info", "icd-unknown", {"payload": 1})
+
+        assert client._futures == {}
+
+    async def test_resolve_futures_ignores_already_resolved(self, client) -> None:
+        """An already-resolved future does not raise InvalidStateError."""
+        future = await client._create_event_future("info", "icd-1")
+        future.set_result("first")
+
+        client._resolve_futures("info", "icd-1", "second")
+
+        assert await future == "first"
+        assert ("info", "icd-1") not in client._futures
+
+    async def test_resolve_futures_distinguishes_icd_id(self, client) -> None:
+        """Resolving one device's future leaves another device's future pending."""
+        mine = await client._create_event_future("info", "icd-1")
+        theirs = await client._create_event_future("info", "icd-2")
+
+        client._resolve_futures("info", "icd-1", "data")
+
+        assert await mine == "data"
+        assert not theirs.done()
+
+        theirs.cancel()
+
+    async def test_wait_for_event_returns_resolved_data(self, client) -> None:
+        """A resolved future is handed back to the waiter."""
+
+        async def resolve_soon() -> None:
+            # Let _wait_for_event register its future first.
+            await asyncio.sleep(0)
+            client._resolve_futures("info", "icd-1", {"payload": 2})
+
+        results = await asyncio.gather(
+            client._wait_for_event("info", "icd-1"), resolve_soon()
+        )
+
+        assert results[0] == {"payload": 2}
+
+    async def test_wait_for_event_times_out(self, client) -> None:
+        """A timed out wait logs and returns None instead of raising."""
+        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+
+
+class TestOnEvent:
+    """Test cases for the _on_event dispatcher."""
+
+    @pytest.mark.parametrize(
+        ("event", "handler"),
+        [
+            ("state", "_update_state"),
+            ("capabilities", "_update_capabilities"),
+            ("info", "_update_info"),
+        ],
+    )
+    def test_dispatches_to_handler(self, client, event: str, handler: str) -> None:
+        """Each known event is routed to its own handler."""
+        data = {"icd_id": "icd-1"}
+
+        with patch.object(client, handler) as mock_handler:
+            client._on_event(event, data)
+
+        mock_handler.assert_called_once_with(data)
+
+    async def test_unknown_event_resolves_futures(self, client) -> None:
+        """An unrecognized event resolves its (event, None) waiters."""
+        future = await client._create_event_future("set_temperature", None)
+
+        client._on_event("set_temperature", {"icd_id": "icd-1"})
+
+        # The dispatcher deliberately resolves with None, not with the payload.
+        assert await future is None
+
+    def test_unknown_event_does_not_call_update_handlers(self, client) -> None:
+        """An unrecognized event touches none of the state handlers."""
+        with (
+            patch.object(client, "_update_state") as mock_state,
+            patch.object(client, "_update_capabilities") as mock_capabilities,
+            patch.object(client, "_update_info") as mock_info,
+        ):
+            client._on_event("set_temperature", {"icd_id": "icd-1"})
+
+        mock_state.assert_not_called()
+        mock_capabilities.assert_not_called()
+        mock_info.assert_not_called()
+
+
+class TestUpdateState:
+    """Test cases for the _update_state handler."""
+
+    @pytest.mark.parametrize("data", [None, []])
+    async def test_empty_payload_is_ignored(self, client, data) -> None:
+        """An empty state event neither creates devices nor resolves futures."""
+        future = await client._create_event_future("state", None)
+
+        client._update_state(data)
 
         assert client.get_devices() == []
         assert not future.done()
+
         future.cancel()
 
-    def test_none_payload_is_ignored(self, client: SensiClient) -> None:
-        """A null state event is treated the same as an empty one."""
-        client._update_state(None)
-        assert client.get_devices() == []
+    async def test_creates_device_and_resolves_futures(self, client, mock_json) -> None:
+        """A first state event creates the device and resolves both futures."""
+        icd_id = mock_json["icd_id"]
+        initial_future = await client._create_event_future("state", None)
+        device_future = await client._create_event_future("state", icd_id)
 
-    def test_entry_without_an_icd_id_is_skipped(
-        self, client: SensiClient, mock_json
+        client._update_state([mock_json])
+
+        assert [device.identifier for device in client.get_devices()] == [icd_id]
+        assert await initial_future is None
+        assert await device_future == mock_json
+
+    async def test_updates_existing_device(self, client, mock_json) -> None:
+        """A second state event updates the device already in the registry."""
+        client._update_state([mock_json])
+        device = client.get_devices()[0]
+
+        update = {
+            "icd_id": mock_json["icd_id"],
+            "state": {**mock_json["state"], "display_temp": 61},
+        }
+        device_future = await client._create_event_future("state", update["icd_id"])
+
+        client._update_state([update])
+
+        assert client.get_devices() == [device]
+        assert device.state.display_temp == 61
+        assert await device_future == update
+
+    async def test_registration_only_payload_skips_device_future(
+        self, client, mock_json
     ) -> None:
-        """A device document with no identifier cannot be tracked."""
-        anonymous = {k: v for k, v in mock_json.items() if k != "icd_id"}
+        """A payload carrying no state resolves the initial future only.
 
-        client._update_state([anonymous])
-
-        assert client.get_devices() == []
-
-    def test_registration_only_event_resolves_the_initial_future_only(
-        self, client: SensiClient, mock_json
-    ) -> None:
-        """The first state event on connect usually carries no state.
-
-        It must still resolve the initial `("state", None)` waiter - that is
-        what `wait_for_devices` is blocked on - while leaving the per-device
-        waiters pending until real state arrives.
+        The first state event on connect usually carries registration and
+        capabilities but no state, so per-device waiters must stay pending.
         """
-        stateless = {k: v for k, v in mock_json.items() if k != "state"}
+        client._update_state([mock_json])
 
-        initial = client._hass.loop.create_future()
-        per_device = client._hass.loop.create_future()
-        client._futures[("state", None)] = [initial]
-        client._futures[("state", ICD_ID)] = [per_device]
+        stateless = {
+            "icd_id": mock_json["icd_id"],
+            "registration": mock_json["registration"],
+        }
+        initial_future = await client._create_event_future("state", None)
+        device_future = await client._create_event_future("state", stateless["icd_id"])
 
         client._update_state([stateless])
 
-        assert initial.done()
-        assert not per_device.done()
-        assert len(client.get_devices()) == 1
+        assert await initial_future is None
+        assert not device_future.done()
 
-        per_device.cancel()
+        device_future.cancel()
 
-    def test_second_event_updates_the_existing_device(
-        self, client: SensiClient, mock_json
-    ) -> None:
-        """A later state event updates in place rather than creating a duplicate."""
+    async def test_item_without_icd_id_is_skipped(self, client) -> None:
+        """An entry with no icd_id creates no device."""
+        initial_future = await client._create_event_future("state", None)
+
+        client._update_state([{"state": {"display_temp": 70}}])
+
+        assert client.get_devices() == []
+        # The initial future is resolved regardless of whether any item was usable.
+        assert await initial_future is None
+
+    async def test_resolves_each_device_in_a_batch(self, client, mock_json) -> None:
+        """A multi-device event resolves every device's future."""
+        second = {**mock_json, "icd_id": "36-6f-92-ff-fe-0c-0b-08"}
+        first_future = await client._create_event_future("state", mock_json["icd_id"])
+        second_future = await client._create_event_future("state", second["icd_id"])
+
+        client._update_state([mock_json, second])
+
+        assert len(client.get_devices()) == 2
+        assert await first_future == mock_json
+        assert await second_future == second
+
+
+class TestUpdateInfo:
+    """Test cases for the _update_info handler."""
+
+    async def test_updates_known_device_and_resolves(self, client, mock_json) -> None:
+        """Info for a known device updates it and resolves its future."""
         client._update_state([mock_json])
-        assert len(client.get_devices()) == 1
+        device = client.get_devices()[0]
 
-        warmer = {**mock_json, "state": {**mock_json["state"], "display_temp": 71}}
-        client._update_state([warmer])
+        data = {
+            "icd_id": mock_json["icd_id"],
+            "serial_number": "42WFRP46B00220",
+            "model_number": "1F87U-42WFC",
+        }
+        future = await client._create_event_future("info", data["icd_id"])
 
-        assert len(client.get_devices()) == 1
-        assert client.get_devices()[0].state.display_temp == 71
+        client._update_info(data)
 
-    def test_info_and_capabilities_for_an_unknown_device_still_resolve(
-        self, client: SensiClient
-    ) -> None:
-        """A waiter is released even when the device is not tracked.
+        assert device.info.serial_number == "42WFRP46B00220"
+        assert device.info.model_number == "1F87U-42WFC"
+        assert await future == data
 
-        Otherwise `wait_for_devices` would hang for its full timeout on a
-        device that vanished between the state event and the getter response.
-        """
-        info_future = client._hass.loop.create_future()
-        capabilities_future = client._hass.loop.create_future()
-        client._futures[("info", ICD_ID)] = [info_future]
-        client._futures[("capabilities", ICD_ID)] = [capabilities_future]
+    async def test_unknown_device_still_resolves(self, client) -> None:
+        """Info for an unknown device resolves the waiter without a device update."""
+        data = {"icd_id": "icd-unknown", "serial_number": "S1"}
+        future = await client._create_event_future("info", "icd-unknown")
 
-        client._update_info({"icd_id": ICD_ID, "serial_number": "SN"})
-        client._update_capabilities({"icd_id": ICD_ID, "degrees_fc": "yes"})
+        client._update_info(data)
 
-        assert info_future.done()
-        assert capabilities_future.done()
+        assert client.get_devices() == []
+        assert await future == data
+
+    @pytest.mark.parametrize("data", [None, {}, {"serial_number": "S1"}])
+    async def test_unusable_payload_is_ignored(self, client, data) -> None:
+        """A falsy payload, or one with no icd_id, resolves nothing."""
+        future = await client._create_event_future("info", "icd-1")
+
+        client._update_info(data)
+
+        assert not future.done()
+
+        future.cancel()
 
 
-class TestEventFutures:
-    """The `(event, icd_id)` future registry."""
+class TestUpdateCapabilities:
+    """Test cases for the _update_capabilities handler."""
 
-    async def test_futures_are_keyed_separately(self, client: SensiClient) -> None:
-        """Two devices waiting on the same event do not resolve each other."""
-        first = await client._create_event_future("state", "a")
-        second = await client._create_event_future("state", "b")
+    async def test_updates_known_device_and_resolves(self, client, mock_json) -> None:
+        """Capabilities for a known device update it and resolve its future."""
+        client._update_state([mock_json])
+        device = client.get_devices()[0]
 
-        client._resolve_futures("state", "a", {"icd_id": "a"})
+        data = {"icd_id": mock_json["icd_id"], **mock_json["capabilities"]}
+        data["keypad_lockout"] = "yes"
+        future = await client._create_event_future("capabilities", data["icd_id"])
 
-        assert first.done()
-        assert not second.done()
-        second.cancel()
+        client._update_capabilities(data)
 
-    async def test_every_waiter_on_a_key_is_resolved_and_the_key_cleared(
-        self, client: SensiClient
-    ) -> None:
-        """Resolving a key releases all of its waiters exactly once."""
-        waiters = [await client._create_event_future("info", ICD_ID) for _ in range(3)]
+        assert device.capabilities.keypad_lockout is True
+        assert await future == data
 
-        client._resolve_futures("info", ICD_ID, {"ok": True})
+    async def test_unknown_device_still_resolves(self, client) -> None:
+        """Capabilities for an unknown device resolve the waiter only."""
+        data = {"icd_id": "icd-unknown", "keypad_lockout": "yes"}
+        future = await client._create_event_future("capabilities", "icd-unknown")
 
-        assert all(future.done() for future in waiters)
-        assert ("info", ICD_ID) not in client._futures
+        client._update_capabilities(data)
 
-        # A second resolution must not raise on the now-missing key.
-        client._resolve_futures("info", ICD_ID, {"ok": True})
+        assert client.get_devices() == []
+        assert await future == data
 
-    async def test_resolving_an_already_resolved_future_is_ignored(
-        self, client: SensiClient
-    ) -> None:
-        """An ack racing a timeout must not raise InvalidStateError."""
-        future = await client._create_event_future("info", ICD_ID)
-        future.set_result("first")
+    @pytest.mark.parametrize("data", [None, {}, {"keypad_lockout": "yes"}])
+    async def test_unusable_payload_is_ignored(self, client, data) -> None:
+        """A falsy payload, or one with no icd_id, resolves nothing."""
+        future = await client._create_event_future("capabilities", "icd-1")
 
-        client._resolve_futures("info", ICD_ID, "second")
+        client._update_capabilities(data)
 
-        assert future.result() == "first"
+        assert not future.done()
 
-    async def test_wait_for_event_times_out_without_raising(
-        self, client: SensiClient
-    ) -> None:
-        """A timed-out wait logs and returns None rather than propagating."""
-        assert await client._wait_for_event("state", ICD_ID, timeout=0.01) is None
-
-    async def test_on_event_routes_unknown_events_to_the_registry(
-        self, client: SensiClient
-    ) -> None:
-        """Anything that is not state/info/capabilities resolves by name."""
-        future = await client._create_event_future("connected", None)
-
-        client._on_event("connected", None)
-
-        assert future.done()
+        future.cancel()
 
 
 class TestSetterAcks:
@@ -450,54 +625,84 @@ class TestTokenRefresh:
             await client._connect()
 
 
-class TestResponseHelpers:
-    """The module-level helpers used to interpret responses."""
+class TestGetErrorDescriptionFromEventCallback:
+    """Test cases for get_error_description_from_event_callback."""
 
-    def test_no_error_gives_an_empty_description(self) -> None:
-        """A missing error is not an error."""
+    def test_none(self):
+        """No error payload yields an empty description."""
         assert get_error_description_from_event_callback(None) == ""
+
+    def test_empty_dict(self):
+        """An empty payload yields an empty description."""
         assert get_error_description_from_event_callback({}) == ""
 
-    def test_a_description_is_extracted(self) -> None:
-        """The nested description is what the user needs to see."""
+    def test_description_with_icd_id(self):
+        """The description is read out of the nested error object."""
+        error = {
+            "error": {"description": "InvalidScale"},
+            "icd_id": "36-6f-92-ff-fe-02-24-b7",
+        }
+        assert get_error_description_from_event_callback(error) == "InvalidScale"
+
+    def test_description_without_icd_id(self):
+        """A payload with no icd_id still yields its description."""
         assert (
             get_error_description_from_event_callback(
-                {"error": {"description": "OutOfRange"}, "icd_id": ICD_ID}
+                {"error": {"description": "Forbidden"}}
             )
-            == "OutOfRange"
+            == "Forbidden"
         )
 
-    def test_an_error_without_a_description_gives_an_empty_string(self) -> None:
-        """An unexpected error shape degrades rather than raising."""
+    def test_error_object_without_description(self):
+        """An error object with no description yields an empty string."""
         assert get_error_description_from_event_callback({"error": {}}) == ""
 
-    @pytest.mark.parametrize(
-        ("details", "expected"),
-        [
-            ({"message": "jwt expired"}, True),
-            ({"message": "something else"}, False),
-            ({}, False),
-            (None, False),
-            ("Connection error", False),
-            (["jwt expired"], False),
-        ],
-    )
-    def test_token_expiry_detection(self, details, expected) -> None:
-        """Only a dict carrying the exact message counts as an expired token.
+    def test_payload_without_error_key(self):
+        """A payload with no error key yields an empty string."""
+        assert get_error_description_from_event_callback({"icd_id": "abc"}) == ""
 
-        The retry path sends a bare string here, so the non-dict guard is a
-        live branch rather than defensive dead code.
-        """
-        assert is_token_expired(details) is expected
 
-    @pytest.mark.parametrize(
-        ("data", "expected"),
-        [
-            ({"icd_id": ICD_ID}, ICD_ID),
-            ({}, ""),
-            (None, ""),
-        ],
-    )
-    def test_icd_id_extraction(self, data, expected) -> None:
-        """A payload with no identifier yields an empty string, not a KeyError."""
-        assert extract_icd_id(data) == expected
+class TestIsTokenExpired:
+    """Test cases for is_token_expired."""
+
+    def test_jwt_expired(self):
+        """The documented expiry message is recognized."""
+        assert is_token_expired({"message": "jwt expired"}) is True
+
+    def test_other_message(self):
+        """An unrelated message is not an expiry."""
+        assert is_token_expired({"message": "Unauthorized"}) is False
+
+    def test_empty_dict(self):
+        """An empty dict is not an expiry."""
+        assert not is_token_expired({})
+
+    def test_none(self):
+        """A missing payload is not an expiry."""
+        assert is_token_expired(None) is False
+
+    def test_non_dict(self):
+        """A non-dict payload (socketio can hand back a string) is not an expiry."""
+        assert is_token_expired("jwt expired") is False
+
+
+class TestExtractIcdId:
+    """Test cases for extract_icd_id."""
+
+    def test_present(self):
+        """The icd_id is returned when present."""
+        assert extract_icd_id({"icd_id": "36-6f-92-ff-fe-0c-0b-07"}) == (
+            "36-6f-92-ff-fe-0c-0b-07"
+        )
+
+    def test_absent(self):
+        """A payload without an icd_id yields an empty string."""
+        assert extract_icd_id({"state": {}}) == ""
+
+    def test_none(self):
+        """A missing payload yields an empty string."""
+        assert extract_icd_id(None) == ""
+
+    def test_empty_dict(self):
+        """An empty payload yields an empty string."""
+        assert extract_icd_id({}) == ""
