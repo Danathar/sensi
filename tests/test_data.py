@@ -187,6 +187,61 @@ class TestDemandResponse:
         assert demand_response.start_time == dt_util.as_local(start_time)
         assert demand_response.end_time == dt_util.as_local(end_time)
 
+    @pytest.mark.parametrize("field", ["pre_duration", "pre_gap", "notification_time"])
+    def test_demand_response_null_numeric_field_falls_back_to_zero(self, field):
+        """An explicit null parses as 0 rather than raising TypeError.
+
+        `dict.get(key, default)` returns the default only when the key is
+        absent, so a present-but-null field used to reach `int(None)` and raise.
+        The missing-key case always worked, which is why this went unnoticed.
+        """
+        demand_response = DemandResponse({"event_status": "started", field: None})
+
+        assert getattr(demand_response, field) == 0
+
+    def test_demand_response_null_field_does_not_discard_the_state_event(self):
+        """A null inside demand_response leaves the rest of the state intact.
+
+        This is the consequence that makes the TypeError worth fixing:
+        `DemandResponse` is built inside `State.__init__`, so the exception
+        escaped `SensiClient._update_state` and dropped the whole socket.io
+        event -- temperature, humidity and setpoints included.
+        """
+        state = State(
+            {
+                "status": "online",
+                "display_temp": 70,
+                "humidity": 42,
+                "demand_response": {"event_status": "started", "pre_duration": None},
+            }
+        )
+
+        assert state.display_temp == 70
+        assert state.humidity == 42
+        assert state.demand_response.pre_duration == 0
+
+    @pytest.mark.parametrize("field", ["start_time", "end_time"])
+    def test_demand_response_unparsable_timestamp_is_left_unset(self, field):
+        """A non-numeric timestamp leaves that field unset instead of raising.
+
+        `None` was already guarded, but `datetime.fromtimestamp` raises on any
+        other non-numeric value, which would lose the state event the same way
+        the nulls above did.
+        """
+        demand_response = DemandResponse({"event_status": "started", field: "soon"})
+
+        assert getattr(demand_response, field) is None
+
+    def test_demand_response_keeps_valid_timestamps(self):
+        """Guarding the timestamps does not stop real ones being parsed."""
+        start_time = datetime(2024, 1, 1, 12, 0, tzinfo=dt_util.UTC)
+
+        demand_response = DemandResponse(
+            {"event_status": "started", "start_time": start_time.timestamp()}
+        )
+
+        assert demand_response.start_time == dt_util.as_local(start_time)
+
     def test_demand_response_repr_contains_fields(self):
         """Test DemandResponse string representation includes key fields."""
         data = {

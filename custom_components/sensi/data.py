@@ -404,19 +404,28 @@ class DemandResponse:
             try_parse_enum(DemandResponseEventStatus, data.get("event_status"))
             or DemandResponseEventStatus.UNKNOWN
         )  # initialize as UNKNOWN till data refresh
-        self.pre_duration = int(data.get("pre_duration", 0))
-        self.pre_gap = int(data.get("pre_gap", 0))
-        self.notification_time = int(data.get("notification_time", 0))
+        # to_int rather than int(): dict.get's default only applies when the key
+        # is absent, so a present-but-null field reaches int() as None and
+        # raises. DemandResponse is built inside State.__init__, so that
+        # TypeError would discard the whole state event, not just this block.
+        self.pre_duration = to_int(data.get("pre_duration"), 0)
+        self.pre_gap = to_int(data.get("pre_gap"), 0)
+        self.notification_time = to_int(data.get("notification_time"), 0)
 
-        end_time = data.get("end_time")
+        # to_float for the same reason, one step further: these were already
+        # guarded against None, but fromtimestamp raises on any non-numeric
+        # value, which would lose the state event just as the nulls above did.
+        # A field this class cannot read is left unset, matching how every other
+        # field in this file degrades.
+        end_time = to_float(data.get("end_time"), None)
         if end_time is not None:
-            end_time = datetime.fromtimestamp(end_time, tz=UTC)
-            self.end_time = dt_util.as_local(end_time)
+            self.end_time = dt_util.as_local(datetime.fromtimestamp(end_time, tz=UTC))
 
-        start_time = data.get("start_time")
+        start_time = to_float(data.get("start_time"), None)
         if start_time is not None:
-            start_time = datetime.fromtimestamp(start_time, tz=UTC)
-            self.start_time = dt_util.as_local(start_time)
+            self.start_time = dt_util.as_local(
+                datetime.fromtimestamp(start_time, tz=UTC)
+            )
 
     def get_active_savings_event_state(
         self,
