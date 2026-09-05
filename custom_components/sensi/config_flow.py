@@ -39,7 +39,7 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
         """Start a config flow."""
         self._reauth_unique_id = None
 
-    async def _try_login(self, config: AuthenticationConfig) -> "LoginResponse":
+    async def _try_login(self, config: AuthenticationConfig) -> LoginResponse:
         """Try login with supplied credentials."""
         try:
             new_config = await refresh_access_token(self.hass, config.refresh_token)

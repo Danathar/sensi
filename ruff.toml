@@ -1,0 +1,52 @@
+# Ruff configuration for the Sensi custom integration.
+#
+# The devcontainer image supplies its own pyproject.toml (gitignored here as
+# "these come from the image"), so before this file existed lint and format
+# behaviour was only reproducible inside that image. Ruff prefers ruff.toml
+# over pyproject.toml, so this file is now the single source of truth for
+# both the container and CI.
+#
+# The rule set is deliberately the set the existing tree already satisfies -
+# adding a lint gate is only useful if it starts green. Widen it in a
+# dedicated change, not incidentally.
+
+target-version = "py314"
+line-length = 88
+
+[lint]
+select = [
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "D",   # pydocstyle - Home Assistant requires docstrings everywhere
+    "E4",  # pycodestyle imports
+    "E7",
+    "E9",
+    "F",   # pyflakes
+    "I",   # isort
+    "SIM", # flake8-simplify
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
+ignore = [
+    # The tree consistently puts a blank line after the function docstring.
+    "D202",
+    # D203/D213 conflict with D211/D212, which are the conventions used here.
+    "D203",
+    "D213",
+]
+
+[lint.per-file-ignores]
+# Asserting on private state is how the component's internals get covered.
+"tests/**" = ["SLF001"]
+
+[lint.isort]
+# Mirrors Home Assistant core: `homeassistant` is treated as first-party so it
+# sorts after third-party imports, and plain `import x` interleaves with
+# `from x import y` inside each section.
+force-sort-within-sections = true
+known-first-party = ["homeassistant"]
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[lint.pydocstyle]
+convention = "pep257"
