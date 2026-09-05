@@ -18,12 +18,14 @@ jobs:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
-      # Report every interpreter, rather than hiding the second failure behind
-      # the first. The versions differ in how annotations are evaluated, so a
-      # failure on one and not the other is a meaningful signal.
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14"]
+        # Only the version Home Assistant actually supports. HA has required
+        # Python >=3.14.2 since 2026.6.0, and pytest-homeassistant-custom-component
+        # pins HA, so adding an older interpreter here does not test this code on
+        # an older Python - pip just silently resolves an older Home Assistant and
+        # the job reports on a release nobody runs.
+        python-version: ["3.14"]
 
     steps:
       - name: Checkout
@@ -44,9 +46,7 @@ jobs:
           pip install -r requirements_test.txt
 
       - name: Record resolved versions
-        run: |
-          python -c "import homeassistant; print('homeassistant', homeassistant.__version__)"
-          pip freeze | grep -iE '^(homeassistant|pytest-homeassistant-custom-component|python-socketio)=='
+        run: pip list --format=freeze | grep -iE '^(homeassistant|pytest|pytest-cov|pytest-homeassistant-custom-component|python-socketio)=' || true
 
       - name: Run tests
         run: |
@@ -56,9 +56,9 @@ jobs:
             --cov-report=xml
 
       - name: Upload coverage report
-        if: always() && matrix.python-version == '3.14'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml
+          name: coverage-xml-py${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: ignore
