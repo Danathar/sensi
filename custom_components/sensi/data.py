@@ -389,7 +389,7 @@ class DemandResponse:
     end_time: datetime | None = None
 
     @classmethod
-    def create(cls, data: dict | None) -> DemandResponse | None:
+    def create(cls, data: dict | None) -> "DemandResponse | None":
         """Create an instance of DemandResponse based on data."""
         return None if data is None else DemandResponse(data)
 
