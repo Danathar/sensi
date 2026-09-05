@@ -7,6 +7,13 @@
         },
         "description": "Set up Sensi integration.\n\nLogin with your credentials at {sensi_url} and then paste the refresh_token from the response. Refer to integration home page (?) for details.",
         "title": "Sensi Thermostat"
+      },
+      "reauth_confirm": {
+        "data": {
+          "refresh_token": "Refresh token"
+        },
+        "description": "The stored Sensi refresh token is no longer valid.\n\nLogin with your credentials at {sensi_url} and then paste the new refresh_token from the response. It has to belong to the same Sensi account this entry was set up with.",
+        "title": "Sensi Thermostat"
       }
     },
     "error": {
@@ -16,7 +23,8 @@
       "wrong_account": "That refresh token belongs to a different Sensi account"
     },
     "abort": {
-      "entry_not_found": "The configuration entry is no longer available"
+      "entry_not_found": "The configuration entry is no longer available",
+      "reauth_successful": "Re-authentication was successful"
     }
   },
   "entity": {
