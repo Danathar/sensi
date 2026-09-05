@@ -35,6 +35,7 @@ from .const import (
     SENSI_FAN_AUTO,
     SENSI_FAN_CIRCULATE,
     SENSI_FAN_ON,
+    SENSI_FAN_SMART,
     TEMPERATURE_LOWER_LIMIT,
     TEMPERATURE_UPPER_LIMIT,
 )
@@ -168,9 +169,21 @@ class SensiThermostat(SensiEntity, ClimateEntity):
 
         # Create a special mode 'circulate' base on 'auto' when 'circulating_fan' contains 'enabled'='on'.
         if self._state.fan_mode == FanMode.AUTO and self._state.circulating_fan.enabled:
-            return SENSI_FAN_CIRCULATE
+            mode = SENSI_FAN_CIRCULATE
+        else:
+            mode = self._state.fan_mode.value
 
-        return self._state.fan_mode.value
+        # Home Assistant treats the current option as invalid when it is not
+        # one of the advertised fan_modes: it logs an error and the card shows
+        # a mode the dropdown does not contain. Report "not known" instead.
+        # FanMode.UNKNOWN lands here - it is the fallback for any fan_mode the
+        # enum does not recognise - and so does 'smart' on a thermostat whose
+        # capabilities did not advertise fan_mode_settings.smart.
+        fan_modes = self.fan_modes
+        if not fan_modes or mode not in fan_modes:
+            return None
+
+        return mode
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -312,11 +325,18 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         ):
             return None
 
-        return (
-            [SENSI_FAN_AUTO, SENSI_FAN_ON, SENSI_FAN_CIRCULATE]
-            if self._device.capabilities.circulating_fan.capable
-            else [SENSI_FAN_AUTO, SENSI_FAN_ON]
-        )
+        capabilities = self._device.capabilities
+
+        modes = [SENSI_FAN_AUTO, SENSI_FAN_ON]
+        if capabilities.circulating_fan.capable:
+            modes.append(SENSI_FAN_CIRCULATE)
+        # The thermostat can be put in 'smart' from the Sensi app, and then
+        # reports fan_mode='smart'. Offer it only where the device advertises
+        # it, so it is never listed as an option the thermostat would reject.
+        if capabilities.fan_mode_settings.smart:
+            modes.append(SENSI_FAN_SMART)
+
+        return modes
 
     @property
     def current_temperature(self) -> float | None:
@@ -482,9 +502,10 @@ class SensiThermostat(SensiEntity, ClimateEntity):
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new fan mode."""
 
-        # Valid fan_modes are  (SENSI_FAN_AUTO, SENSI_FAN_ON, SENSI_FAN_CIRCULATE)
-        # or (SENSI_FAN_AUTO, SENSI_FAN_ON)
-        if fan_mode not in self.fan_modes:
+        # fan_modes is None when fan support is turned off in the entry
+        # options, in which case there is no mode to set at all.
+        fan_modes = self.fan_modes
+        if not fan_modes or fan_mode not in fan_modes:
             raise ValueError(f"Unsupported fan mode: {fan_mode}")
 
         if fan_mode == SENSI_FAN_CIRCULATE:
