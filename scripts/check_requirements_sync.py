@@ -7,8 +7,8 @@ environments install from the requirements file - so they drift silently.
 """
 
 import json
-import sys
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "custom_components" / "sensi" / "manifest.json"

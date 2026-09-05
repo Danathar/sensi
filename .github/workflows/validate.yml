@@ -14,6 +14,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install ruff
+        # Installed from requirements_test.txt so CI and the devcontainer agree
+        # on the version.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "$(grep -E '^ruff==' requirements_test.txt)"
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format
+        run: ruff format --check .
+
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest
