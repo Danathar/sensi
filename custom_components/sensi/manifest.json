@@ -12,5 +12,6 @@
   "requirements": [
     "python-socketio==5.16.3"
   ],
+  "single_config_entry": true,
   "version": "2.1.6"
 }
