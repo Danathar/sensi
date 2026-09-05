@@ -69,8 +69,13 @@ the existing example.
 shape is breaking** for existing installs. Do not do it incidentally; if a task
 requires it, say so explicitly in the PR.
 
-**This repository is a fork of `iprak/sensi`.** `manifest.json` `documentation`
-and `issue_tracker` point at upstream on purpose. Leave them alone unless asked.
+**This repository is a fork of `iprak/sensi`.** `manifest.json` `documentation`,
+`issue_tracker` and `codeowners` point at *this* repository, not upstream. Home
+Assistant sends users to `issue_tracker` when a custom integration raises, so
+pointing it upstream files this fork's bugs on a maintainer who did not publish
+this code. Credit for the original work belongs in `README.md` and `LICENSE`,
+which is where it is - `codeowners` is a "who is responsible" field, not a
+credit field. Do not point any of the three back at upstream.
 
 ## Layout
 

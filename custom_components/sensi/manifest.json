@@ -2,13 +2,13 @@
   "domain": "sensi",
   "name": "Sensi",
   "codeowners": [
-    "@iprak"
+    "@Danathar"
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/iprak/sensi",
+  "documentation": "https://github.com/Danathar/sensi",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/iprak/sensi/issues",
+  "issue_tracker": "https://github.com/Danathar/sensi/issues",
   "requirements": [
     "python-socketio==5.16.3"
   ],
