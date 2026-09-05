@@ -17,6 +17,7 @@ jobs:
   lint:
     name: ruff
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,6 +43,7 @@ jobs:
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,6 +54,7 @@ jobs:
   hacs:
     name: HACS
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # HACS validates repository-level metadata as well as the integration -
     # topics, an enabled issue tracker, brands registration - none of which a
     # fork inherits from its parent. This fork has been given the topics and
@@ -68,6 +71,7 @@ jobs:
   requirements-sync:
     name: manifest requirements match requirements_component.txt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
