@@ -46,7 +46,7 @@ CI runs the same things:
 
 | Workflow | What it enforces |
 | --- | --- |
-| `.github/workflows/tests.yml` | the pytest suite |
+| `.github/workflows/ci.yml` | the pytest suite |
 | `.github/workflows/coverage-gate.yml` | line coverage stays at or above the threshold |
 | `.github/workflows/validate.yml` | `ruff`, hassfest, HACS, and requirements sync |
 
@@ -113,6 +113,15 @@ Fill in the pull request template. The two sections reviewers rely on most are
 *How it was verified* and *Risk*: say whether you exercised the change against a
 real thermostat, and say plainly if it touches the config flow, stored
 credentials, or entity unique IDs, since those break existing installs.
+
+## Further reading
+
+- [`docs/review-rubric.md`](docs/review-rubric.md) — what a review checks, in
+  priority order, and what it should not spend itself on
+- [`docs/quality.md`](docs/quality.md) — what each CI gate proves, and what is
+  deliberately not covered
+- [`docs/metrics.md`](docs/metrics.md) — change acceptance, and how to read it
+  honestly on a single-maintainer repository
 
 ## Reporting a problem
 

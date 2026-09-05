@@ -10,13 +10,13 @@ Python version. Treat it as a deliberate change with its own commit.
 1. **Bump only the pin**, in its own commit, with nothing else in the diff.
 
 2. **Record what moved.** Report the resolved `homeassistant` version before and
-   after, not just the harness version. `.github/workflows/tests.yml` has a
+   after, not just the harness version. `.github/workflows/ci.yml` has a
    `Record resolved versions` step that prints it.
 
 3. **Check the Python floor.** If the new Home Assistant raises its minimum
-   Python, `python-version` in `tests.yml`, `coverage-gate.yml` and
+   Python, `python-version` in `ci.yml`, `coverage-gate.yml` and
    `validate.yml`, and `target-version` in `ruff.toml`, all have to move
-   together. The matrix comment in `tests.yml` explains why a second, older
+   together. The matrix comment in `ci.yml` explains why a second, older
    interpreter is not tested — do not add one to "be safe"; pip will silently
    resolve an older Home Assistant and the job will report on a release nobody
    runs.
