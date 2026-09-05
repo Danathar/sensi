@@ -1,0 +1,62 @@
+# Risk tier rules, applied by .github/workflows/labeler.yml.
+#
+# The tier is the highest one whose paths the pull request touches - it is not
+# additive and not a score. Prose and rationale: docs/risk-tiers.md.
+
+tiers:
+  - name: tier/breaking
+    label_colour: b60205
+    description: >-
+      Can break an existing install on upgrade. Needs an explicit note in the
+      pull request Risk section and in the release notes.
+    paths:
+      - custom_components/sensi/config_flow.py
+      - custom_components/sensi/auth.py
+      - custom_components/sensi/manifest.json
+      - custom_components/sensi/entity.py
+
+  - name: tier/runtime
+    label_colour: d93f0b
+    description: >-
+      Runs against the live Sensi service or drives entity state. Cannot be
+      fully verified in CI; hardware verification should be stated.
+    paths:
+      - custom_components/sensi/client.py
+      - custom_components/sensi/coordinator.py
+      - custom_components/sensi/__init__.py
+      - custom_components/sensi/data.py
+      - custom_components/sensi/capabilities.py
+      - custom_components/sensi/event.py
+
+  - name: tier/behaviour
+    label_colour: fbca04
+    description: >-
+      Changes what an entity reports or accepts. Covered by tests; user-visible.
+    paths:
+      - custom_components/sensi/climate.py
+      - custom_components/sensi/binary_sensor.py
+      - custom_components/sensi/number.py
+      - custom_components/sensi/sensor.py
+      - custom_components/sensi/switch.py
+      - custom_components/sensi/strings.json
+      - custom_components/sensi/translations/**
+
+  - name: tier/support
+    label_colour: 0e8a16
+    description: >-
+      Tests, CI, tooling and documentation. Cannot reach a user's installation.
+    paths:
+      - "**"
+
+# Size labels, from additions + deletions of the pull request.
+sizes:
+  - name: size/XS
+    max_lines: 20
+  - name: size/S
+    max_lines: 100
+  - name: size/M
+    max_lines: 400
+  - name: size/L
+    max_lines: 1000
+  - name: size/XL
+    max_lines: null
