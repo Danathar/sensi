@@ -15,11 +15,11 @@ from custom_components.sensi.event import SettingEventName
 from custom_components.sensi.switch import (
     SWITCH_TYPES,
     SensiAuxHeatSwitch,
-    _mode_to_restore,
     SensiCapabilityEntityDescription,
     SensiCapabilitySettingSwitch,
     SensiFanSupportSwitch,
     SensiHumidificationSwitch,
+    _mode_to_restore,
     async_setup_entry,
 )
 from homeassistant.config_entries import ConfigEntries
