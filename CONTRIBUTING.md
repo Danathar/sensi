@@ -131,13 +131,28 @@ shape (`2026.9.0` against upstream's `v2.1.6`) makes the two obvious at a
 glance, and Home Assistant itself uses CalVer. Because `2026.x` compares as
 newer than `2.1.x`, an existing install upgrades cleanly rather than stranding.
 
-To cut one, run the **Release** workflow with the version. It validates before
-it writes anything - shape, that the tag is free, that the number is newer than
-the latest stable tag, and that a `b1`/`rc1` suffix agrees with the pre-release
-checkbox - then sets `manifest.json`, commits, tags, and publishes with notes
-generated from the merged pull requests. Use **dry_run** to check a version
-without publishing. Do not tag by hand: the manifest version and the tag have
-to move together, and the workflow is what guarantees that.
+Releases happen **monthly, on the 1st**, from the `Release` workflow. It derives
+the version from the date - this month's `.0` if there has not been one yet,
+otherwise the next patch - and publishes with notes generated from the merged
+pull requests. You can also run it by hand at any time, optionally passing an
+explicit version.
+
+Three things have to be true before a scheduled run publishes anything:
+
+| Guard | Why |
+| --- | --- |
+| The repository variable `AUTO_RELEASE_ENABLED` is `true` | Merging the workflow must not, by itself, start publishing to everyone on HACS. Someone decides that. A manual run ignores this - a person is already in the loop. |
+| Something under `custom_components/sensi` changed since the last release | About half the commits here are CI and docs. Releasing a month of those trains people to ignore the update prompt, which is the thing that has to keep working when a release does matter. Override with **force**. |
+| Every check on the commit is green | An automatic release ships to everyone without a person looking first. The least it can do is refuse when master is not green. |
+
+Then, as for a manual run, it validates before writing anything - the CalVer
+shape, that the tag is free, that the number is newer than the latest stable
+tag, and that a `b1`/`rc1` suffix agrees with the pre-release checkbox - and
+only then sets `manifest.json`, commits, tags, and publishes. **dry_run**
+validates and stops.
+
+Do not tag by hand: the manifest version and the tag have to move together, and
+the workflow is what guarantees that.
 
 The attached `sensi.zip` is for people installing by hand. HACS does not use
 it - that would need `zip_release` and `filename` in `hacs.json`, both
