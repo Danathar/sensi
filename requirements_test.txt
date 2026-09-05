@@ -8,3 +8,8 @@
 
 pytest-homeassistant-custom-component==0.13.363
 pytest-cov
+
+# Lint and format. Pinned deliberately: an unpinned ruff turns "a new ruff was
+# released" into "master is red", because new releases add rules to the sets
+# selected in ruff.toml.
+ruff==0.16.6

@@ -48,17 +48,7 @@ jobs:
       - name: Record resolved versions
         run: pip list --format=freeze | grep -iE '^(homeassistant|pytest|pytest-cov|pytest-homeassistant-custom-component|python-socketio)=' || true
 
+      # Coverage is measured and enforced by coverage-gate.yml; this job is
+      # the fast signal for "do the tests pass".
       - name: Run tests
-        run: |
-          pytest \
-            --cov=custom_components.sensi \
-            --cov-report=term-missing \
-            --cov-report=xml
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-xml-py${{ matrix.python-version }}
-          path: coverage.xml
-          if-no-files-found: ignore
+        run: pytest

@@ -1,0 +1,82 @@
+name: Coverage gate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Line coverage of custom_components/sensi must not fall below this.
+  #
+  # The suite sits comfortably above it (96% at the time this gate was added -
+  # tests/e2e took client.py from 52% to 90%). The threshold is set below the
+  # current number on purpose, so an unrelated PR is not blocked by a one-line
+  # branch it did not touch. Raise it when the suite genuinely improves; do not
+  # lower it to make a PR pass.
+  MIN_COVERAGE: 90
+
+jobs:
+  coverage:
+    name: line coverage >= threshold
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements_test.txt
+            requirements_component.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+
+      - name: Run the suite under coverage
+        run: |
+          pytest \
+            --cov=custom_components.sensi \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under="${MIN_COVERAGE}"
+
+      - name: Summarise
+        if: always()
+        run: |
+          if [ -f coverage.xml ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("coverage.xml").getroot()
+          percent = float(root.get("line-rate", 0)) * 100
+          threshold = float(os.environ["MIN_COVERAGE"])
+          verdict = "PASS" if percent >= threshold else "FAIL"
+          print(f"### Coverage {verdict}\n")
+          print(f"- Line coverage: **{percent:.2f}%**")
+          print(f"- Threshold: **{threshold:.0f}%**")
+          PY
+          else
+            echo "No coverage.xml was produced - the suite did not run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
