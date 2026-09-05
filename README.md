@@ -206,3 +206,9 @@ The source can be opened in a Dev Container. The user test/test is already set i
 * Site address: `localhost:9123`
 * Test execution: `pytest tests`
 * Test coverage: `coverage run -m pytest tests && coverage report -m`
+
+## Contributing
+
+Bug reports, payload captures and pull requests are welcome - see
+[CONTRIBUTING.md](CONTRIBUTING.md). If you are working with a coding assistant,
+[AGENTS.md](AGENTS.md) is the same guidance written for one.

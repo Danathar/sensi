@@ -1,0 +1,62 @@
+---
+description: Home Assistant Sensi thermostat integration - project rules
+globs: ["**/*.py", "**/*.json", "**/*.yml", "**/*.yaml"]
+alwaysApply: true
+---
+
+# Sensi integration
+
+Home Assistant custom integration for Sensi thermostats. Python 3.14+, async
+throughout. Shipped code lives in `custom_components/sensi/`.
+
+The full guidance is in @AGENTS.md — read it before a non-trivial change. The
+rules below are the ones that most often get broken without it.
+
+## Never emit a credential
+
+No access tokens, refresh tokens, or real `icd_id` values in code, logs,
+docstrings, fixtures, or commit messages. `auth.py` exports `redact_token` — use
+it for anything token-shaped.
+
+## Parse defensively
+
+The Sensi socket.io protocol is reverse engineered and undocumented; fields
+present today can vanish tomorrow, and a `KeyError` in a payload parser takes the
+whole integration down. Use `.get()` with a default and the `to_bool` / `to_int`
+/ `to_float` helpers from `utils.py`. Never index a payload dict directly.
+
+Do not invent a payload field you cannot find in `tests/sample.json`. There is no
+schema to check against — say so instead of guessing.
+
+## Files you must not create or edit
+
+- **`pyproject.toml`** — gitignored on purpose; the devcontainer image supplies
+  it. Ruff config goes in `ruff.toml`, pytest config in `pytest.ini`.
+- **`manifest.json` `version`** — the release workflow owns it.
+
+`manifest.json` `requirements` must stay in sync with
+`requirements_component.txt`; CI fails on drift. `strings.json` cannot contain
+literal URLs (hassfest rejects them) — use `description_placeholders`.
+
+## Style
+
+Home Assistant core conventions: docstrings on every module, class and function;
+88-column lines; `homeassistant` sorted as first-party with
+`force-sort-within-sections`. `ruff check --fix` and `ruff format` handle the
+mechanical parts.
+
+## Before calling a change done
+
+```bash
+pytest && ruff check . && ruff format --check .
+```
+
+New behaviour needs a test; a bug fix needs a test that fails before the fix.
+Coverage is gated at 90%. Use `tests/e2e/` when the assertion is about what went
+out on the wire.
+
+## Commits
+
+Conventional Commits. `feat:` and `fix:` bump the released version — use them
+only for user-visible integration changes. Tooling, CI and docs are `ci:`,
+`docs:`, `test:`, `refactor:` or `chore:`.
