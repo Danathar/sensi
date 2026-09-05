@@ -5,7 +5,7 @@
         "data": {
           "refresh_token": "Refresh token"
         },
-        "description": "Set up Sensi integration.\n\nLogin with your credentials from https://manager.sensicomfort.com/ and then paste the refresh_token from the response. Refer to integration home page (?) for details.",
+        "description": "Set up Sensi integration.\n\nLogin with your credentials at {sensi_url} and then paste the refresh_token from the response. Refer to integration home page (?) for details.",
         "title": "Sensi Thermostat"
       }
     },

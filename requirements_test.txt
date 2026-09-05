@@ -1,0 +1,10 @@
+# Test requirements.
+#
+# pytest-homeassistant-custom-component ships a pinned Home Assistant, so this
+# pin is what decides which HA release the suite runs against - and therefore
+# the minimum Python version, since HA has required >=3.14.2 since 2026.6.0.
+# Bump it deliberately, not incidentally.
+-r requirements_component.txt
+
+pytest-homeassistant-custom-component==0.13.363
+pytest-cov
