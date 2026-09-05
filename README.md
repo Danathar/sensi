@@ -147,6 +147,8 @@ Upstream is [`iprak/sensi`](https://github.com/iprak/sensi); this fork tracks it
 
 Full detail is in the commit history. Changes that make sense upstream get proposed there.
 
+**Version numbers do not line up with upstream's, on purpose.** This fork releases on CalVer — `2026.9.0`, tagged without a `v` — while upstream continues its `v2.x` semver line. Sharing the numbering would mean two different releases both called `v2.1.7`. Because `2026.x` compares as newer than `2.1.x`, upgrading from an upstream install works normally. [CONTRIBUTING.md](CONTRIBUTING.md#releases) has the details.
+
 ## Security
 
 Older builds wrote the full refresh token to the log when debug logging was enabled for this integration. If you have run one of those with debug logging on, **treat those logs as containing a live credential** — refresh tokens are long-lived and some do not expire for years. Rotate by changing your Sensi password and obtaining a new refresh token. Current builds log only a short fingerprint.
