@@ -145,6 +145,9 @@ sections are the ones reviewers act on.
 | [`docs/review-rubric.md`](docs/review-rubric.md) | what a review checks, in priority order |
 | [`docs/quality.md`](docs/quality.md) | what each CI gate proves, and what is not covered at all |
 | [`docs/metrics.md`](docs/metrics.md) | change acceptance, and how to read it here |
+| [`docs/risk-tiers.md`](docs/risk-tiers.md) | what the automatic `tier/*` label means and what it requires of you |
+| [`docs/SECURITY-AI.md`](docs/SECURITY-AI.md) | what an agent may and may not do here - read this before acting autonomously |
+| [`docs/reflections/`](docs/reflections/) | knowledge that outlived the change that produced it |
 | [`.claude/checkpoint.md`](.claude/checkpoint.md) | where the repository stands right now |
 | [`.claude/session-summary.md`](.claude/session-summary.md) | decisions already made, so they are not re-litigated |
 | [`.claude/memory/`](.claude/memory/) | corrections that came out of real mistakes on this codebase |

@@ -1,0 +1,74 @@
+# Path-based pull request labels, applied by .github/workflows/labeler.yml
+# using actions/labeler.
+#
+# Labels describe *where* a change lands, so a reviewer can see the blast
+# radius before opening the diff. Risk tier and size are applied separately by
+# the same workflow from .github/risk-tiers.yml.
+
+integration:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/sensi/**
+
+client:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/sensi/client.py
+          - custom_components/sensi/event.py
+
+auth:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/sensi/auth.py
+          - custom_components/sensi/config_flow.py
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/**
+          - pytest.ini
+
+e2e:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/e2e/**
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/labeler.yml
+          - .github/risk-tiers.yml
+          - scripts/**
+          - ruff.toml
+          - .editorconfig
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - docs/**
+          - images/**
+
+agent-config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - AGENTS.md
+          - CLAUDE.md
+          - .claude/**
+          - .cursor/**
+          - .github/copilot-instructions.md
+          - .github/prompts/**
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - requirements_component.txt
+          - requirements_test.txt
+          - custom_components/sensi/manifest.json
+
+translations:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/sensi/strings.json
+          - custom_components/sensi/translations/**
