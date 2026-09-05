@@ -32,20 +32,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
 
         entry.runtime_data = SensiUpdateCoordinator(hass, client, entry)
         await hass.config_entries.async_forward_entry_setups(entry, SUPPORTED_PLATFORMS)
-    except ConfigEntryAuthFailed:
-        # Pass ConfigEntryAuthFailed, this can be raised from the coordinator
+    except ConfigEntryAuthFailed, ConfigEntryNotReady:
+        # Both already say the right thing and carry their own reason.
+        # ConfigEntryAuthFailed can be raised from the coordinator, and
+        # wait_for_devices raises ConfigEntryNotReady naming what timed out.
+        # Re-wrapping either would replace that reason with a worse one.
         raise
-    except (AuthenticationError, SensiConnectionError, TimeoutError) as err:
-        # Raising ConfigEntryAuthFailed will automatically put the config entry in a
-        # failure state and start a reauth flow.
+    except AuthenticationError as err:
+        # The stored credential is the problem. ConfigEntryAuthFailed puts the
+        # entry in a failure state and starts a reauth flow.
         # https://developers.home-assistant.io/docs/integration_setup_failures/
-        raise ConfigEntryAuthFailed from err
-
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except (SensiConnectionError, TimeoutError) as err:
+        # The backend was unreachable. That says nothing about the stored
+        # token, so retry with backoff rather than sending the user off to
+        # find a new refresh token for one that was never invalid.
+        raise ConfigEntryNotReady(f"Unable to reach the Sensi service: {err}") from err
     except Exception as err:
-        LOGGER.warning("Unable to authenticate", exc_info=True)
-        raise ConfigEntryNotReady(
-            "Unable to authenticate. Sensi integration is not ready."
-        ) from err
+        LOGGER.warning("Unexpected error setting up Sensi", exc_info=True)
+        raise ConfigEntryNotReady(f"Unexpected error setting up Sensi: {err}") from err
 
     return True
 
