@@ -246,6 +246,9 @@ class TestSensorTypes:
         """Test that wifi strength sensor is defined."""
         wifi_sensors = [s for s in SENSOR_TYPES if s.key == "wifi_strength"]
         assert len(wifi_sensors) == 1
+        assert wifi_sensors[0].device_class is None
+        assert wifi_sensors[0].native_unit_of_measurement == PERCENTAGE
+        assert wifi_sensors[0].name == "Wifi quality"
 
     def test_temperature_sensor_configuration(self):
         """Test temperature sensor configuration."""
