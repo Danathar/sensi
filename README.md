@@ -1,6 +1,7 @@
 [![CI](https://github.com/Danathar/sensi/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Danathar/sensi/actions/workflows/ci.yml)
 [![Validate](https://github.com/Danathar/sensi/actions/workflows/validate.yml/badge.svg?branch=master)](https://github.com/Danathar/sensi/actions/workflows/validate.yml)
 [![Coverage gate](https://github.com/Danathar/sensi/actions/workflows/coverage-gate.yml/badge.svg?branch=master)](docs/quality.md#coverage)
+[![Unit coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fsensi%2Fcoverage-data%2Fcoverage-unit.json)](docs/quality.md#coverage)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/sensi)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
 [![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)

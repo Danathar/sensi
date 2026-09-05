@@ -88,10 +88,29 @@ that failure was not in the loop when it moved.
 
 ## Trend
 
-There is no coverage service and no history beyond the per-run artifact, which
-expires with the run. The committed floor in `coverage-gate.yml` is what makes a
-regression fail rather than pass unnoticed — it is a ratchet, not a graph. Raise
-it when the suite genuinely improves.
+Every push to `master` publishes the measured number to the `coverage-data`
+branch, which holds two files and no code:
+
+| File | What it is |
+| --- | --- |
+| [`coverage-unit.json`](https://github.com/Danathar/sensi/blob/coverage-data/coverage-unit.json) | the shields.io payload behind the **Unit coverage** badge |
+| [`coverage-trend.csv`](https://raw.githubusercontent.com/Danathar/sensi/coverage-data/coverage-trend.csv) | one row per push — `date,sha,percent` |
+
+The badge is the snapshot; the CSV is the history, which the per-run artifact
+cannot be because it expires with the run. `scripts/coverage_badge.py` writes
+both, and the `publish` job in `coverage-gate.yml` pushes them. It runs on push
+to `master` only and depends on the gate having passed, so a pull request
+cannot move the published number and a failed run cannot overwrite a good
+number with a bad one.
+
+The badge is not the gate. Its colour uses the same `MIN_COVERAGE`, so it goes
+yellow at exactly the point the gate would fail, but the committed floor in
+`coverage-gate.yml` is still what actually blocks a merge — a ratchet, not a
+graph. Raise it when the suite genuinely improves.
+
+Because publishing only happens on a green master run, a red **Coverage gate**
+badge next to a healthy-looking **Unit coverage** number means the number is
+stale, not that coverage is fine. That is why both badges are there.
 
 Change acceptance is tracked separately in [`docs/metrics.md`](metrics.md).
 
