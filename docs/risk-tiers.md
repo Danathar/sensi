@@ -96,3 +96,10 @@ Edit [`.github/risk-tiers.yml`](../.github/risk-tiers.yml) and this file
 together. Tiers are evaluated in file order, highest first, so a new path
 pattern must go in the tier that describes its worst outcome — not the one that
 is most convenient.
+
+Each tier carries two descriptions. `label_description` is what GitHub shows on
+the label and is capped at 100 characters; `description` is the longer prose for
+anyone reading the rules file. `scripts/classify_pr.py` rejects an over-long
+`label_description`, because GitHub's own failure is an HTTP 422 on label
+creation followed by an unrelated-looking "label not found" when the label is
+applied.

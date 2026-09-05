@@ -28,6 +28,9 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 RULES = ROOT / ".github" / "risk-tiers.yml"
 
+# GitHub rejects a label description longer than this with HTTP 422.
+MAX_LABEL_DESCRIPTION = 100
+
 
 def die(message: str) -> None:
     """Print an error and exit non-zero."""
@@ -49,10 +52,24 @@ def matches(path: str, pattern: str) -> bool:
 
 
 def load_rules() -> dict:
-    """Load the tier and size rules."""
+    """Load and validate the tier and size rules."""
     if not RULES.exists():
         die(f"{RULES} not found")
-    return yaml.safe_load(RULES.read_text())
+
+    rules = yaml.safe_load(RULES.read_text())
+
+    # Checked here rather than discovered as an HTTP 422 in CI, where the
+    # symptom is the unrelated-looking "'tier/runtime' not found" from the
+    # subsequent add-label call.
+    for tier in rules["tiers"]:
+        description = tier.get("label_description", "")
+        if len(description) > MAX_LABEL_DESCRIPTION:
+            die(
+                f"{tier['name']}: label_description is {len(description)} "
+                f"characters; GitHub allows {MAX_LABEL_DESCRIPTION}"
+            )
+
+    return rules
 
 
 def fetch_pr(number: int, repo: str | None) -> tuple[list[str], int]:
@@ -98,7 +115,9 @@ def classify(paths: list[str], lines: int, rules: dict) -> dict:
         and {
             "name": tier["name"],
             "colour": tier.get("label_colour", "ededed"),
-            "description": " ".join(tier.get("description", "").split()),
+            # The short one - GitHub rejects a description over 100 characters.
+            # The long `description` in the rules file is for humans reading it.
+            "description": tier.get("label_description", ""),
         },
         "size": size
         and {
