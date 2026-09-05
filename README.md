@@ -9,7 +9,7 @@
 
 # Sensi thermostat for Home Assistant
 
-A Home Assistant custom integration for [Sensi](https://sensi.emerson.com/en-us) smart thermostats. It reads temperature, humidity and thermostat state, and lets you control operating mode, setpoints, fan and the thermostat's own configuration switches from Home Assistant.
+A Home Assistant custom integration for Sensi smart thermostats. It reads temperature, humidity and thermostat state, and lets you control operating mode, setpoints, fan and the thermostat's own configuration switches from Home Assistant.
 
 There is no public Sensi API. The integration talks to the same backend the mobile app does. Emerson can change that backend at any time, so treat this as something that can break without warning.
 
