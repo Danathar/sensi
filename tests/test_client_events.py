@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.sensi.auth import SensiConnectionError
+from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import (
     EventInfo,
     SensiClient,
@@ -661,10 +661,16 @@ class TestCirculatingFan:
 class TestTokenRefresh:
     """`try_refresh_access_token` and the refresh branches of `_connect`."""
 
-    async def test_a_refresh_failure_becomes_a_connection_error(
+    async def test_an_unexpected_refresh_failure_becomes_a_connection_error(
         self, client: SensiClient
     ) -> None:
-        """Whatever the auth layer raises is normalised for the caller."""
+        """A type the auth layer does not document is normalised.
+
+        Only unexpected types. AuthenticationError and SensiConnectionError
+        already say which kind of failure they are, and that difference is
+        what decides whether Home Assistant retries or asks for a new token -
+        see the two tests below.
+        """
         with (
             patch(
                 "custom_components.sensi.client.refresh_access_token",
@@ -673,6 +679,69 @@ class TestTokenRefresh:
             pytest.raises(SensiConnectionError, match="Error refreshing tokens"),
         ):
             await client.try_refresh_access_token()
+
+    async def test_a_rejected_token_is_not_disguised_as_a_connection_error(
+        self, client: SensiClient
+    ) -> None:
+        """AuthenticationError has to reach the caller intact.
+
+        auth._get_new_tokens raises it for a 4xx, meaning the refresh token
+        itself is bad. Wrapping it in SensiConnectionError left the
+        coordinator's ConfigEntryAuthFailed branch - and therefore the reauth
+        prompt - unreachable from the only place that can detect a bad token.
+        """
+        with (
+            patch(
+                "custom_components.sensi.client.refresh_access_token",
+                side_effect=AuthenticationError("Invalid token"),
+            ),
+            pytest.raises(AuthenticationError, match="Invalid token"),
+        ):
+            await client.try_refresh_access_token()
+
+    async def test_a_connection_error_is_passed_through_unwrapped(
+        self, client: SensiClient
+    ) -> None:
+        """A 5xx is already the right type; re-wrapping only loses its message."""
+        with (
+            patch(
+                "custom_components.sensi.client.refresh_access_token",
+                side_effect=SensiConnectionError("Sensi is down"),
+            ),
+            pytest.raises(SensiConnectionError, match="Sensi is down"),
+        ):
+            await client.try_refresh_access_token()
+
+    async def test_connect_does_not_rewrap_a_rejected_token(
+        self, hass: HomeAssistant
+    ) -> None:
+        """The second layer that was erasing the distinction.
+
+        The pre-connect refresh runs inside _connect's try, whose catch-all
+        turned everything into SensiConnectionError("Failed to connect"). Even
+        with try_refresh_access_token fixed, that would have re-disguised the
+        rejected token one frame later.
+        """
+        expired = AuthenticationConfig(
+            refresh_token="revoked",
+            access_token="access",
+            expires_at=0,
+            user_id="user",
+        )
+        client = SensiClient(hass, expired)
+
+        with (
+            patch(
+                "custom_components.sensi.client.refresh_access_token",
+                side_effect=AuthenticationError("Invalid token"),
+            ),
+            patch.object(client, "_connect_client", AsyncMock()) as mock_connect,
+            pytest.raises(AuthenticationError, match="Invalid token"),
+        ):
+            await client._connect()
+
+        # It never got as far as the socket: the token was rejected first.
+        mock_connect.assert_not_awaited()
 
     async def test_an_expired_token_is_refreshed_before_connecting(
         self, hass: HomeAssistant
