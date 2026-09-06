@@ -255,6 +255,54 @@ class TestCapabilities:
         assert capabilities.humidity_control.dehumidification.max == 95
 
 
+class TestNullContainers:
+    """A capability object sent as null falls back to "not capable".
+
+    `data.get(key, {})` only defaults when the key is absent, so a null here
+    used to raise AttributeError. Capabilities is built inside
+    SensiDevice.create, so that exception discarded the whole state event -
+    for every device on the account, not just this one.
+    """
+
+    def test_capabilities_parses_the_null_container_fixture(self, mock_json_with_nulls):
+        """Every nulled capability object degrades to its default."""
+        capabilities = Capabilities(mock_json_with_nulls["capabilities"])
+
+        assert capabilities.circulating_fan.capable is False
+        assert capabilities.circulating_fan.max_duty_cycle == 0
+        assert capabilities.fan_mode_settings.auto is False
+        assert capabilities.fan_mode_settings.on is False
+        assert capabilities.fan_mode_settings.smart is False
+        assert capabilities.operating_mode_settings.heat is False
+        assert capabilities.humidity_control.humidification is None
+        assert capabilities.humidity_control.dehumidification is None
+        # Leaf values alongside them still parse.
+        assert capabilities.keypad_lockout is True
+
+    def test_capabilities_from_a_null_object(self):
+        """A null `capabilities` section yields defaults, not AttributeError."""
+        capabilities = Capabilities(None)
+
+        assert capabilities.circulating_fan.capable is False
+        assert capabilities.max_cool_setpoint == MAX_COOL_SETPOINT
+
+    def test_null_humidity_control_members(self):
+        """Humidification and dehumidification were already null-guarded here."""
+        control = HumidityControlCapabilities(
+            {"humidification": None, "dehumidification": None}
+        )
+
+        assert control.humidification is None
+        assert control.dehumidification is None
+
+    def test_null_capability_sub_objects(self):
+        """Each sub-object parses a null into its own defaults."""
+        assert CirculatingFanCapabilities(None).capable is False
+        assert FanModes(None).auto is False
+        assert SystemModes(None).heat is False
+        assert HumidityCapabilities(None).step == DEFAULT_HUMIDITY_STEP
+
+
 class TestOffsetBounds:
     """Test cases for the temperature/humidity offset bounds."""
 

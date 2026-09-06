@@ -607,6 +607,117 @@ class TestSensiDevice:
         assert device.info != current_info
 
 
+class TestNullContainers:
+    """A JSON null where an object was expected must not raise.
+
+    `dict.get(key, {})` only applies its default when the key is *absent*. This
+    backend sends unused objects as null rather than omitting them -
+    `geofencing`, `lcd_sleep_mode`, `night_light` and the three inside
+    `control` are all null in sample.json - so a thermostat without a
+    circulating fan or without humidity control reporting
+    `"circulating_fan": null` is the same convention applied to a field this
+    integration reads. Before the fix each of these raised AttributeError out
+    of the socket.io handler, which discarded the state event for *every*
+    device on the account.
+    """
+
+    def test_state_parses_the_null_container_fixture(self, mock_json_with_nulls):
+        """Every nulled container falls back to its default."""
+        state = State(mock_json_with_nulls["state"])
+
+        assert state.circulating_fan.enabled is False
+        assert state.circulating_fan.duty_cycle == 0
+        assert state.demand_status.heat == 0
+        assert state.demand_status.cool == 0
+        assert state.humidity_control.humidification.enabled is False
+        assert state.humidity_control.dehumidification.enabled is False
+        # The leaf values around them still parse.
+        assert state.display_temp == 68.5
+
+    def test_null_display_scale_falls_back_to_fahrenheit(self):
+        """display_scale is .lower()-ed, so a null used to raise in __init__."""
+        state = State({"status": "online", "display_scale": None})
+
+        assert state.display_scale == ""
+        assert state.temperature_unit == UnitOfTemperature.FAHRENHEIT
+
+    def test_null_status_reports_offline_rather_than_raising(self):
+        """is_online runs from every entity's `available`, on every write.
+
+        A null status used to make that raise long after parsing succeeded,
+        so setup completed and then each entity logged a traceback.
+        """
+        state = State({"status": None, "display_temp": 70})
+
+        assert state.status == ""
+        assert state.is_online is False
+
+    def test_state_from_a_null_object(self):
+        """A null `state` container yields defaults, not AttributeError."""
+        state = State(None)
+
+        assert state.is_online is False
+        assert state.temperature_unit == UnitOfTemperature.FAHRENHEIT
+
+    def test_device_create_from_the_null_container_fixture(self, mock_json_with_nulls):
+        """The whole payload parses, and the device is usable."""
+        have_state, device = SensiDevice.create(mock_json_with_nulls)
+
+        assert have_state is True
+        assert device.identifier == mock_json_with_nulls["icd_id"]
+        assert device.name == "Living Room"
+        assert device.capabilities.circulating_fan.capable is False
+        assert device.capabilities.fan_mode_settings.smart is False
+        assert device.capabilities.humidity_control.humidification is None
+
+    def test_device_create_with_every_section_null(self):
+        """A payload whose four top-level sections are all null."""
+        have_state, device = SensiDevice.create(
+            {
+                "icd_id": "icd-1",
+                "registration": None,
+                "capabilities": None,
+                "thermostat_info": None,
+                "state": None,
+            }
+        )
+
+        # No state to report is not the same as a state that failed to parse:
+        # have_state False leaves the `state` futures unresolved, which is what
+        # the first connect event legitimately looks like.
+        assert have_state is False
+        assert device.identifier == "icd-1"
+        assert device.name == ""
+        assert device.info.model_number == ""
+        assert device.state.is_online is False
+
+    def test_null_thermostat_info_images(self):
+        """`images` is fetched then dereferenced the same way."""
+        info = ThermostatInfo({"model_number": "1F87U-42WFC", "images": None})
+
+        assert info.model_number == "1F87U-42WFC"
+        assert info.images.firmware_version == ""
+
+    def test_null_humidity_control_members(self):
+        """The two Humidity objects inside humidity_control."""
+        control = HumidityControl({"humidification": None, "dehumidification": None})
+
+        assert control.humidification.enabled is False
+        assert control.dehumidification.enabled is False
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, [], "not-an-object", 7],
+        ids=["null", "list", "string", "number"],
+    )
+    def test_a_container_of_the_wrong_type_degrades_the_same_way(self, value):
+        """to_dict is isinstance-based, so a list or scalar is not special."""
+        state = State({"status": "online", "circulating_fan": value})
+
+        assert state.circulating_fan.duty_cycle == 0
+        assert state.is_online is True
+
+
 class TestAuthenticationConfigIsExpired:
     """Test cases for AuthenticationConfig.is_expired."""
 

@@ -17,7 +17,7 @@ from .const import (
     TEMPERATURE_LOWER_LIMIT,
     TEMPERATURE_UPPER_LIMIT,
 )
-from .utils import to_bool, to_float, to_int
+from .utils import to_bool, to_dict, to_float, to_int
 
 # Refresh the access token this many seconds before its real expiry so the
 # socket.io namespace handshake is never presented a token that expires
@@ -144,6 +144,9 @@ class CirculatingFan:
     def __init__(self, data: dict) -> None:
         """Initialize CirculatingFan from data dictionary."""
 
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
+
         # "circulating_fan":{"enabled":"on","duty_cycle":10}
         self.enabled = to_bool(data.get("enabled"))
         self.duty_cycle = to_int(data.get("duty_cycle"), 0)
@@ -154,6 +157,9 @@ class DemandStatus:
 
     def __init__(self, data: dict) -> None:
         """Initialize DemandStatus from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # "demand_status":{"heat":0,"fan":0,"cool":0,"aux":0,"last":"heat","last_start":null,"cool_stage":null,"heat_stage":null,"aux_stage":null,"humidification":0,"dehumidification":0,"overcooling":"no"},
         self.heat = to_int(data.get("heat"), 0)
@@ -169,6 +175,9 @@ class Humidity:
 
     def __init__(self, data: dict) -> None:
         """Initialize humidification settings."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # "humidification":{"target_percent":5,"enabled":"off","mode":"humidifier"}
         # "dehumidification":{"target_percent":40,"enabled":"off","mode":"overcooling"}
@@ -189,6 +198,9 @@ class HumidityControl:
 
     def __init__(self, data: dict) -> None:
         """Initialize humidity control settings."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # {'humidification': {'target_percent': 5, 'enabled': 'off', 'mode': 'humidifier'}, 'dehumidification': {'target_percent': 40, 'enabled': 'off', 'mode': 'overcooling'}, 'status': 'none'}
         self.humidification = Humidity(data.get("humidification", {}))
@@ -223,6 +235,9 @@ class State:
 
     def __init__(self, data: dict) -> None:
         """Initialize State from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
         self.battery_voltage = to_float(data.get("battery_voltage"), None)
         self.circulating_fan = CirculatingFan(data.get("circulating_fan", {}))
         self.continuous_backlight = to_bool(data.get("continuous_backlight"))
@@ -235,7 +250,10 @@ class State:
         )  # Demand status contains runtime power/demand values for HVAC
 
         self.display_humidity = to_bool(data.get("display_humidity"))
-        self.display_scale = data.get("display_scale", "")
+        # `or ""`, not a default: these two are .lower()-ed below and in
+        # is_online, so a present-but-null value raises there rather than here
+        # - is_online from every entity's `available`, on every state write.
+        self.display_scale = data.get("display_scale") or ""
         self.display_temp = to_float(data.get("display_temp"), None)
         self.display_time = to_bool(data.get("display_time"))
         self.fan_mode = try_parse_enum(FanMode, data.get("fan_mode")) or FanMode.UNKNOWN
@@ -249,7 +267,7 @@ class State:
             or OperatingMode.UNKNOWN
         )
         self.power_status = data.get("power_status", "")
-        self.status = data.get("status", "")
+        self.status = data.get("status") or ""
         self.temp_offset = to_int(data.get("temp_offset"), 0)
         self.wifi_connection_quality = to_int(data.get("wifi_connection_quality"), None)
 
@@ -281,6 +299,9 @@ class Firmware:
 
     def __init__(self, data: dict) -> None:
         """Initialize FirmwareInfo from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
         self.firmware_version = data.get("firmware_version", "")
         self.bootloader_version = data.get("bootloader_version", "")
         self.wifi_version = data.get("wifi_version", "")
@@ -291,6 +312,9 @@ class ThermostatInfo:
 
     def __init__(self, data: dict) -> None:
         """Initialize ThermostatInfo from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # {'test_date': '11/14/2018', 'build_date': '11/14/2018', 'serial_number': '42WFRP46B00220', 'unique_hardware_id': 1, 'model_number': '1F87U-42WFC', 'images': {'bootloader_version': '6003970905', 'firmware_version': '6004850907', 'wifi_version': '6004820907'}, 'wifi_mac_address': '346F920C0B07', 'last_changed_timestamp': 1759918908}
         self.test_date = data.get("test_date", "")
@@ -328,7 +352,7 @@ class SensiDevice:
         self.capabilities = Capabilities(capabilities)
         self.identifier = identifier
         self.info = ThermostatInfo(info)
-        self.name = registration.get("name", "")
+        self.name = to_dict(registration).get("name", "")
         self.state = State(state)
 
         LOGGER.debug(f"{self.identifier} Capabilities={self.capabilities}")
@@ -343,10 +367,10 @@ class SensiDevice:
         """
         identifier = data.get("icd_id", "")
 
-        registration = data.get("registration", {})
-        capabilities = data.get("capabilities", {})
-        info = data.get("thermostat_info", {})
-        state = data.get("state", {})
+        registration = to_dict(data.get("registration"))
+        capabilities = to_dict(data.get("capabilities"))
+        info = to_dict(data.get("thermostat_info"))
+        state = to_dict(data.get("state"))
 
         have_state = bool(state)
         return (
@@ -398,6 +422,9 @@ class DemandResponse:
 
     def __init__(self, data: dict) -> None:
         """Initialize DemandResponse from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         self.event_id = data.get("event_id")
         self.event_status = (
