@@ -27,6 +27,7 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 
 async def test_setup_platform(
@@ -650,3 +651,225 @@ class TestSensiThermostatHumidity:
         max_humid = mock_thermostat_with_humidification.max_humidity
         assert isinstance(max_humid, int)
         assert 0 <= max_humid <= 100
+
+
+class TestSensiThermostatTargetTemperatureRange:
+    """Target temperature reporting in the modes that use a range."""
+
+    def test_target_temperature_auto_mode_follows_last_demand_heat(
+        self, mock_device, mock_thermostat
+    ):
+        """In AUTO the setpoint shown is the one the last demand acted on."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+        mock_device.state.demand_status.last = "heat"
+
+        assert mock_thermostat.target_temperature == mock_device.state.current_heat_temp
+
+    def test_target_temperature_auto_mode_follows_last_demand_cool(
+        self, mock_device, mock_thermostat
+    ):
+        """A last demand that is not heat reports the cool setpoint."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+        mock_device.state.demand_status.last = "cool"
+
+        assert mock_thermostat.target_temperature == mock_device.state.current_cool_temp
+
+    def test_target_temperature_auto_mode_unknown_last_demand(
+        self, mock_device, mock_thermostat
+    ):
+        """An empty last demand - the DemandStatus default - is not heat."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+        mock_device.state.demand_status.last = ""
+
+        assert mock_thermostat.target_temperature == mock_device.state.current_cool_temp
+
+    def test_target_temperature_high_is_the_cool_setpoint(
+        self, mock_device, mock_thermostat
+    ):
+        """target_temperature_high is the upper bound Home Assistant shows in AUTO."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+
+        assert (
+            mock_thermostat.target_temperature_high
+            == mock_device.state.current_cool_temp
+        )
+
+    def test_target_temperature_low_is_the_heat_setpoint(
+        self, mock_device, mock_thermostat
+    ):
+        """target_temperature_low is the lower bound Home Assistant shows in AUTO."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+
+        assert (
+            mock_thermostat.target_temperature_low
+            == mock_device.state.current_heat_temp
+        )
+
+    def test_target_temperature_bounds_do_not_cross(self, mock_device, mock_thermostat):
+        """The low bound must not be reported above the high bound."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+
+        assert (
+            mock_thermostat.target_temperature_low
+            <= mock_thermostat.target_temperature_high
+        )
+
+
+class TestSensiThermostatHumidityWithoutState:
+    """Humidity properties when capabilities advertise support but state does not.
+
+    The backend sends unused objects as null rather than omitting them, so a
+    thermostat that supports humidification can still report
+    `humidity_control.humidification` as null. The capability check alone does
+    not cover that case.
+    """
+
+    def test_target_humidity_without_state_humidification(
+        self, mock_device_with_humidification, mock_thermostat_with_humidification
+    ):
+        """target_humidity is None when the state carries no humidification."""
+
+        mock_device_with_humidification.state.humidity_control.humidification = None
+
+        assert mock_thermostat_with_humidification.target_humidity is None
+
+    def test_min_humidity_without_state_humidification(
+        self, mock_device_with_humidification, mock_thermostat_with_humidification
+    ):
+        """min_humidity is None when the state carries no humidification."""
+
+        mock_device_with_humidification.state.humidity_control.humidification = None
+
+        assert mock_thermostat_with_humidification.min_humidity is None
+
+    def test_max_humidity_without_state_humidification(
+        self, mock_device_with_humidification, mock_thermostat_with_humidification
+    ):
+        """max_humidity is None when the state carries no humidification."""
+
+        mock_device_with_humidification.state.humidity_control.humidification = None
+
+        assert mock_thermostat_with_humidification.max_humidity is None
+
+    def test_min_humidity_when_humidification_disabled(
+        self, mock_device_with_humidification, mock_thermostat_with_humidification
+    ):
+        """min_humidity is None while humidification is switched off."""
+
+        mock_device_with_humidification.state.humidity_control.humidification.enabled = False
+
+        assert mock_thermostat_with_humidification.min_humidity is None
+
+    def test_max_humidity_when_humidification_disabled(
+        self, mock_device_with_humidification, mock_thermostat_with_humidification
+    ):
+        """max_humidity is None while humidification is switched off."""
+
+        mock_device_with_humidification.state.humidity_control.humidification.enabled = False
+
+        assert mock_thermostat_with_humidification.max_humidity is None
+
+
+class TestSensiThermostatTurnOn:
+    """async_turn_on sets an operating mode and then restores the auto fan."""
+
+    async def test_turn_on_sets_fan_mode_to_auto(
+        self, hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+    ) -> None:
+        """Turning the thermostat on also puts the fan back to auto."""
+
+        with (
+            patch.object(mock_thermostat, "async_write_ha_state"),
+            patch.object(
+                mock_thermostat.coordinator.client, "async_set_operating_mode"
+            ) as mock_set_operating_mode,
+            patch.object(
+                mock_thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_operating_mode.return_value = ActionResponse(None, "")
+            mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+            await mock_thermostat.async_turn_on()
+
+            # The base class picks the hvac mode; this class owns the fan.
+            assert mock_set_operating_mode.called
+            mock_set_fan_mode.assert_called_once_with(mock_device, FanMode.AUTO.value)
+
+    async def test_turn_on_raises_when_the_fan_call_fails(
+        self, hass: HomeAssistant, mock_thermostat, mock_coordinator
+    ) -> None:
+        """A rejected fan call surfaces as a HomeAssistantError."""
+
+        with (
+            patch.object(mock_thermostat, "async_write_ha_state"),
+            patch.object(
+                mock_thermostat.coordinator.client, "async_set_operating_mode"
+            ) as mock_set_operating_mode,
+            patch.object(
+                mock_thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_operating_mode.return_value = ActionResponse(None, "")
+            mock_set_fan_mode.return_value = ActionResponse("ThermostatOffline", None)
+
+            with pytest.raises(HomeAssistantError):
+                await mock_thermostat.async_turn_on()
+
+
+class TestSensiThermostatSetHumidity:
+    """async_set_humidity is the target-humidity service entry point."""
+
+    async def test_set_humidity_enables_humidification(
+        self,
+        hass: HomeAssistant,
+        mock_device_with_humidification,
+        mock_thermostat_with_humidification,
+    ) -> None:
+        """Setting a target humidity turns humidification on at that value."""
+
+        thermostat = mock_thermostat_with_humidification
+
+        with (
+            patch.object(thermostat, "async_write_ha_state") as mock_write_state,
+            patch.object(
+                thermostat.coordinator.client, "async_set_humidification"
+            ) as mock_set_humidification,
+        ):
+            mock_set_humidification.return_value = ActionResponse(None, "")
+
+            await thermostat.async_set_humidity(45)
+
+            mock_set_humidification.assert_called_once_with(
+                mock_device_with_humidification, True, 45
+            )
+            mock_write_state.assert_called_once()
+
+    async def test_set_humidity_raises_on_error(
+        self, hass: HomeAssistant, mock_thermostat_with_humidification
+    ) -> None:
+        """A rejected humidity call surfaces as a HomeAssistantError."""
+
+        thermostat = mock_thermostat_with_humidification
+
+        with (
+            patch.object(thermostat, "async_write_ha_state") as mock_write_state,
+            patch.object(
+                thermostat.coordinator.client, "async_set_humidification"
+            ) as mock_set_humidification,
+        ):
+            mock_set_humidification.return_value = ActionResponse("OutOfRange", None)
+
+            with pytest.raises(HomeAssistantError):
+                await thermostat.async_set_humidity(95)
+
+            # The write is not reached, so the entity keeps the old value.
+            mock_write_state.assert_not_called()

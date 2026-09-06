@@ -1,13 +1,20 @@
 """Tests for Sensi sensor component."""
 
-from unittest.mock import MagicMock
+from datetime import timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from custom_components.sensi.const import ATTR_BATTERY_VOLTAGE
 from custom_components.sensi.coordinator import SensiDevice
+from custom_components.sensi.data import (
+    ActiveSavingsEventState,
+    DemandResponse,
+    DemandResponseEventStatus,
+)
 from custom_components.sensi.sensor import (
     SENSOR_TYPES,
+    ActiveSavingsEventEntity,
     SensiSensorEntityDescription,
     async_setup_entry,
     calculate_battery_level,
@@ -15,6 +22,7 @@ from custom_components.sensi.sensor import (
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 
 async def test_setup_platform(
@@ -369,3 +377,121 @@ class TestSensorTypes:
         for key, icon in icons_expected.items():
             sensor = next(s for s in SENSOR_TYPES if s.key == key)
             assert sensor.icon == icon
+
+
+class TestActiveSavingsEventEntity:
+    """Test cases for the active energy-savings event sensor.
+
+    The entity is created disabled by default, so nothing in the platform
+    setup path drives its coordinator update.
+    """
+
+    def _make_entity(self, hass, mock_device, mock_coordinator):
+        """Build the sensor for a device."""
+        return ActiveSavingsEventEntity(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+    def test_initial_state_is_unknown(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """Before any update the sensor reports unknown with no window."""
+
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+
+        assert entity.native_value == ActiveSavingsEventState.UNKNOWN.value
+        assert entity.extra_state_attributes == {"start_time": None, "end_time": None}
+        assert entity.entity_registry_enabled_default is False
+        assert ActiveSavingsEventState.CURRENT.value in entity.options
+
+    def test_update_without_demand_response_reports_unknown(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """A state carrying no demand_response leaves the sensor unknown."""
+
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+        mock_device.state.demand_response = None
+
+        with patch.object(entity, "async_write_ha_state"):
+            entity._handle_coordinator_update()  # noqa: SLF001
+
+        assert entity.native_value == ActiveSavingsEventState.UNKNOWN.value
+        assert entity.extra_state_attributes == {"start_time": None, "end_time": None}
+
+    def test_update_with_a_current_event_reports_the_window(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """An event in progress publishes its state and its start/end times."""
+
+        now = dt_util.now()
+        demand_response = DemandResponse(
+            {
+                "event_id": "event-1",
+                "event_status": DemandResponseEventStatus.STARTED.value,
+                "start_time": (now - timedelta(minutes=30)).timestamp(),
+                "end_time": (now + timedelta(minutes=30)).timestamp(),
+                "pre_duration": 0,
+                "pre_gap": 0,
+                "notification_time": 0,
+            }
+        )
+
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+        mock_device.state.demand_response = demand_response
+
+        with patch.object(entity, "async_write_ha_state") as mock_write_state:
+            entity._handle_coordinator_update()  # noqa: SLF001
+
+        assert entity.native_value == ActiveSavingsEventState.CURRENT.value
+        assert entity.extra_state_attributes == {
+            "start_time": demand_response.start_time,
+            "end_time": demand_response.end_time,
+        }
+        mock_write_state.assert_called_once()
+
+    def test_update_after_the_event_clears_the_window(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """An event that has finished reports 'none' and drops the times.
+
+        The attributes are asserted after a window was published, so this also
+        pins that a finished event does not leave the previous times behind.
+        """
+
+        now = dt_util.now()
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+
+        mock_device.state.demand_response = DemandResponse(
+            {
+                "event_status": DemandResponseEventStatus.STARTED.value,
+                "start_time": (now - timedelta(minutes=30)).timestamp(),
+                "end_time": (now + timedelta(minutes=30)).timestamp(),
+            }
+        )
+        with patch.object(entity, "async_write_ha_state"):
+            entity._handle_coordinator_update()  # noqa: SLF001
+
+        assert entity.extra_state_attributes["start_time"] is not None
+
+        mock_device.state.demand_response = DemandResponse(
+            {
+                "event_status": DemandResponseEventStatus.COMPLETED.value,
+                "start_time": (now - timedelta(hours=2)).timestamp(),
+                "end_time": (now - timedelta(hours=1)).timestamp(),
+            }
+        )
+        with patch.object(entity, "async_write_ha_state"):
+            entity._handle_coordinator_update()  # noqa: SLF001
+
+        assert entity.native_value == ActiveSavingsEventState.NONE.value
+        assert entity.extra_state_attributes == {"start_time": None, "end_time": None}
+
+    def test_unique_id_and_entity_id_are_device_scoped(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """Two devices must not collide on the savings sensor."""
+
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+
+        assert entity.unique_id == f"{mock_device.identifier}_active_savings"
+        assert entity.entity_id.startswith("sensor.")
