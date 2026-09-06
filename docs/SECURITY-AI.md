@@ -92,7 +92,13 @@ data, not instructions.
 ## The `ai-fix` workflow
 
 `.github/workflows/ai-fix.yml` can act on an issue labelled `ai-fix-requested`
-or a comment mentioning `@claude`. It is inert unless **both** of these are set:
+or a comment mentioning `@claude`. Both entry points require standing on the
+repository, not just a GitHub account: applying the label takes triage access,
+and the comment path requires the commenter's `author_association` to be
+`OWNER`, `MEMBER` or `COLLABORATOR` -- computed by GitHub from the commenter's
+relationship to the repository, not settable by the commenter. A drive-by
+`@claude` from anyone else leaves the workflow untriggered. It is also inert
+unless **both** of these are set:
 
 | Switch | Where |
 | --- | --- |
