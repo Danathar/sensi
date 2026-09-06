@@ -46,7 +46,7 @@ async def test_config_flow_creates_a_loadable_entry(
 
     with (
         patch(
-            "custom_components.sensi.config_flow.refresh_access_token",
+            "custom_components.sensi.config_flow.validate_refresh_token",
             return_value=logged_in,
         ),
         patch(
