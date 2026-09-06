@@ -759,3 +759,34 @@ class TestAuthenticationConfigIsExpired:
             expires_at=time.time() + (TOKEN_EXPIRY_SKEW_SECONDS + 3600),
         )
         assert config.is_expired is False
+
+
+class TestUpdatesWithoutASource:
+    """An absent container must leave what was already parsed in place.
+
+    update_capabilities and update_info both guard on `if source`, and the
+    backend does send these keys as null. Only the populated side was ever
+    exercised: an unguarded call would replace a fully parsed Capabilities
+    with one built from nothing, silently stripping the thermostat of every
+    mode and feature it supports until the next full payload.
+    """
+
+    @pytest.mark.parametrize("source", [None, {}])
+    def test_update_capabilities_ignores_an_empty_source(self, mock_json, source):
+        """Capabilities survive an empty update."""
+        _have_state, device = SensiDevice.create(mock_json)
+        current_capabilities = device.capabilities
+
+        device.update_capabilities(source)
+
+        assert device.capabilities is current_capabilities
+
+    @pytest.mark.parametrize("source", [None, {}])
+    def test_update_info_ignores_an_empty_source(self, mock_json, source):
+        """Info survives an empty update."""
+        _have_state, device = SensiDevice.create(mock_json)
+        current_info = device.info
+
+        device.update_info(source)
+
+        assert device.info is current_info

@@ -8,8 +8,11 @@ from custom_components.sensi import set_config_option
 from custom_components.sensi.client import ActionResponse
 from custom_components.sensi.climate import SensiThermostat, async_setup_entry
 from custom_components.sensi.const import (
+    ATTR_AUX_STAGE,
     ATTR_CIRCULATING_FAN,
     ATTR_CIRCULATING_FAN_DUTY_CYCLE,
+    ATTR_COOL_STAGE,
+    ATTR_HEAT_STAGE,
     ATTR_POWER_STATUS,
     CONFIG_FAN_SUPPORT,
     FAN_CIRCULATE_DEFAULT_DUTY_CYCLE,
@@ -925,3 +928,98 @@ class TestSensiThermostatSetHumidity:
 
             # The write is not reached, so the entity keeps the old value.
             mock_write_state.assert_not_called()
+
+
+async def test_set_fan_mode_skips_circulating_reset_when_not_capable(
+    hass: HomeAssistant, mock_device, mock_thermostat
+) -> None:
+    """A thermostat without a circulating fan is not sent a reset for one.
+
+    The non-circulate path resets circulating_fan first, but only where the
+    device advertises the capability: the minimum duty cycle is 10, so the
+    reset on a device that has no circulating fan is a setting the thermostat
+    rejects. Nothing covered the not-capable side of that guard.
+    """
+
+    mock_device.capabilities.circulating_fan.capable = False
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_circulating_fan_mode"
+        ) as mock_set_circulating_fan_mode,
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_fan_mode"
+        ) as mock_set_fan_mode,
+    ):
+        mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+        await mock_thermostat.async_set_fan_mode(SENSI_FAN_ON)
+
+        mock_set_circulating_fan_mode.assert_not_called()
+        mock_set_fan_mode.assert_called_once_with(mock_device, SENSI_FAN_ON)
+
+
+def test_extra_state_attributes_without_demand_status(
+    mock_device, mock_thermostat
+) -> None:
+    """Staging attributes are omitted when the payload carries no demand_status.
+
+    The standard attributes are still reported. Every existing test runs
+    against a payload that has demand_status, so the omission was never
+    exercised - and reading `.aux` off a None would raise here, inside a
+    property Home Assistant calls on every state write.
+    """
+
+    mock_device.state.demand_status = None
+
+    attrs = mock_thermostat.extra_state_attributes
+
+    assert ATTR_CIRCULATING_FAN in attrs
+    assert ATTR_CIRCULATING_FAN_DUTY_CYCLE in attrs
+    assert ATTR_POWER_STATUS in attrs
+    assert ATTR_AUX_STAGE not in attrs
+    assert ATTR_COOL_STAGE not in attrs
+    assert ATTR_HEAT_STAGE not in attrs
+
+
+def test_hvac_modes_omits_every_unsupported_mode(mock_device, mock_thermostat) -> None:
+    """hvac_modes reports only what the capabilities advertise.
+
+    Each of the four modes is appended behind its own capability flag, and the
+    sample payload advertises all of them, so no test had ever seen a flag
+    turned off. A guard dropped from any one of them would have gone
+    unnoticed.
+    """
+
+    settings = mock_device.capabilities.operating_mode_settings
+    settings.off = False
+    settings.heat = False
+    settings.cool = False
+    settings.auto = False
+
+    assert mock_thermostat.hvac_modes == []
+
+
+@pytest.mark.parametrize(
+    ("attribute", "expected"),
+    [
+        ("off", HVACMode.OFF),
+        ("heat", HVACMode.HEAT),
+        ("cool", HVACMode.COOL),
+        ("auto", HVACMode.AUTO),
+    ],
+)
+def test_hvac_modes_reports_only_the_capable_mode(
+    mock_device, mock_thermostat, attribute, expected
+) -> None:
+    """One capability on at a time maps to exactly one advertised mode."""
+
+    settings = mock_device.capabilities.operating_mode_settings
+    settings.off = False
+    settings.heat = False
+    settings.cool = False
+    settings.auto = False
+    setattr(settings, attribute, True)
+
+    assert mock_thermostat.hvac_modes == [expected]

@@ -713,3 +713,92 @@ class TestWaitForDevices:
             await client.wait_for_devices()
 
         assert mock_device.state.fan_mode == FanMode.ON
+
+
+class TestSetterErrorsLeaveStateAlone:
+    """A rejected setter must not update the cached device state.
+
+    Each setter writes the value it just sent into `device.state` guarded by
+    `if not response.error`. Nothing exercised the other side of that guard,
+    so a setter that wrote unconditionally would still pass the suite - and
+    Home Assistant would then show a value the thermostat never accepted until
+    the next payload from the backend corrected it.
+    """
+
+    async def test_circulating_fan_mode_error_keeps_state(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A rejected set_circulating_fan leaves enabled and duty cycle alone."""
+
+        mock_device.state.circulating_fan.enabled = False
+        mock_device.state.circulating_fan.duty_cycle = 20
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse("Failed", None)
+
+            response = await mock_coordinator.client.async_set_circulating_fan_mode(
+                mock_device, True, 55
+            )
+
+        assert response.error == "Failed"
+        assert mock_device.state.circulating_fan.enabled is False
+        assert mock_device.state.circulating_fan.duty_cycle == 20
+
+    async def test_fan_mode_error_keeps_state(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A rejected set_fan_mode leaves the previous mode in place."""
+
+        mock_device.state.fan_mode = FanMode.AUTO
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse("Failed", None)
+
+            response = await mock_coordinator.client.async_set_fan_mode(
+                mock_device, FanMode.ON.value
+            )
+
+        assert response.error == "Failed"
+        assert mock_device.state.fan_mode == FanMode.AUTO
+
+    async def test_temperature_offset_error_keeps_state(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A rejected set_temp_offset leaves the previous offset in place."""
+
+        mock_device.state.temp_offset = 2
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse("Failed", None)
+
+            response = await mock_coordinator.client.async_set_temperature_offset(
+                mock_device, -4
+            )
+
+        assert response.error == "Failed"
+        assert mock_device.state.temp_offset == 2
+
+    async def test_humidity_offset_error_keeps_state(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A rejected set_humidity_offset leaves the previous offset in place."""
+
+        mock_device.state.humidity_offset = 10
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse("Failed", None)
+
+            response = await mock_coordinator.client.async_set_humidity_offset(
+                mock_device, -15
+            )
+
+        assert response.error == "Failed"
+        assert mock_device.state.humidity_offset == 10
