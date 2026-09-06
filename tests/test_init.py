@@ -300,3 +300,147 @@ async def test_setup_accepts_a_store_for_this_account(
         await hass.async_block_till_done()
 
     assert mock_entry.state is ConfigEntryState.LOADED
+
+
+STOP_TARGET = "custom_components.sensi.client.SensiClient.stop"
+"""What tears a client down: disconnect *and* cancel the emit-loop task."""
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_failure_after_connecting_stops_the_client(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """Nothing else owns the client until setup finishes.
+
+    wait_for_devices raises ConfigEntryNotReady from a state where the socket
+    is already up, and Home Assistant retries with a brand-new SensiClient, so
+    a client that is not stopped here stays connected with its own emit-loop
+    task until Home Assistant restarts.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+
+    with (
+        patch(
+            "custom_components.sensi.client.SensiClient.wait_for_devices",
+            side_effect=ConfigEntryNotReady("no device answered"),
+        ),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch(STOP_TARGET) as mock_stop,
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.SETUP_RETRY
+    mock_stop.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_platform_forwarding_failure_stops_the_client(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """The later failure path, after the coordinator has been created.
+
+    The e2e reproduction only covers the wait_for_devices route; this one is
+    reached with entry.runtime_data already assigned, which is the case an
+    early return placed before the forwarding call would have missed.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            side_effect=RuntimeError("platform blew up"),
+        ),
+        patch(STOP_TARGET) as mock_stop,
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    mock_stop.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_successful_setup_leaves_the_client_running(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """The guard that stops this being a self-inflicted outage.
+
+    On success the coordinator owns the client and async_unload_entry is what
+    stops it. Tearing it down here would disconnect every entry the moment it
+    finished setting up.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch(STOP_TARGET) as mock_stop,
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    mock_stop.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_failure_before_the_client_exists_is_not_an_error(
+    hass: HomeAssistant, mock_coordinator
+) -> None:
+    """get_stored_config runs first, so there may be nothing to stop."""
+
+    mock_entry = mock_coordinator.config_entry
+
+    with patch("homeassistant.helpers.storage.Store.async_load", return_value={}):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    # AuthenticationError -> ConfigEntryAuthFailed, not an AttributeError from
+    # the cleanup reaching for a client that was never constructed.
+    assert mock_entry.state is ConfigEntryState.SETUP_ERROR
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_teardown_error_does_not_mask_the_setup_failure(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """The setup exception is what tells HA to retry; it has to survive.
+
+    Cleanup in a finally block replaces the in-flight exception if it raises,
+    which would turn a retryable ConfigEntryNotReady into something else.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    reason = "no device answered"
+
+    with (
+        patch(
+            "custom_components.sensi.client.SensiClient.wait_for_devices",
+            side_effect=ConfigEntryNotReady(reason),
+        ),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch(STOP_TARGET, side_effect=RuntimeError("teardown went wrong")),
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.SETUP_RETRY
+    assert mock_entry.reason == reason
