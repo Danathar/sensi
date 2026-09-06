@@ -457,7 +457,10 @@ class SensiClient:
 
                 future.set_result((None, response_payload))
 
-        await self._send_event(event, request_data, event_callback)
+        # The future goes on the queue with the event so the emit loop can tell
+        # whether anyone is still waiting for the answer by the time it gets
+        # there. See _emit_loop.
+        await self._send_event(event, request_data, event_callback, future)
 
         with contextlib.suppress(asyncio.exceptions.TimeoutError):
             await asyncio.wait_for(future, SET_EVENT_TIMEOUT)
@@ -556,10 +559,14 @@ class SensiClient:
                     future.set_result(data)
 
     async def _send_event(
-        self, name: str, data: dict, callback: Callable[[any, any], None] | None = None
+        self,
+        name: str,
+        data: dict,
+        callback: Callable[[any, any], None] | None = None,
+        future: asyncio.Future | None = None,
     ) -> None:
         LOGGER.debug(f"Queuing event {name}")
-        await self._event_queue.put(EventInfo(name, data, callback))
+        await self._event_queue.put(EventInfo(name, data, callback, future))
 
     async def _emit_loop(self):
         """Emit queued events."""
@@ -573,6 +580,21 @@ class SensiClient:
             if self._sio and self._sio.connected:
                 try:
                     while item := self._event_queue.get_nowait():
+                        if item.future is not None and item.future.done():
+                            # Timed out (wait_for cancels the future) or
+                            # already answered. Either way the caller has its
+                            # result, and for a timeout that result was an
+                            # error the user was shown. The socket drops on
+                            # every 30-second refresh, so without this the
+                            # command is emitted on the next connect - the
+                            # thermostat acting on something the user was told
+                            # did not happen, possibly long afterwards.
+                            LOGGER.debug(
+                                "Discarding queued %s: nothing is waiting for it any more",
+                                item.name,
+                            )
+                            continue
+
                         if self._sio and self._sio.connected:
                             await self._sio.emit(
                                 item.name, item.data, None, item.callback
@@ -873,6 +895,14 @@ class EventInfo:
     name: str
     data: any
     callback: Callable[[any, any], None]
+
+    # The future the caller is waiting on, for events that have one. A setter
+    # whose future is already done has no caller left to hear the answer: it
+    # either timed out - and the user has been told it failed - or was
+    # answered. Emitting it anyway sends the thermostat a command that was
+    # reported as not having happened. Getters queue no future because they
+    # legitimately want to survive a reconnect.
+    future: asyncio.Future | None = None
 
 
 def raise_if_error(response: ActionResponse, property: str, value: any) -> None:

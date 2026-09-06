@@ -5,9 +5,13 @@ on what reached the wire, so they cover the whole path from service call
 through the entity and client down to the emitted socket.io event.
 """
 
+import asyncio
+from unittest.mock import patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.sensi.client import EMIT_LOOP_DELAY
 from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
     DOMAIN as CLIMATE_DOMAIN,
@@ -170,3 +174,73 @@ async def test_coordinator_refresh_reconnects_and_picks_up_new_state(
     # The climate entity reports whole degrees (PRECISION_WHOLE).
     assert after.attributes["current_temperature"] == 61
     assert after.attributes["current_humidity"] == 33
+
+
+async def test_a_setter_that_timed_out_is_not_replayed_on_reconnect(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """The reproduction from issue #68, end to end.
+
+    A setter issued while the socket is down times out and the user is told it
+    failed. The event stayed on the outgoing queue, and because the connection
+    is torn down and rebuilt on every 30-second refresh, it went out on the
+    next connect - the thermostat acting on a command the user was told had
+    not happened, potentially an hour later.
+    """
+    socket = sensi_backend.sockets[-1]
+    socket.connected = False
+
+    with (
+        patch("custom_components.sensi.client.SET_EVENT_TIMEOUT", 0.05),
+        pytest.raises(HomeAssistantError, match="Future not done"),
+    ):
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            SERVICE_SET_TEMPERATURE,
+            {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 70},
+            blocking=True,
+        )
+
+    assert "set_temperature" not in sensi_backend.emitted_names()
+
+    # The connection comes back, and the emit loop gets its chance to drain.
+    socket.connected = True
+    await asyncio.sleep(EMIT_LOOP_DELAY * 3)
+    await hass.async_block_till_done()
+
+    assert "set_temperature" not in sensi_backend.emitted_names(), (
+        "the setter the user was told had failed was emitted anyway"
+    )
+
+
+async def test_a_setter_still_in_flight_when_the_socket_returns_is_emitted(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """Discarding stale work must not break the reconnect-and-send case.
+
+    The socket drops on every refresh, so a setter issued during one of those
+    windows and emitted once the connection returns - inside its own timeout -
+    is an ordinary success that has to keep working.
+    """
+    socket = sensi_backend.sockets[-1]
+    socket.connected = False
+
+    async def reconnect_shortly() -> None:
+        await asyncio.sleep(EMIT_LOOP_DELAY)
+        socket.connected = True
+
+    hass.async_create_task(reconnect_shortly())
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 71},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_temperature")["target_temp"] == 71
