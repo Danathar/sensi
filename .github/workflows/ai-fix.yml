@@ -3,7 +3,10 @@ name: AI fix
 # Two entry points, both explicit:
 #
 #   1. an issue labelled `ai-fix-requested`
-#   2. a comment on an issue or pull request that mentions @claude
+#   2. a comment on an issue or pull request that mentions @claude, from the
+#      owner, a member, or a collaborator -- commenting is open to any GitHub
+#      account, so the comment path checks the author's standing the same way
+#      the label path implicitly does (only triage access can apply a label)
 #
 # Both are inert by default. The workflow requires BOTH an ANTHROPIC_API_KEY
 # secret AND a repository variable AI_FIX_ENABLED set to "true". Two switches
@@ -47,7 +50,9 @@ jobs:
       || (github.event_name == 'issues'
           && github.event.label.name == 'ai-fix-requested')
       || (github.event_name != 'issues'
-          && contains(github.event.comment.body, '@claude'))
+          && contains(github.event.comment.body, '@claude')
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                      github.event.comment.author_association))
     steps:
       - name: Decide
         id: decide
