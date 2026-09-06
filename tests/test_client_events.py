@@ -23,6 +23,7 @@ from custom_components.sensi.auth import SensiConnectionError
 from custom_components.sensi.client import (
     EventInfo,
     SensiClient,
+    SensiDevice,
     extract_icd_id,
     get_error_description_from_event_callback,
     is_token_expired,
@@ -405,6 +406,77 @@ class TestUpdateState:
         assert len(client.get_devices()) == 2
         assert await first_future == mock_json
         assert await second_future == second
+
+    async def test_one_unparseable_device_does_not_block_the_others(
+        self, client, mock_json
+    ) -> None:
+        """A device this parser chokes on must not cost every other device.
+
+        _update_state parses every device in one loop and then resolves the
+        state futures for all of them. An exception escaping the parse skipped
+        that entirely: on connect the initial state wait timed out and setup
+        raised ConfigEntryNotReady, and at runtime every entity went
+        unavailable after two failed refreshes - over one thermostat.
+        """
+        broken = {**mock_json, "icd_id": "36-6f-92-ff-fe-0c-0b-99"}
+        initial_future = await client._create_event_future("state", None)
+        broken_future = await client._create_event_future("state", broken["icd_id"])
+        healthy_future = await client._create_event_future("state", mock_json["icd_id"])
+
+        real_create = SensiDevice.create
+
+        def create(item):
+            if item["icd_id"] == broken["icd_id"]:
+                raise AttributeError("'NoneType' object has no attribute 'get'")
+            return real_create(item)
+
+        with patch(
+            "custom_components.sensi.client.SensiDevice.create", side_effect=create
+        ):
+            # Broken first, so a failure that ended the loop would take the
+            # healthy device with it.
+            client._update_state([broken, mock_json])
+
+        assert [device.identifier for device in client.get_devices()] == [
+            mock_json["icd_id"]
+        ]
+        assert await initial_future is None
+        assert await healthy_future == mock_json
+        assert not broken_future.done()
+
+        broken_future.cancel()
+
+    async def test_a_null_container_no_longer_discards_the_event(
+        self, client, mock_json_with_nulls
+    ) -> None:
+        """The payload from the issue, straight through the handler.
+
+        With the containers guarded this parses rather than raising, so it
+        needs no per-device rescue - the guard above is for shapes nobody has
+        thought of yet.
+        """
+        icd_id = mock_json_with_nulls["icd_id"]
+        initial_future = await client._create_event_future("state", None)
+        device_future = await client._create_event_future("state", icd_id)
+
+        client._update_state([mock_json_with_nulls])
+
+        assert [device.identifier for device in client.get_devices()] == [icd_id]
+        assert await initial_future is None
+        assert await device_future == mock_json_with_nulls
+
+    async def test_an_unparseable_update_leaves_the_previous_state(
+        self, client, mock_json
+    ) -> None:
+        """A device already known keeps the state it had, rather than losing it."""
+        client._update_state([mock_json])
+        device = client.get_devices()[0]
+        previous_temp = device.state.display_temp
+
+        with patch.object(device, "update_state", side_effect=AttributeError("boom")):
+            client._update_state([{**mock_json, "state": {"display_temp": 61}}])
+
+        assert device.state.display_temp == previous_temp
 
 
 class TestUpdateInfo:

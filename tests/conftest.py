@@ -66,6 +66,18 @@ def mock_json_with_humidification():
 
 
 @pytest.fixture
+def mock_json_with_nulls():
+    """Return sample JSON with every parsed container sent as null.
+
+    sample.json comes from a fully-featured thermostat. This is the same
+    payload with the nested objects this integration reads set to null rather
+    than omitted - the convention the backend already uses for `geofencing`,
+    `lcd_sleep_mode` and `night_light`, applied to fields that are parsed.
+    """
+    return json.loads(load_json("sample_with_nulls.json"))
+
+
+@pytest.fixture
 def mock_device(mock_json) -> SensiDevice:
     """Create a mock SensiDevice from sample JSON data."""
     _have_state, device = SensiDevice.create(mock_json)

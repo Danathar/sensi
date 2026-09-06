@@ -3,7 +3,7 @@
 from typing import Final
 
 from .const import DEFAULT_HUMIDITY_STEP, DEFAULT_MAX_HUMIDITY, DEFAULT_MIN_HUMIDITY
-from .utils import to_bool, to_int
+from .utils import to_bool, to_dict, to_int
 
 # Default limits based on the app
 MAX_COOL_SETPOINT: Final = 85
@@ -24,6 +24,9 @@ class SystemModes:
 
     def __init__(self, data: dict) -> None:
         """Initialize SystemModes from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
         self.off = to_bool(data.get("off"))
         self.heat = to_bool(data.get("heat"))
         self.cool = to_bool(data.get("cool"))
@@ -36,6 +39,9 @@ class CirculatingFanCapabilities:
 
     def __init__(self, data: dict) -> None:
         """Initialize CirculatingFanCapabilities from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # "circulating_fan":{"capable":"yes","max_duty_cycle":100,"min_duty_cycle":10,"step":5}
         self.capable = to_bool(data.get("capable"))
@@ -50,6 +56,9 @@ class FanModes:
     def __init__(self, data: dict) -> None:
         """Initialize FanModes from data dictionary."""
 
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
+
         # "fan_mode_settings":{"auto":"yes","on":"yes","smart":"no"}
         self.auto = to_bool(data.get("auto"))
         self.on = to_bool(data.get("on"))
@@ -61,6 +70,9 @@ class HumidityCapabilities:
 
     def __init__(self, data: dict) -> None:
         """Initialize HumidityCapabilities from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # "humidification":{"step":5,"min":5,"max":50,"types":["humidifier"]},"dehumidification":{"step":5,"min":40,"max":95,"types":["overcooling"]}
         self.max = to_int(data.get("max"), DEFAULT_MAX_HUMIDITY)
@@ -79,6 +91,9 @@ class HumidityControlCapabilities:
 
     def __init__(self, data: dict) -> None:
         """Initialize HumidityControlCapabilities from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         # Only populate if defined
         sub_data = data.get("humidification")
@@ -109,6 +124,9 @@ class Capabilities:
 
     def __init__(self, data: dict) -> None:
         """Initialize Capabilities from data dictionary."""
+
+        # A container the backend sent as null must not reach `.get()`.
+        data = to_dict(data)
 
         self.circulating_fan = CirculatingFanCapabilities(
             data.get("circulating_fan", {})

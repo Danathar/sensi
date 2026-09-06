@@ -19,6 +19,24 @@ def to_float(value: StateType, default: float | None) -> float | None:
     return default
 
 
+def to_dict(value: any) -> dict:
+    """Return the value if it is a mapping, otherwise an empty one.
+
+    `data.get("key", {})` only applies its default when the key is *absent*. A
+    key present with a JSON null returns None, and the `.get()` that follows
+    raises AttributeError. This backend does send unused objects as null rather
+    than omitting them - `geofencing`, `lcd_sleep_mode`, `night_light` and the
+    three inside `control` are all null in `tests/sample.json` - so a
+    thermostat without a circulating fan or without humidity control reporting
+    `"circulating_fan": null` is the same convention applied to a field this
+    integration reads.
+
+    isinstance rather than `or {}` so a list or a scalar where an object was
+    expected degrades the same way instead of raising one call later.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def to_bool(value: StateType) -> bool:
     """Determine if a value is truthy."""
     if value is None:
