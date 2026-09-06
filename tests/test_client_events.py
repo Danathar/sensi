@@ -138,6 +138,110 @@ class TestEventFutures:
         assert await future == "first"
         assert ("info", "icd-1") not in client._futures
 
+    async def test_resolve_futures_resolves_the_waiters_behind_a_cancelled_one(
+        self, client
+    ) -> None:
+        """One dead future must not strand the waiters queued behind it.
+
+        `set_result` on a cancelled future raises `InvalidStateError`. With the
+        suppress wrapped around the loop rather than around the call, that
+        exception left the loop and every later waiter went unresolved until
+        its own timeout - one wasted coordinator cycle per timeout.
+        """
+        stale = await client._create_event_future("info", "icd-1")
+        first = await client._create_event_future("info", "icd-1")
+        second = await client._create_event_future("info", "icd-1")
+        # Cancelled after the others were created, so the pruning in
+        # _create_event_future cannot remove it: this is the ordering that
+        # actually happens, with the corpse first in the list.
+        stale.cancel()
+        assert stale.cancelled()
+
+        client._resolve_futures("info", "icd-1", {"payload": 1})
+
+        # done() before await: on the unfixed client these are never resolved,
+        # and awaiting one would hang the suite instead of failing it.
+        assert first.done()
+        assert second.done()
+        assert await first == {"payload": 1}
+        assert await second == {"payload": 1}
+
+    async def test_resolve_futures_resolves_the_waiters_behind_a_resolved_one(
+        self, client
+    ) -> None:
+        """The same holds for a future that already has a result."""
+        stale = await client._create_event_future("info", "icd-1")
+        live = await client._create_event_future("info", "icd-1")
+        stale.set_result("first")
+
+        client._resolve_futures("info", "icd-1", "second")
+
+        assert live.done()
+        assert await stale == "first"
+        assert await live == "second"
+
+    async def test_a_timed_out_waiter_does_not_strand_the_next_one(
+        self, client
+    ) -> None:
+        """The whole shape, as it happens in production.
+
+        `asyncio.wait_for` cancels the future it was handed, and only
+        `_resolve_futures` clears the key, so the cancelled future is still
+        sitting in the list when the next event for that key arrives. The
+        fresh waiter behind it used to time out too.
+        """
+        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+
+        async def resolve_soon() -> None:
+            # Let the second _wait_for_event register its future first.
+            await asyncio.sleep(0)
+            client._resolve_futures("info", "icd-1", {"payload": 3})
+
+        # An explicit short timeout: the unfixed client leaves this waiter
+        # unresolved, and the default 5s would just make the failure slow.
+        results = await asyncio.gather(
+            client._wait_for_event("info", "icd-1", timeout=1), resolve_soon()
+        )
+
+        assert results[0] == {"payload": 3}
+
+    async def test_create_event_future_drops_futures_nobody_awaits(
+        self, client
+    ) -> None:
+        """A new waiter clears the corpses left behind by earlier ones.
+
+        Nothing else prunes this list between events, so without it a key
+        collects one dead future per timeout and the "Resolving N futures"
+        debug line counts them as real waiters.
+        """
+        cancelled = await client._create_event_future("info", "icd-1")
+        resolved = await client._create_event_future("info", "icd-1")
+        cancelled.cancel()
+        resolved.set_result("done")
+
+        fresh = await client._create_event_future("info", "icd-1")
+
+        assert client._futures[("info", "icd-1")] == [fresh]
+
+        fresh.cancel()
+
+    async def test_create_event_future_keeps_the_waiters_still_waiting(
+        self, client
+    ) -> None:
+        """Pruning must not evict a waiter that is still pending."""
+        waiting = await client._create_event_future("info", "icd-1")
+
+        fresh = await client._create_event_future("info", "icd-1")
+
+        assert client._futures[("info", "icd-1")] == [waiting, fresh]
+
+        client._resolve_futures("info", "icd-1", "data")
+
+        assert waiting.done()
+        assert fresh.done()
+        assert await waiting == "data"
+        assert await fresh == "data"
+
     async def test_resolve_futures_distinguishes_icd_id(self, client) -> None:
         """Resolving one device's future leaves another device's future pending."""
         mine = await client._create_event_future("info", "icd-1")
