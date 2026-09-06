@@ -25,6 +25,9 @@ SUPPORTED_PLATFORMS = [
 async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
     """Set up the Sensi component."""
 
+    client: SensiClient | None = None
+    setup_succeeded = False
+
     try:
         # The entry's unique_id is the Sensi user_id the entry was set up
         # with. Passing it lets get_stored_config refuse a store that belongs
@@ -35,6 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
 
         entry.runtime_data = SensiUpdateCoordinator(hass, client, entry)
         await hass.config_entries.async_forward_entry_setups(entry, SUPPORTED_PLATFORMS)
+        setup_succeeded = True
     except ConfigEntryAuthFailed, ConfigEntryNotReady:
         # Both already say the right thing and carry their own reason.
         # ConfigEntryAuthFailed can be raised from the coordinator, and
@@ -54,6 +58,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
     except Exception as err:
         LOGGER.warning("Unexpected error setting up Sensi", exc_info=True)
         raise ConfigEntryNotReady(f"Unexpected error setting up Sensi: {err}") from err
+    finally:
+        # Nothing else owns the client until the coordinator is handed to
+        # entry.runtime_data and the platforms are up. wait_for_devices raises
+        # ConfigEntryNotReady from a state where _connect() has already
+        # succeeded, and Home Assistant retries with a brand-new SensiClient
+        # every time - so without this each failed attempt left a client
+        # connected to rt.sensiapi.io with its own emit-loop task, parsing
+        # every state push into a device dict nobody reads, until Home
+        # Assistant restarted.
+        #
+        # stop() rather than the __aexit__ this class already implements:
+        # __aexit__ only disconnects, and the emit-loop task has to be
+        # cancelled too. It is idempotent, so the async_unload_entry path
+        # stopping the same client again is harmless.
+        if client is not None and not setup_succeeded:
+            try:
+                await client.stop()
+            except Exception:  # pylint: disable=broad-except # noqa: BLE001
+                # A teardown problem must never replace the setup failure that
+                # caused it: that exception is what tells Home Assistant
+                # whether to retry or to ask for reauthentication.
+                LOGGER.debug(
+                    "Error while stopping the client after a failed setup",
+                    exc_info=True,
+                )
 
     return True
 
