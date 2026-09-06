@@ -15,8 +15,10 @@ from custom_components.sensi.auth import (
     OAUTH_URL2,
     AuthenticationError,
     SensiConnectionError,
+    async_save_config,
     get_stored_config,
     refresh_access_token,
+    validate_refresh_token,
 )
 from custom_components.sensi.data import AuthenticationConfig
 from homeassistant.core import HomeAssistant
@@ -324,3 +326,198 @@ async def test_refresh_access_token_with_stored_data_lacking_a_token(
         await refresh_access_token(hass)
 
     assert aioclient_mock.call_count == 0
+
+
+class TestValidateRefreshToken:
+    """Validation must not write to the store.
+
+    There is exactly one store for the whole integration - STORAGE_KEY is the
+    domain, not the entry id - so a validation that saves overwrites whatever
+    credentials the running entry has. The config flow needs to know which
+    account a token belongs to *before* deciding whether to accept it, which
+    is what this separation is for.
+    """
+
+    async def test_validation_leaves_the_store_alone(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """The store is neither read nor written while validating."""
+        aioclient_mock.post(
+            OAUTH_URL2,
+            json={
+                KEY_ACCESS_TOKEN: "b_access",
+                KEY_REFRESH_TOKEN: "b_rotated",
+                "expires_in": 3600,
+                KEY_USER_ID: "account_b",
+            },
+        )
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            config = await validate_refresh_token(hass, "a_token_for_b")
+
+        mock_save.assert_not_called()
+        assert config.user_id == "account_b"
+        # The rotated token, which is what has to be saved if the flow accepts:
+        # Sensi rotates on every exchange, so the input token is now spent.
+        assert config.refresh_token == "b_rotated"
+        assert config.access_token == "b_access"
+
+    async def test_validation_still_reports_a_rejected_token(
+        self, hass: HomeAssistant, aioclient_mock
+    ) -> None:
+        """A 4xx is an auth failure here exactly as it is at runtime."""
+        aioclient_mock.post(OAUTH_URL2, status=401)
+
+        with pytest.raises(AuthenticationError):
+            await validate_refresh_token(hass, "bad")
+
+    async def test_validation_still_reports_a_transient_failure(
+        self, hass: HomeAssistant, aioclient_mock
+    ) -> None:
+        """A 5xx must not be escalated to reauth."""
+        aioclient_mock.post(OAUTH_URL2, status=503)
+
+        with pytest.raises(SensiConnectionError):
+            await validate_refresh_token(hass, "token")
+
+
+class TestAsyncSaveConfig:
+    """Persisting an accepted credential."""
+
+    async def test_save_writes_every_field_and_keeps_the_rest(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Unrelated keys already in the store survive the write."""
+        config = AuthenticationConfig(
+            user_id="user123",
+            access_token="access",
+            expires_at=1234567890.0,
+            refresh_token="refresh",
+        )
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value={"device_id": "keep-me"},
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            await async_save_config(hass, config)
+
+        mock_save.assert_called_once_with(
+            {
+                "device_id": "keep-me",
+                KEY_ACCESS_TOKEN: "access",
+                KEY_REFRESH_TOKEN: "refresh",
+                KEY_EXPIRES_AT: 1234567890.0,
+                KEY_USER_ID: "user123",
+            }
+        )
+
+    async def test_save_handles_an_empty_store(self, hass: HomeAssistant) -> None:
+        """A first-time install has nothing on disk yet."""
+        config = AuthenticationConfig(
+            user_id="user123",
+            access_token="access",
+            expires_at=1.0,
+            refresh_token="refresh",
+        )
+
+        with (
+            patch("homeassistant.helpers.storage.Store.async_load", return_value=None),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            await async_save_config(hass, config)
+
+        assert mock_save.call_args.args[0][KEY_USER_ID] == "user123"
+
+
+class TestGetStoredConfigAccountGuard:
+    """The store is shared; the unique_id belongs to the entry.
+
+    They can disagree, and when they do the credentials on disk are for a
+    different Sensi account than the one this entry's devices belong to.
+    Connecting anyway brings up the other account's thermostats as new devices
+    and takes this entry's offline, with nothing in the log to explain it.
+    """
+
+    _STORED = {
+        KEY_REFRESH_TOKEN: "refresh",
+        KEY_ACCESS_TOKEN: "access",
+        KEY_EXPIRES_AT: 1.0,
+        KEY_USER_ID: "account_a",
+    }
+
+    async def test_a_matching_account_loads(self, hass: HomeAssistant) -> None:
+        """The ordinary case is unchanged."""
+        with patch(
+            "homeassistant.helpers.storage.Store.async_load", return_value=self._STORED
+        ):
+            config = await get_stored_config(hass, "account_a")
+
+        assert config.user_id == "account_a"
+        assert config.refresh_token == "refresh"
+
+    async def test_a_mismatched_account_is_refused(self, hass: HomeAssistant) -> None:
+        """AuthenticationError, which async_setup_entry turns into reauth."""
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=self._STORED,
+            ),
+            pytest.raises(AuthenticationError) as context,
+        ):
+            await get_stored_config(hass, "account_b")
+
+        assert "different Sensi account" in str(context.value)
+
+    @pytest.mark.parametrize(
+        ("expected_user_id", "stored_user_id"),
+        [(None, "account_a"), ("account_a", None), (None, None)],
+        ids=["no_unique_id", "no_stored_user_id", "neither"],
+    )
+    async def test_an_absent_id_cannot_verify_and_does_not_refuse(
+        self, hass: HomeAssistant, expected_user_id, stored_user_id
+    ) -> None:
+        """Absent is "cannot verify", not "does not match".
+
+        Older installations stored no user_id, and an entry created before
+        unique_ids were set has none either. Refusing those would lock out a
+        working install on an upgrade.
+        """
+        stored = {**self._STORED, KEY_USER_ID: stored_user_id}
+
+        with patch(
+            "homeassistant.helpers.storage.Store.async_load", return_value=stored
+        ):
+            config = await get_stored_config(hass, expected_user_id)
+
+        assert config.refresh_token == "refresh"
+
+    async def test_a_missing_refresh_token_still_raises(
+        self, hass: HomeAssistant
+    ) -> None:
+        """The pre-existing guard is unaffected by the new one."""
+        with (
+            patch("homeassistant.helpers.storage.Store.async_load", return_value={}),
+            pytest.raises(AuthenticationError),
+        ):
+            await get_stored_config(hass, "account_a")
+
+    async def test_an_absent_store_raises_rather_than_crashing(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Nothing saved yet: async_load returns None, not an empty dict."""
+        with (
+            patch("homeassistant.helpers.storage.Store.async_load", return_value=None),
+            pytest.raises(AuthenticationError) as context,
+        ):
+            await get_stored_config(hass, "account_a")
+
+        assert "missing refresh_token" in str(context.value)
