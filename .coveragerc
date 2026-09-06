@@ -12,7 +12,13 @@
 
 [run]
 source = custom_components/sensi
-branch = false
+# Both outcomes of every branch, not just "the line ran". The thirteen
+# reachable outcomes no tier took were closed first (#85, PR #86); the one
+# partial left is client.py's `while item := self._event_queue.get_nowait()`,
+# whose false arm is unreachable by construction (EventInfo has no __bool__,
+# so the loop only exits through QueueEmpty). That keeps the combined figure
+# at 99%, above the gate's MIN_COVERAGE without a threshold change.
+branch = true
 
 [report]
 show_missing = true
