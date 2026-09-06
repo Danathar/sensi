@@ -19,7 +19,7 @@ There is no public Sensi API. The integration talks to the same backend the mobi
 ## Requirements
 
 - A Sensi thermostat already set up in the Sensi mobile app (the app account is what this authenticates against).
-- Home Assistant with `custom_components` support — the integration is installed there, not from the built-in integration list.
+- Home Assistant **2026.3.0 or newer** with `custom_components` support — the integration is installed there, not from the built-in integration list. 2026.3.0 is the first release that runs on Python 3.14, which this integration requires; HACS enforces the floor, a manual install does not.
 - A **refresh token** obtained by hand. Sensi app v8.6.3+ put reCaptcha in front of login, which cannot be replicated programmatically, so username/password sign-in is not an option. See [Getting a refresh token](#getting-a-refresh-token).
 
 ## Installation

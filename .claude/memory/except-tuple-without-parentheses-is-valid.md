@@ -11,8 +11,17 @@ relics.
 **Rule** — PEP 758 (Python 3.14) allows `except` and `except*` to take an
 unparenthesised tuple. This repository targets 3.14+ (`ruff.toml` sets
 `target-version = "py314"`, and Home Assistant has required >= 3.14.2 since
-2026.6.0), so the code is correct as written. Verify with `python3 -m py_compile`
+2026.3.0), so the code is correct as written. Verify with `python3 -m py_compile`
 before reporting a syntax problem in this repository — the interpreter here is
 newer than most of the syntax knowledge that reads as settled.
 
-**Source** — a false-positive bug report raised while reviewing `client.py`.
+Do not add the parentheses either: `ruff format` removes them under `py314`,
+so the "fix" turns `ruff format --check` red in CI.
+
+The one real exposure behind this report is a core older than 2026.3.0, which
+still runs Python 3.13 and cannot import the tree at all. `hacs.json` declares
+`"homeassistant": "2026.3.0"` so HACS refuses the download with a clear message
+instead; `tests/test_metadata.py` keeps that floor from being dropped.
+
+**Source** — false-positive bug reports raised against `client.py`, and again
+as #79 against `__init__.py` and `client.py`.
