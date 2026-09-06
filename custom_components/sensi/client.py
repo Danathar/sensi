@@ -504,9 +504,17 @@ class SensiClient:
         future_key = (event, icd_id)
         futures = self._futures.get(future_key)
 
-        if not futures:
+        if futures is None:
             futures = []
             self._futures[future_key] = futures
+        else:
+            # Drop the futures nobody is waiting on any more. Only
+            # _resolve_futures clears this key, so a waiter that timed out - or
+            # that wait_for_devices / async_update_devices cancelled - leaves
+            # its dead future behind until the next event for the key arrives.
+            # Without this the list collects one corpse per timeout and the
+            # "Resolving N futures" line counts them as real waiters.
+            futures[:] = [pending for pending in futures if not pending.done()]
 
         future = self._hass.loop.create_future()
         futures.append(future)
@@ -538,8 +546,13 @@ class SensiClient:
         if count:
             LOGGER.debug(f"Resolving {count} futures for ({event}, {icd_id})")
 
-            with contextlib.suppress(asyncio.exceptions.InvalidStateError):
-                for future in pending_futures:
+            for future in pending_futures:
+                # Suppress per future, not around the loop. set_result() on a
+                # future that has already been cancelled or resolved raises
+                # InvalidStateError, and a suppress wrapped around the loop
+                # exits the loop carrying it - stranding every waiter queued
+                # behind the first dead one until its own timeout fires.
+                with contextlib.suppress(asyncio.exceptions.InvalidStateError):
                     future.set_result(data)
 
     async def _send_event(
