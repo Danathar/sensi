@@ -1,7 +1,7 @@
 """Tests for Sensi coordinator."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -10,7 +10,7 @@ from custom_components.sensi.auth import AuthenticationError, SensiConnectionErr
 from custom_components.sensi.client import SensiClient
 from custom_components.sensi.const import COORDINATOR_UPDATE_INTERVAL, SENSI_DOMAIN
 from custom_components.sensi.coordinator import SensiUpdateCoordinator
-from custom_components.sensi.data import SensiDevice
+from custom_components.sensi.data import AuthenticationConfig, SensiDevice
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -94,6 +94,67 @@ class TestCoordinatorUpdateErrorMapping:
         )
 
         with pytest.raises(ConfigEntryAuthFailed):
+            await mock_coordinator.update_method()
+
+    async def test_a_rejected_refresh_token_reaches_reauth_through_the_real_client(
+        self, mock_coordinator
+    ) -> None:
+        """The same mapping, but with nothing between the 401 and the caller.
+
+        The test above mocks `async_update_devices` into raising
+        AuthenticationError, which the real client never did: both
+        `try_refresh_access_token` and `_connect` wrapped it in
+        SensiConnectionError, so every refresh with a revoked token became
+        UpdateFailed every 30 seconds, forever, and the user was never asked
+        for a new token. Driving the real client against a rejected refresh
+        proves the path rather than the mapping.
+        """
+        client = mock_coordinator.client
+        # Expired, so _connect refreshes before it tries to connect - the path
+        # a revoked token actually takes.
+        client._config = AuthenticationConfig(
+            refresh_token="revoked",
+            access_token="access",
+            expires_at=0,
+            user_id="user",
+        )
+
+        with (
+            patch(
+                "custom_components.sensi.client.refresh_access_token",
+                side_effect=AuthenticationError("Invalid token"),
+            ),
+            pytest.raises(ConfigEntryAuthFailed) as context,
+        ):
+            await mock_coordinator.update_method()
+
+        # The reason survives the trip rather than being replaced by a
+        # connection message.
+        assert isinstance(context.value.__cause__, AuthenticationError)
+
+    async def test_a_backend_outage_still_retries_rather_than_asking_for_a_token(
+        self, mock_coordinator
+    ) -> None:
+        """The other half: a 5xx must not become a reauth prompt.
+
+        auth._get_new_tokens raises SensiConnectionError for anything that is
+        not a 4xx, and that has to stay a retry - the stored token is fine.
+        """
+        client = mock_coordinator.client
+        client._config = AuthenticationConfig(
+            refresh_token="good",
+            access_token="access",
+            expires_at=0,
+            user_id="user",
+        )
+
+        with (
+            patch(
+                "custom_components.sensi.client.refresh_access_token",
+                side_effect=SensiConnectionError("Sensi is down"),
+            ),
+            pytest.raises(UpdateFailed),
+        ):
             await mock_coordinator.update_method()
 
     async def test_connection_error_maps_to_update_failed(
