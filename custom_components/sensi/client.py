@@ -789,11 +789,32 @@ class SensiClient:
                 # The second state event received on connect contains registration, capabilities and state.
                 # Only resolve `state` futures if we received state data.
 
-                if icd_id not in self._devices:
-                    (have_state, device) = SensiDevice.create(item)
-                    self._devices[icd_id] = device
-                else:
-                    have_state = self._devices[icd_id].update_state(item)
+                # Per device, not per event. One thermostat sending a shape
+                # this parser cannot read must degrade to "that device is
+                # stale", not "no device updated" - the loop below resolves the
+                # state futures for every device on the account, and an
+                # exception escaping here skips all of them. On connect that
+                # means the initial state wait times out and setup raises
+                # ConfigEntryNotReady; at runtime it means every entity goes
+                # unavailable after two failed refreshes.
+                try:
+                    if icd_id not in self._devices:
+                        (have_state, device) = SensiDevice.create(item)
+                        self._devices[icd_id] = device
+                    else:
+                        have_state = self._devices[icd_id].update_state(item)
+                except Exception:  # pylint: disable=broad-except # noqa: BLE001
+                    # debug, not warning: the payload is undocumented and a
+                    # shape we cannot read is a fact about the backend, not
+                    # something the user can act on. Repeating it at warning
+                    # level every 30 seconds would be noise.
+                    LOGGER.debug(
+                        "Unable to parse the state payload for device %s; "
+                        "leaving it at its previous state",
+                        icd_id,
+                        exc_info=True,
+                    )
+                    continue
 
                 if have_state:
                     futures_to_resolve.append((icd_id, item))
