@@ -160,6 +160,58 @@ async def test_set_temperature(
         mock_async_update_listeners.assert_called_once()
 
 
+async def test_set_temperature_survives_an_ack_without_detail(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """The service call the user actually makes, over a bare ack.
+
+    This goes through the real client rather than mocking
+    `async_set_temperature`, because the bug was inside it: unpacking a
+    detail-free ack raised TypeError, which is not a HomeAssistantError, so
+    `climate.set_temperature` surfaced a raw traceback instead of the
+    integration's "Unable to set ..." message - and the setpoint was left
+    unapplied even though the thermostat had accepted it.
+    """
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_thermostat.coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter,
+    ):
+        mock_async_invoke_setter.return_value = ActionResponse(None, {})
+
+        # No raise is the assertion; raise_if_error sees no error to raise on.
+        await mock_thermostat.async_set_temperature(temperature=68)
+
+    mock_async_invoke_setter.assert_called_once()
+    if mock_device.state.operating_mode == OperatingMode.HEAT:
+        assert mock_device.state.current_heat_temp == 68
+
+
+async def test_set_temperature_reports_an_unreadable_ack_as_an_error(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """A dict the client cannot parse reaches the user as HomeAssistantError."""
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_thermostat.coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter,
+        pytest.raises(HomeAssistantError) as context,
+    ):
+        mock_async_invoke_setter.return_value = ActionResponse(
+            None, {"unexpected": "shape"}
+        )
+
+        await mock_thermostat.async_set_temperature(temperature=68)
+
+    assert "Unable to set temperature to 68" in str(context.value)
+
+
 async def test_set_temperature_auto(
     hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
 ) -> None:

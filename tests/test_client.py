@@ -262,6 +262,114 @@ class TestSetTemperature:
             else:
                 assert response.data is None
 
+    @pytest.mark.parametrize(
+        "ack",
+        [{}, None, "accepted"],
+        ids=["empty_dict", "no_payload", "accepted_string"],
+    )
+    async def test_an_ack_without_detail_still_applies_the_setpoint(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """An ack that carries no numbers is still an ack.
+
+        A setter the thermostat never answered is already an error above -
+        _async_invoke_setter's timeout returns "Future not done" - so anything
+        reaching the unpack means the change was accepted. Unpacking these
+        straight into the dataclass raised TypeError, which is not a
+        HomeAssistantError: the climate.set_temperature service surfaced a raw
+        traceback, and the setpoint was left unapplied even though the
+        thermostat had taken it.
+        """
+        previous_display_temp = mock_device.state.display_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, 68
+            )
+
+        assert response.error is None
+        # The requested value is the only figure available, and it is the one
+        # the thermostat agreed to.
+        assert mock_device.state.current_heat_temp == 68
+        # display_temp is what the thermostat currently reads, not what was
+        # asked for; with no reported value it must be left for the next state
+        # event rather than overwritten with the setpoint.
+        assert mock_device.state.display_temp == previous_display_temp
+
+    async def test_a_string_ack_that_is_not_accepted_is_an_error(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """Only "accepted" means accepted, as in async_set_operating_mode."""
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, "rejected")
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, 68
+            )
+
+        assert response.error == "rejected"
+        assert mock_device.state.current_heat_temp == previous_heat_temp
+
+    @pytest.mark.parametrize(
+        "ack",
+        [
+            {"current_temp": 70, "mode": "heat"},
+            {"current_temp": 70, "mode": "heat", "target_temp": 75, "extra": 1},
+            {"unexpected": "shape"},
+        ],
+        ids=["missing_key", "extra_key", "wrong_keys"],
+    )
+    async def test_an_unreadable_dict_ack_is_an_error_not_a_traceback(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """A dict we cannot parse degrades to an ActionResponse error.
+
+        raise_if_error then turns it into the integration's "Unable to set
+        temperature to ..." HomeAssistantError, which the entity layer knows
+        how to present, rather than a TypeError escaping the service call.
+        """
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, 68
+            )
+
+        assert response.error is not None
+        assert "Failed to parse" in response.error
+        # Nothing was applied, because nothing was understood.
+        assert mock_device.state.current_heat_temp == previous_heat_temp
+
+    async def test_a_cool_setpoint_is_applied_on_a_detail_free_ack(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """The mode still decides which setpoint moves."""
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, {})
+
+            await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.COOL, 79
+            )
+
+        assert mock_device.state.current_cool_temp == 79
+        assert mock_device.state.current_heat_temp == previous_heat_temp
+
     async def test_set_temperature_OFF_state(
         self, mock_device, mock_coordinator
     ) -> None:
