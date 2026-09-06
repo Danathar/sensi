@@ -14,10 +14,11 @@ from custom_components.sensi.auth import AuthenticationConfig
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from .conftest import NOT_EXPIRED, FakeSensiBackend
 
@@ -196,5 +197,51 @@ async def test_setup_retries_when_the_backend_is_unreachable(
         ConfigEntryState.SETUP_ERROR,
     )
     assert hass.states.get("climate.sensi_living_room") is None
+
+    await sensi_backend.shutdown()
+
+
+async def test_temperature_offset_is_not_converted_on_a_metric_instance(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """A delta must survive an instance whose unit system is not the device's.
+
+    This sets up its own entry rather than using `sensi_entry`, because that
+    fixture pins US customary to match the Fahrenheit payload - which is
+    exactly the combination where this bug is invisible.
+
+    The offset says "shift what the thermostat displays by this much", so it is
+    a delta. NumberDeviceClass.TEMPERATURE made Home Assistant run it through
+    the absolute converter, turning an offset of 0 into -17.8 °C and putting
+    the whole -5..+5 range outside anything the backend would accept.
+    """
+    hass.config.units = METRIC_SYSTEM
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("number.sensi_living_room_temperature_offset")
+    assert state is not None
+
+    # The payload reports temp_offset 0 in Fahrenheit. Zero shift is zero
+    # shift in any scale.
+    assert state.state == "0"
+    # The label still names the thermostat's own scale, so the number is not
+    # ambiguous just because it was left alone.
+    assert state.attributes["unit_of_measurement"] == UnitOfTemperature.FAHRENHEIT
+    # The range the backend accepts, unconverted.
+    assert state.attributes["min"] == -5
+    assert state.attributes["max"] == 5
 
     await sensi_backend.shutdown()
