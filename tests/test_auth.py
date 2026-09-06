@@ -15,6 +15,7 @@ from custom_components.sensi.auth import (
     OAUTH_URL2,
     AuthenticationError,
     SensiConnectionError,
+    get_stored_config,
     refresh_access_token,
 )
 from custom_components.sensi.data import AuthenticationConfig
@@ -209,3 +210,117 @@ async def test_refresh_access_token_timeout(
         pytest.raises(SensiConnectionError),
     ):
         await refresh_access_token(hass, refresh_token)
+
+
+async def test_get_stored_config(hass: HomeAssistant, mock_auth_data) -> None:
+    """Stored credentials are returned as an AuthenticationConfig."""
+
+    with patch(
+        "homeassistant.helpers.storage.Store.async_load",
+        return_value=mock_auth_data,
+    ):
+        config = await get_stored_config(hass)
+
+    assert config.refresh_token == mock_auth_data[KEY_REFRESH_TOKEN]
+    assert config.access_token == mock_auth_data[KEY_ACCESS_TOKEN]
+    assert config.expires_at == mock_auth_data[KEY_EXPIRES_AT]
+    assert config.user_id == mock_auth_data[KEY_USER_ID]
+
+
+async def test_get_stored_config_with_nothing_stored(hass: HomeAssistant) -> None:
+    """An empty store means there is nothing to authenticate with.
+
+    Store.async_load returns None before anything has been written - the
+    install that was never set up, or whose storage file was removed.
+    """
+
+    with (
+        patch("homeassistant.helpers.storage.Store.async_load", return_value=None),
+        pytest.raises(AuthenticationError),
+    ):
+        await get_stored_config(hass)
+
+
+async def test_get_stored_config_without_a_refresh_token(hass: HomeAssistant) -> None:
+    """Stored data predating the refresh token is rejected, not returned partial."""
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value={KEY_ACCESS_TOKEN: "access_token_123"},
+        ),
+        pytest.raises(AuthenticationError),
+    ):
+        await get_stored_config(hass)
+
+
+async def test_refresh_access_token_uses_the_stored_refresh_token(
+    hass: HomeAssistant, mock_auth_data, aioclient_mock
+) -> None:
+    """Called without a token, the refresh falls back to the stored one.
+
+    This is the path the coordinator takes on every re-authentication after
+    setup; the caller only supplies a token during the config flow.
+    """
+
+    aioclient_mock.post(
+        OAUTH_URL2,
+        json={
+            KEY_ACCESS_TOKEN: "new_access_token_999",
+            KEY_REFRESH_TOKEN: "new_refresh_token_999",
+            "expires_in": 3100,
+            KEY_USER_ID: "user123",
+        },
+    )
+
+    # refresh_access_token writes the new tokens back into the loaded dict.
+    stored_refresh_token = mock_auth_data[KEY_REFRESH_TOKEN]
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch("homeassistant.helpers.storage.Store.async_save"),
+    ):
+        result = await refresh_access_token(hass)
+
+    assert aioclient_mock.call_count == 1
+    posted = aioclient_mock.mock_calls[0][2]
+    assert posted[KEY_REFRESH_TOKEN] == stored_refresh_token
+    assert result.refresh_token == "new_refresh_token_999"
+
+
+async def test_refresh_access_token_with_no_token_anywhere(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    """No supplied token and an empty store is an authentication failure.
+
+    It must fail before the token endpoint is called - posting a null refresh
+    token would earn a 401 and be reported as a rejected token instead.
+    """
+
+    with (
+        patch("homeassistant.helpers.storage.Store.async_load", return_value=None),
+        pytest.raises(AuthenticationError),
+    ):
+        await refresh_access_token(hass)
+
+    assert aioclient_mock.call_count == 0
+
+
+async def test_refresh_access_token_with_stored_data_lacking_a_token(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    """Stored data without a refresh token fails the same way as no data."""
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value={KEY_ACCESS_TOKEN: "access_token_123"},
+        ),
+        pytest.raises(AuthenticationError),
+    ):
+        await refresh_access_token(hass)
+
+    assert aioclient_mock.call_count == 0
