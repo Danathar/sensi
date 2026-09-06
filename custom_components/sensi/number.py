@@ -43,10 +43,26 @@ class SensiNumberEntityDescription(NumberEntityDescription):
     min_fn: Callable[[SensiDevice], int]
     max_fn: Callable[[SensiDevice], int]
 
+    # Report the thermostat's own display scale as the unit, rather than the
+    # constant on the description. Set for the temperature offset, whose scale
+    # is a per-device setting. This used to be inferred from
+    # `device_class == TEMPERATURE`, which stopped working once that class had
+    # to be dropped - see the temperature offset description below.
+    unit_from_display_scale: bool = False
+
 
 NUMBER_TYPES: Final = [
     SensiNumberEntityDescription(
-        device_class=NumberDeviceClass.TEMPERATURE,
+        # No device_class. This value is a *delta* - how far to shift what the
+        # thermostat displays - but NumberDeviceClass.TEMPERATURE makes Home
+        # Assistant convert it to the instance's temperature unit with the
+        # absolute converter. On a metric Home Assistant with a Fahrenheit
+        # thermostat that turned an offset of 0 into -17.8 °C, and the -5..+5
+        # range into -20.6..-15 °C; dragging the slider ran the same
+        # conversion in reverse, so every value that read sensibly was outside
+        # the range the backend accepts. Without a temperature device class
+        # Home Assistant performs no conversion, and the unit below keeps the
+        # label honest.
         entity_category=EntityCategory.CONFIG,
         key="temperature_offset",
         max_fn=lambda device: device.capabilities.temp_offset_upper_bound,
@@ -54,6 +70,7 @@ NUMBER_TYPES: Final = [
         name="Temperature offset",
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         step=STEP,
+        unit_from_display_scale=True,
         update_fn=lambda client, device, value: client.async_set_temperature_offset(
             device, value
         ),
@@ -135,7 +152,7 @@ class SensiNumberEntity(SensiDescriptionEntity, NumberEntity):
         """Return the unit of measurement of the entity, if any."""
         return (
             self._state.temperature_unit
-            if self.entity_description.device_class == NumberDeviceClass.TEMPERATURE
+            if self.entity_description.unit_from_display_scale
             else self.entity_description.native_unit_of_measurement
         )
 
