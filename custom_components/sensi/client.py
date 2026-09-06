@@ -16,7 +16,7 @@ from homeassistant.util.enum import try_parse_enum
 
 from .auth import SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
-from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice
+from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice, State
 from .event import (
     BoolEventData,
     NumberEventData,
@@ -253,19 +253,60 @@ class SensiClient:
         if action_response.error:
             return action_response
 
-        # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
-        response = SetTemperatureEventSuccess(**action_response.data)
+        response = action_response.data
 
-        state.display_temp = response.current_temp
+        # An ack that never arrived is already an error above - the timeout in
+        # _async_invoke_setter returns "Future not done" - so anything reaching
+        # here means the thermostat took the change. The only question left is
+        # how much detail it sent back, and the answer is not always the
+        # three-key dict: the sibling async_set_operating_mode exists in its
+        # current shape because this backend answers a setter with a bare
+        # "accepted" string, and _async_invoke_setter turns an argument-less
+        # ack into {}. Unpacking straight into the dataclass raised TypeError
+        # on every one of those, which is not a HomeAssistantError - the
+        # service call surfaced a raw traceback and the setpoint was left
+        # unapplied even though the thermostat had accepted it.
+
+        # We can receive a string instead of JSON
+        if isinstance(response, str):
+            if response == "accepted":
+                self._apply_target_temperature(state, mode, value)
+                return ActionResponse(None, None)
+
+            # Treat anything else other than "accepted" as error
+            return ActionResponse(response, None)
+
+        if not response:
+            # An empty ack is what every other setter in this file is given,
+            # and it is a success there. The requested value is the only figure
+            # available; display_temp is left alone because the thermostat did
+            # not report one and the next state event carries it.
+            self._apply_target_temperature(state, mode, value)
+            return ActionResponse(None, None)
+
+        # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
+        try:
+            parsed_response = SetTemperatureEventSuccess(**response)
+        except ValueError, TypeError:
+            return ActionResponse(f"Failed to parse `{response}`", None)
+
+        state.display_temp = parsed_response.current_temp
+        self._apply_target_temperature(state, mode, parsed_response.target_temp)
+
+        return ActionResponse(None, parsed_response)
+
+    @staticmethod
+    def _apply_target_temperature(
+        state: State, mode: OperatingMode, target_temp: int
+    ) -> None:
+        """Record an accepted setpoint against the mode it was set for."""
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
         if mode == OperatingMode.HEAT:
-            state.current_heat_temp = response.target_temp
+            state.current_heat_temp = target_temp
         if mode == OperatingMode.COOL:
-            state.current_cool_temp = response.target_temp
-
-        return ActionResponse(None, response)
+            state.current_cool_temp = target_temp
 
     async def async_set_operating_mode(
         self, device: SensiDevice, value: OperatingMode
