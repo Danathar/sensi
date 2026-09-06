@@ -5,6 +5,7 @@ config entry setup, platform forwarding - against the scripted fake socket.io
 backend in ``conftest.py``.
 """
 
+import asyncio
 from unittest.mock import patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -245,3 +246,62 @@ async def test_temperature_offset_is_not_converted_on_a_metric_instance(
     assert state.attributes["max"] == 5
 
     await sensi_backend.shutdown()
+
+
+def _live_emit_loops() -> list[asyncio.Task]:
+    """Return the emit-loop background tasks that are still running."""
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if task.get_name().startswith("sensi._emit_loop") and not task.done()
+    ]
+
+
+async def test_a_failed_setup_leaves_no_connected_client_behind(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """Setup that fails after the socket is up must tear the client down.
+
+    `wait_for_devices` raises ConfigEntryNotReady from a state where
+    `_connect()` has already succeeded, and Home Assistant retries with a
+    brand-new SensiClient every time. Nothing stopped the previous one, so it
+    stayed connected to the backend with its own emit-loop task, parsing every
+    state push into a device dict nobody reads, until Home Assistant restarted.
+
+    The thermostat here connects and then never answers get_info or
+    get_capabilities - the exact case the "continuing without them" partial
+    success code exists for, taken to its limit.
+    """
+    sensi_backend.silent_getters = True
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        # The first attempt, and the retry Home Assistant would make.
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.SETUP_RETRY
+
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.SETUP_RETRY
+
+    # Both attempts got as far as connecting, which is what makes the leak
+    # possible - if this ever stops being true the test is no longer covering
+    # the thing it was written for.
+    assert len(sensi_backend.sockets) >= 2
+
+    still_connected = [socket for socket in sensi_backend.sockets if socket.connected]
+    assert still_connected == [], (
+        f"{len(still_connected)} socket(s) left connected after a failed setup"
+    )
+    assert _live_emit_loops() == []

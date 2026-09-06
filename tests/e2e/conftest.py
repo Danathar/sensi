@@ -195,6 +195,12 @@ class FakeSensiBackend:
         # positional arguments the socket.io ack callback receives.
         self.acks: dict[str, tuple] = {}
 
+        # Stop answering get_info / get_capabilities. The `state` event still
+        # arrives on connect, so this scripts the thermostat that connects and
+        # then never describes itself - the case wait_for_devices retries and
+        # finally gives up on, from a state where the socket is already up.
+        self.silent_getters = False
+
         self._tasks: set[asyncio.Task] = set()
 
     # -- connection scripting ----------------------------------------------
@@ -231,6 +237,9 @@ class FakeSensiBackend:
         """Return the server events triggered by an emitted event."""
         icd_id = (data or {}).get("icd_id")
         if icd_id not in self.devices:
+            return []
+
+        if self.silent_getters and name in ("get_info", "get_capabilities"):
             return []
 
         if name == "get_info":
