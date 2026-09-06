@@ -567,7 +567,7 @@ class TestSetterAcks:
     async def _invoke(self, client: SensiClient, ack: tuple | None):
         """Run a setter, replying with `ack` (or not replying at all)."""
 
-        async def fake_send(name, data, callback=None):
+        async def fake_send(name, data, callback=None, future=None):
             if ack is not None and callback is not None:
                 callback(*ack)
 
@@ -620,7 +620,7 @@ class TestSetterAcks:
         """A late ack must not touch a future that was already cancelled."""
         captured: list = []
 
-        async def capture(name, data, callback=None):
+        async def capture(name, data, callback=None, future=None):
             captured.append(callback)
 
         with (
@@ -705,6 +705,98 @@ class TestEmitLoop:
         await self._run_once(client)
 
         sio.emit.assert_awaited()
+
+    async def test_a_setter_nobody_is_waiting_for_is_discarded(
+        self, client: SensiClient
+    ) -> None:
+        """A timed out setter must not reach the thermostat on the next connect.
+
+        _async_invoke_setter waits SET_EVENT_TIMEOUT and then tells the caller
+        "Future not done", but the event stayed on the queue. The socket is
+        torn down and rebuilt on every 30-second refresh, so the command went
+        out on the next connect - the thermostat acting on something the user
+        was told had failed, possibly an hour later.
+        """
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        timed_out = asyncio.get_running_loop().create_future()
+        timed_out.cancel()
+        client._event_queue.put_nowait(
+            EventInfo("set_temperature", {"value": 72}, None, timed_out)
+        )
+
+        await self._run_once(client)
+
+        sio.emit.assert_not_awaited()
+        assert client._event_queue.qsize() == 0
+
+    async def test_a_setter_still_being_waited_on_is_emitted(
+        self, client: SensiClient
+    ) -> None:
+        """The discard must not swallow a setter with a live caller."""
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        waiting = asyncio.get_running_loop().create_future()
+        client._event_queue.put_nowait(
+            EventInfo("set_temperature", {"value": 72}, None, waiting)
+        )
+
+        await self._run_once(client)
+
+        sio.emit.assert_awaited_once_with("set_temperature", {"value": 72}, None, None)
+
+        waiting.cancel()
+
+    async def test_a_getter_survives_because_it_queues_no_future(
+        self, client: SensiClient
+    ) -> None:
+        """Getters legitimately want to outlive a reconnect.
+
+        get_info and get_capabilities are re-requested rather than retried by
+        the caller, so they carry no future and the discard never applies to
+        them.
+        """
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        await client._send_event("get_info", {"icd_id": ICD_ID})
+
+        queued = client._event_queue.get_nowait()
+        assert queued.future is None
+        client._event_queue.put_nowait(queued)
+
+        await self._run_once(client)
+
+        sio.emit.assert_awaited_once_with("get_info", {"icd_id": ICD_ID}, None, None)
+
+    async def test_a_stale_setter_does_not_block_the_ones_behind_it(
+        self, client: SensiClient
+    ) -> None:
+        """Discarding one item continues the drain rather than ending it."""
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        timed_out = asyncio.get_running_loop().create_future()
+        timed_out.cancel()
+        client._event_queue.put_nowait(
+            EventInfo("set_temperature", {}, None, timed_out)
+        )
+        client._event_queue.put_nowait(EventInfo("get_info", {"icd_id": ICD_ID}, None))
+
+        await self._run_once(client)
+
+        sio.emit.assert_awaited_once_with("get_info", {"icd_id": ICD_ID}, None, None)
+        assert client._event_queue.qsize() == 0
 
     async def test_the_loop_idles_while_disconnected(self, client: SensiClient) -> None:
         """With no socket the loop waits instead of spinning or crashing."""
