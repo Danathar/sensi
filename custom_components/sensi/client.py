@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.util.enum import try_parse_enum
 
-from .auth import SensiConnectionError, refresh_access_token
+from .auth import AuthenticationError, SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
 from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice, State
 from .event import (
@@ -786,6 +786,12 @@ class SensiClient:
                 raise SensiConnectionError(
                     "Connection attempt after token refresh failed"
                 ) from connect_ex2
+        except AuthenticationError:
+            # The pre-connect refresh above runs inside this try, so without
+            # this the catch-all would re-wrap a rejected refresh token as a
+            # connection failure - the second place the distinction was being
+            # erased.
+            raise
         except Exception as err:
             raise SensiConnectionError("Failed to connect") from err
         finally:
@@ -800,6 +806,16 @@ class SensiClient:
             self._config = await refresh_access_token(
                 self._hass, self._config.refresh_token
             )
+        except AuthenticationError, SensiConnectionError:
+            # Both already say which kind of failure this is, and the
+            # difference decides what Home Assistant does about it: the
+            # coordinator turns AuthenticationError into ConfigEntryAuthFailed
+            # and asks the user for a new token, while SensiConnectionError
+            # retries. auth._get_new_tokens goes out of its way to tell 4xx
+            # from 5xx for exactly that reason - normalising both into
+            # SensiConnectionError here threw that away and left no path at
+            # all from a revoked token to the reauth prompt.
+            raise
         except Exception as err:
             raise SensiConnectionError("Error refreshing tokens") from err
 
