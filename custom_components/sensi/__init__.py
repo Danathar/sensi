@@ -26,7 +26,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
     """Set up the Sensi component."""
 
     try:
-        config = await get_stored_config(hass)
+        # The entry's unique_id is the Sensi user_id the entry was set up
+        # with. Passing it lets get_stored_config refuse a store that belongs
+        # to a different account rather than connecting as the wrong one.
+        config = await get_stored_config(hass, entry.unique_id)
         client = SensiClient(hass, config)
         await client.wait_for_devices()
 

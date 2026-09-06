@@ -101,8 +101,68 @@ async def _get_new_tokens(hass: HomeAssistant, refresh_token: str) -> any:
     return result
 
 
-async def get_stored_config(hass: HomeAssistant) -> AuthenticationConfig:
-    """Retrieve stored configuration. This will throw AuthenticationError for missing data."""
+async def validate_refresh_token(
+    hass: HomeAssistant, refresh_token: str
+) -> AuthenticationConfig:
+    """Exchange a refresh token and return the result without storing it.
+
+    The config flow has to know which Sensi account a token belongs to before
+    it can decide whether to accept it, and there is exactly one store for the
+    whole integration (STORAGE_KEY is the domain, not the entry id). Validating
+    through `refresh_access_token` therefore overwrote the running entry's
+    credentials with the candidate's before the flow had looked at them - so a
+    reauth rejected as `wrong_account` still left the other account's tokens on
+    disk. Call `async_save_config` once the flow has accepted the account.
+
+    This can raise SensiConnectionError, AuthenticationError.
+    """
+
+    result = await _get_new_tokens(hass, refresh_token)
+
+    return AuthenticationConfig(
+        user_id=result[KEY_USER_ID],
+        access_token=result[KEY_ACCESS_TOKEN],
+        expires_at=result[KEY_EXPIRES_AT],
+        refresh_token=result[KEY_REFRESH_TOKEN],
+    )
+
+
+async def async_save_config(hass: HomeAssistant, config: AuthenticationConfig) -> None:
+    """Persist validated credentials to the integration store.
+
+    Sensi rotates the refresh token on every exchange, so what has to be saved
+    is the token that came back from validation - the one the user pasted is
+    already spent by the time this is called.
+    """
+
+    store = storage.Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+    persistent_data = await store.async_load()
+    if persistent_data is None:
+        persistent_data = {}
+
+    persistent_data[KEY_ACCESS_TOKEN] = config.access_token
+    persistent_data[KEY_REFRESH_TOKEN] = config.refresh_token
+    persistent_data[KEY_EXPIRES_AT] = config.expires_at
+    persistent_data[KEY_USER_ID] = config.user_id
+
+    # Only dict or simple values can be saved into store
+    await store.async_save(persistent_data)
+
+
+async def get_stored_config(
+    hass: HomeAssistant, expected_user_id: str | None = None
+) -> AuthenticationConfig:
+    """Retrieve stored configuration. This will throw AuthenticationError for missing data.
+
+    `expected_user_id` is the entry's unique_id. The store is shared by the
+    whole integration while the unique_id belongs to the entry, so the two can
+    disagree - and a mismatch means the credentials on disk are for a different
+    Sensi account than the one this entry's devices belong to. Connecting
+    anyway would bring up the other account's thermostats as new devices and
+    take this entry's offline, with nothing in the log to explain it. Raising
+    AuthenticationError sends the user to reauth instead, which is the only
+    thing that can actually fix it.
+    """
 
     store = storage.Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
     persistent_data = await store.async_load()
@@ -113,8 +173,21 @@ async def get_stored_config(hass: HomeAssistant) -> AuthenticationConfig:
     if refresh_token is None:
         raise AuthenticationError("Stored config is missing refresh_token")
 
+    stored_user_id = persistent_data.get(KEY_USER_ID)
+    # Both have to be present to compare: older installations stored no
+    # user_id, and an entry created before unique_ids were set has none
+    # either. An absent value is "cannot verify", not "does not match".
+    if expected_user_id and stored_user_id and stored_user_id != expected_user_id:
+        LOGGER.warning(
+            "Stored credentials belong to a different Sensi account than this "
+            "entry; reauthentication is required"
+        )
+        raise AuthenticationError(
+            "Stored credentials are for a different Sensi account"
+        )
+
     return AuthenticationConfig(
-        user_id=persistent_data.get(KEY_USER_ID),
+        user_id=stored_user_id,
         access_token=persistent_data.get(KEY_ACCESS_TOKEN),
         expires_at=persistent_data.get(KEY_EXPIRES_AT),
         refresh_token=refresh_token,
@@ -125,6 +198,10 @@ async def refresh_access_token(
     hass: HomeAssistant, refresh_token: str | None = None
 ) -> AuthenticationConfig:
     """Obtain new access_token and refresh_token for the given/stored refresh_token.
+
+    This is the runtime path: the client calls it to rotate the token of an
+    entry that is already set up, so persisting the result is the point. The
+    config flow must not use it - see `validate_refresh_token`.
 
     This can raise SensiConnectionError, AuthenticationError.
     """
@@ -146,20 +223,16 @@ async def refresh_access_token(
 
     result = await _get_new_tokens(hass, refresh_token)
 
-    persistent_data[KEY_ACCESS_TOKEN] = result[KEY_ACCESS_TOKEN]
-    persistent_data[KEY_REFRESH_TOKEN] = result[KEY_REFRESH_TOKEN]
-    persistent_data[KEY_EXPIRES_AT] = result[KEY_EXPIRES_AT]
-    persistent_data[KEY_USER_ID] = result[KEY_USER_ID]
-
-    # Only dict or simple values can be saved into store
-    await store.async_save(persistent_data)
-
-    return AuthenticationConfig(
-        user_id=persistent_data[KEY_USER_ID],
-        access_token=persistent_data[KEY_ACCESS_TOKEN],
-        expires_at=persistent_data[KEY_EXPIRES_AT],
-        refresh_token=persistent_data[KEY_REFRESH_TOKEN],
+    config = AuthenticationConfig(
+        user_id=result[KEY_USER_ID],
+        access_token=result[KEY_ACCESS_TOKEN],
+        expires_at=result[KEY_EXPIRES_AT],
+        refresh_token=result[KEY_REFRESH_TOKEN],
     )
+    # One writer, so this path and the config flow's cannot drift apart.
+    await async_save_config(hass, config)
+
+    return config
 
 
 # async def login(

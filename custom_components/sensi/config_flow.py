@@ -13,7 +13,8 @@ from .auth import (
     AuthenticationConfig,
     AuthenticationError,
     SensiConnectionError,
-    refresh_access_token,
+    async_save_config,
+    validate_refresh_token,
 )
 from .const import (
     CONFIG_REFRESH_TOKEN,
@@ -40,9 +41,15 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
         self._reauth_unique_id = None
 
     async def _try_login(self, config: AuthenticationConfig) -> LoginResponse:
-        """Try login with supplied credentials."""
+        """Check the credentials, without committing them.
+
+        validate_refresh_token rather than refresh_access_token: the latter
+        writes to the integration's single store, which would overwrite a
+        running entry's credentials with the candidate's before this flow has
+        decided whether to accept them. The caller saves on acceptance.
+        """
         try:
-            new_config = await refresh_access_token(self.hass, config.refresh_token)
+            new_config = await validate_refresh_token(self.hass, config.refresh_token)
         except SensiConnectionError:
             return LoginResponse(errors={"base": "cannot_connect"}, config=None)
         except AuthenticationError:
@@ -67,8 +74,18 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
             if not result.errors:
                 # Use the user_id obtained via login as the  unique_id
                 await self.async_set_unique_id(result.config.user_id)
+                # Before the save: an abort here means this account is already
+                # set up, and its stored credentials must be left alone.
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=SENSI_NAME, data=user_input)
+
+                await async_save_config(self.hass, result.config)
+                return self.async_create_entry(
+                    title=SENSI_NAME,
+                    # The rotated token, not the one the user pasted - Sensi
+                    # rotates on every exchange, so what they typed is already
+                    # spent by the time validation returns.
+                    data={CONFIG_REFRESH_TOKEN: result.config.refresh_token},
+                )
 
             errors = result.errors
 
@@ -104,11 +121,14 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                     # account. Accepting it would silently repoint this entry.
                     errors = {"base": "wrong_account"}
                 else:
+                    # Only now, with the account confirmed to be this entry's,
+                    # do the new credentials reach disk.
+                    await async_save_config(self.hass, result.config)
                     self.hass.config_entries.async_update_entry(
                         existing_entry,
                         data={
                             **existing_entry.data,
-                            CONFIG_REFRESH_TOKEN: user_input[CONFIG_REFRESH_TOKEN],
+                            CONFIG_REFRESH_TOKEN: result.config.refresh_token,
                         },
                     )
                     await self.hass.config_entries.async_reload(existing_entry.entry_id)

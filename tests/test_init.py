@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
+from custom_components.sensi.auth import (
+    KEY_USER_ID,
+    AuthenticationError,
+    SensiConnectionError,
+)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -236,3 +240,63 @@ async def test_init_unexpected_error_does_not_blame_authentication(
     assert mock_entry.state is ConfigEntryState.SETUP_RETRY
     assert "authenticate" not in mock_entry.reason.lower()
     mock_start_reauth.assert_not_called()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_setup_refuses_a_store_for_a_different_account(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """A store whose user_id is not this entry's must not be connected with.
+
+    There is one credential store for the whole integration but a unique_id
+    per entry, so the two can disagree. Connecting anyway brings up the other
+    account's thermostats as new devices and takes this entry's offline, with
+    nothing in the log to explain it. AuthenticationError sends the user to
+    reauth, which is the only thing that can fix it.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    hass.config_entries.async_update_entry(mock_entry, unique_id="account_a")
+    other_account = {**mock_auth_data, KEY_USER_ID: "account_b"}
+
+    with (
+        patch(
+            "custom_components.sensi.client.SensiClient.wait_for_devices"
+        ) as mock_wait_for_devices,
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=other_account,
+        ),
+        patch(REAUTH_TARGET) as mock_start_reauth,
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    # Refused before the client was ever constructed.
+    mock_wait_for_devices.assert_not_called()
+    assert mock_entry.state is ConfigEntryState.SETUP_ERROR
+    mock_start_reauth.assert_called_once()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_setup_accepts_a_store_for_this_account(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """The matching case still loads, so the guard is not just refusing."""
+
+    mock_entry = mock_coordinator.config_entry
+    hass.config_entries.async_update_entry(
+        mock_entry, unique_id=mock_auth_data[KEY_USER_ID]
+    )
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
