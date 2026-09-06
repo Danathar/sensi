@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from custom_components.sensi import SUPPORTED_PLATFORMS, async_unload_entry
 from custom_components.sensi.auth import (
     KEY_USER_ID,
     AuthenticationError,
@@ -444,3 +445,27 @@ async def test_a_teardown_error_does_not_mask_the_setup_failure(
 
     assert mock_entry.state is ConfigEntryState.SETUP_RETRY
     assert mock_entry.reason == reason
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_unload_without_a_coordinator_still_unloads_the_platforms(
+    hass: HomeAssistant, mock_coordinator
+) -> None:
+    """An entry with no runtime_data has no client to stop, and must not skip the unload.
+
+    async_unload_entry guards the client teardown with `if coordinator`, but
+    every test reached it through a successful setup, so runtime_data was
+    always populated. Home Assistant calls unload on an entry whose setup
+    failed before the coordinator was assigned; the platforms still have to
+    come down, and reaching for `.client` on a None must not raise.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    mock_entry.runtime_data = None
+
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", return_value=True
+    ) as mock_unload_platforms:
+        assert await async_unload_entry(hass, mock_entry) is True
+
+    mock_unload_platforms.assert_awaited_once_with(mock_entry, SUPPORTED_PLATFORMS)
