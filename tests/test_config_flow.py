@@ -19,6 +19,7 @@ from custom_components.sensi.config_flow import (
     SensiFlowHandler,
 )
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN, SENSI_NAME
+from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -117,7 +118,7 @@ class TestSensiFlowHandler:
         )
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token"
+            "custom_components.sensi.config_flow.validate_refresh_token"
         ) as mock_refresh:
             mock_refresh.return_value = new_config
             result = await handler._try_login(config)  # noqa: SLF001
@@ -134,7 +135,7 @@ class TestSensiFlowHandler:
         config = AuthenticationConfig(refresh_token="test_token")
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token"
+            "custom_components.sensi.config_flow.validate_refresh_token"
         ) as mock_refresh:
             mock_refresh.side_effect = SensiConnectionError("Connection failed")
             result = await handler._try_login(config)  # noqa: SLF001
@@ -151,7 +152,7 @@ class TestSensiFlowHandler:
         config = AuthenticationConfig(refresh_token="invalid_token")
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token"
+            "custom_components.sensi.config_flow.validate_refresh_token"
         ) as mock_refresh:
             mock_refresh.side_effect = AuthenticationError("Invalid credentials")
             result = await handler._try_login(config)  # noqa: SLF001
@@ -168,7 +169,7 @@ class TestSensiFlowHandler:
         config = AuthenticationConfig(refresh_token="test_token")
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token"
+            "custom_components.sensi.config_flow.validate_refresh_token"
         ) as mock_refresh:
             mock_refresh.side_effect = ValueError("Unexpected error")
             result = await handler._try_login(config)  # noqa: SLF001
@@ -482,7 +483,7 @@ class TestReauthFlowRouting:
 
         with (
             patch(
-                "custom_components.sensi.config_flow.refresh_access_token",
+                "custom_components.sensi.config_flow.validate_refresh_token",
                 return_value=AuthenticationConfig(
                     refresh_token="new_token", user_id="user123"
                 ),
@@ -506,7 +507,7 @@ class TestReauthFlowRouting:
         result = await entry.start_reauth_flow(hass)
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token",
+            "custom_components.sensi.config_flow.validate_refresh_token",
             return_value=AuthenticationConfig(
                 refresh_token="someone_elses_token", user_id="someone_else"
             ),
@@ -527,7 +528,7 @@ class TestReauthFlowRouting:
         result = await entry.start_reauth_flow(hass)
 
         with patch(
-            "custom_components.sensi.config_flow.refresh_access_token",
+            "custom_components.sensi.config_flow.validate_refresh_token",
             side_effect=AuthenticationError("expired"),
         ):
             result2 = await hass.config_entries.flow.async_configure(
@@ -539,7 +540,7 @@ class TestReauthFlowRouting:
 
         with (
             patch(
-                "custom_components.sensi.config_flow.refresh_access_token",
+                "custom_components.sensi.config_flow.validate_refresh_token",
                 return_value=AuthenticationConfig(
                     refresh_token="new_token", user_id="user123"
                 ),
@@ -554,6 +555,175 @@ class TestReauthFlowRouting:
         assert result3["type"] == FlowResultType.ABORT
         assert result3["reason"] == "reauth_successful"
         assert entry.data[CONFIG_REFRESH_TOKEN] == "new_token"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+class TestCredentialsReachDiskOnlyOnAcceptance:
+    """Validating a token must not commit it.
+
+    STORAGE_KEY is the domain, so there is exactly one credential store for
+    the whole integration, and `get_stored_config` is what `async_setup_entry`
+    reads. Validating through `refresh_access_token` wrote the candidate's
+    tokens there before the flow had looked at the account, so a reauth the
+    flow *rejected* as wrong_account still left the other account's
+    credentials on disk. The running client keeps working from memory until
+    the next restart, and then the entry - still carrying account A's
+    unique_id and A's devices - connects as B.
+
+    These go through `hass.config_entries.flow` rather than calling the step,
+    because the whole point is what the flow does around the validation call.
+    """
+
+    _VALIDATED_A = AuthenticationConfig(
+        refresh_token="a_rotated",
+        access_token="a_access",
+        expires_at=123.0,
+        user_id="user123",
+    )
+    _VALIDATED_B = AuthenticationConfig(
+        refresh_token="b_rotated",
+        access_token="b_access",
+        expires_at=456.0,
+        user_id="someone_else",
+    )
+
+    @pytest.fixture
+    def entry(self, hass: HomeAssistant) -> MockConfigEntry:
+        """Return an entry for account user123 whose token has gone stale."""
+        entry = MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={CONFIG_REFRESH_TOKEN: "old_token"},
+            unique_id="user123",
+            title=SENSI_NAME,
+        )
+        entry.add_to_hass(hass)
+        return entry
+
+    async def test_a_wrong_account_reauth_leaves_the_store_untouched(
+        self, hass: HomeAssistant, entry: MockConfigEntry
+    ):
+        """The bug, as an assertion: rejected means nothing was written."""
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_B,
+            ),
+            patch("custom_components.sensi.auth.async_save_config") as mock_save_auth,
+            patch(
+                "custom_components.sensi.config_flow.async_save_config"
+            ) as mock_save_flow,
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "token_for_someone_else"}
+            )
+
+        assert result2["errors"] == {"base": "wrong_account"}
+        mock_save_flow.assert_not_called()
+        mock_save_auth.assert_not_called()
+        # The entry keeps the token it had, too.
+        assert entry.data[CONFIG_REFRESH_TOKEN] == "old_token"
+
+    async def test_an_accepted_reauth_saves_the_rotated_token(
+        self, hass: HomeAssistant, entry: MockConfigEntry
+    ):
+        """Accepting is what commits, and it commits what came back.
+
+        Sensi rotates the refresh token on every exchange, so the token the
+        user pasted is spent by the time validation returns. Writing that one
+        into entry.data - which is what happened before - stored a credential
+        guaranteed to fail on first use.
+        """
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_A,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_by_the_user"}
+            )
+            await hass.async_block_till_done()
+
+        assert result2["type"] == FlowResultType.ABORT
+        assert result2["reason"] == "reauth_successful"
+        mock_save.assert_called_once_with(hass, self._VALIDATED_A)
+        assert entry.data[CONFIG_REFRESH_TOKEN] == "a_rotated"
+
+    async def test_a_rejected_token_saves_nothing(
+        self, hass: HomeAssistant, entry: MockConfigEntry
+    ):
+        """A token the backend refuses never gets as far as the store."""
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                side_effect=AuthenticationError("expired"),
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "still_bad"}
+            )
+
+        assert result2["errors"] == {"base": "invalid_auth"}
+        mock_save.assert_not_called()
+
+    async def test_initial_setup_saves_the_rotated_token(self, hass: HomeAssistant):
+        """The user step commits too - nothing else writes the store."""
+        result = await hass.config_entries.flow.async_init(
+            SENSI_DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_A,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_by_the_user"}
+            )
+            await hass.async_block_till_done()
+
+        assert result2["type"] == FlowResultType.CREATE_ENTRY
+        mock_save.assert_called_once_with(hass, self._VALIDATED_A)
+        assert result2["data"] == {CONFIG_REFRESH_TOKEN: "a_rotated"}
+
+    async def test_a_second_setup_never_gets_as_far_as_validating(
+        self, hass: HomeAssistant, entry: MockConfigEntry
+    ):
+        """manifest.json sets single_config_entry, so the form never opens.
+
+        This is why the store cannot be rewritten by re-adding an account that
+        is already set up: the flow aborts before any token is exchanged. The
+        save in async_step_user is still placed after
+        `_abort_if_unique_id_configured` rather than before it, so the
+        ordering does not depend on that manifest flag staying set - but this
+        is the route the flag closes, and it is worth pinning that it does.
+        """
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token"
+            ) as mock_validate,
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+        ):
+            result = await hass.config_entries.flow.async_init(
+                SENSI_DOMAIN, context={"source": config_entries.SOURCE_USER}
+            )
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "single_instance_allowed"
+        mock_validate.assert_not_called()
+        mock_save.assert_not_called()
 
 
 @pytest.mark.parametrize("path", STRINGS_FILES, ids=lambda p: p.name)
