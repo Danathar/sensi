@@ -1,7 +1,9 @@
 """Tests for Sensi client component."""
 
+import asyncio
+import contextlib
 from dataclasses import asdict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -18,7 +20,7 @@ from custom_components.sensi.event import (
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
 
 class TestRoundHumidity:
@@ -931,10 +933,51 @@ class TestSetterRetryOnForbidden:
         mock_connect.assert_not_awaited()
         assert [r for r in caplog.records if r.levelname == "WARNING"] == []
 
-    async def test_revoked_refresh_token_reaches_reauth(self, mock_coordinator) -> None:
-        """AuthenticationError propagates so the coordinator can prompt reauth."""
+    async def test_revoked_refresh_token_starts_reauth_and_fails_cleanly(
+        self, mock_coordinator
+    ) -> None:
+        """A dead credential starts the reauth flow from the setter path.
+
+        No coordinator wraps an entity service call - its AuthenticationError
+        handler only wraps async_update_devices - so nothing downstream can
+        translate the failure. The client starts reauth on its config entry
+        itself and fails the call with the HomeAssistantError the entity
+        layer surfaces cleanly, instead of a bare AuthenticationError that
+        would reach the user as an unhandled traceback with the reauth prompt
+        deferred until the access token dies of old age.
+        """
 
         client = mock_coordinator.client
+        entry = mock_coordinator.config_entry
+
+        with (
+            patch.object(
+                client,
+                "try_refresh_access_token",
+                side_effect=AuthenticationError("refresh token revoked"),
+            ),
+            patch.object(entry, "async_start_reauth") as mock_reauth,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+            pytest.raises(HomeAssistantError, match="re-authenticated"),
+        ):
+            mock_emit.return_value = ActionResponse("Forbidden", None)
+            await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        # Never re-emitted: there is no point retrying on a dead credential.
+        mock_emit.assert_awaited_once()
+        mock_reauth.assert_called_once()
+
+    async def test_without_an_entry_a_dead_credential_still_fails_cleanly(
+        self, mock_coordinator
+    ) -> None:
+        """A dead credential without a config entry still fails cleanly.
+
+        A client built without an entry cannot start reauth, but the service
+        call must still fail as a HomeAssistantError, not a raw traceback.
+        """
+
+        client = mock_coordinator.client
+        client._config_entry = None
 
         with (
             patch.object(
@@ -943,13 +986,99 @@ class TestSetterRetryOnForbidden:
                 side_effect=AuthenticationError("refresh token revoked"),
             ),
             patch.object(client, "_async_emit_setter") as mock_emit,
-            pytest.raises(AuthenticationError),
+            pytest.raises(HomeAssistantError, match="re-authenticated"),
         ):
             mock_emit.return_value = ActionResponse("Forbidden", None)
             await client._async_invoke_setter("set_temperature", {"a": 1})
 
-        # Never re-emitted: there is no point retrying on a dead credential.
         mock_emit.assert_awaited_once()
+
+    async def test_concurrent_refusals_share_one_recovery(
+        self, mock_coordinator, caplog
+    ) -> None:
+        """Two refusals in flight rotate the token once, not twice.
+
+        Sensi rotates the refresh token on every exchange, so two recoveries
+        presenting the same token would get the second exchange rejected - a
+        healthy credential misread as revoked - while their two
+        disconnect/connect pairs tear down each other's replacement socket.
+
+        This one runs through the real machinery - _async_emit_setter,
+        _send_event, the emit loop, a fake socket answering acks - rather
+        than stubbing the emit, so the serialization is exercised where the
+        concurrency actually lives. Only the two network edges are stubbed:
+        the token exchange and the socket construction inside _connect.
+        """
+
+        client = mock_coordinator.client
+
+        sockets: list[MagicMock] = []
+        emits_seen = 0
+
+        def make_socket() -> MagicMock:
+            sio = MagicMock()
+            sio.connected = True
+            sio.shutdown = AsyncMock()
+            sio.wait = AsyncMock()
+
+            async def emit(_name, _data, _namespace, callback):
+                nonlocal emits_seen
+                emits_seen += 1
+                # Refuse both first attempts; accept every retry.
+                if emits_seen <= 2:
+                    callback({"error": {"description": "Forbidden"}})
+                else:
+                    callback("accepted")
+
+            sio.emit = AsyncMock(side_effect=emit)
+            sockets.append(sio)
+            return sio
+
+        async def fake_connect():
+            client._sio = make_socket()
+
+        client._sio = make_socket()
+        emit_loop = asyncio.get_running_loop().create_task(client._emit_loop())
+
+        try:
+            with (
+                patch.object(client, "try_refresh_access_token") as mock_refresh,
+                patch.object(
+                    client, "_connect", side_effect=fake_connect
+                ) as mock_connect,
+            ):
+                first, second = await asyncio.gather(
+                    client._async_invoke_setter("set_temperature", {"a": 1}),
+                    client._async_invoke_setter("set_temperature", {"b": 2}),
+                )
+        finally:
+            emit_loop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await emit_loop
+
+        assert first.error is None
+        assert second.error is None
+
+        # One recovery served both refusals: the loser of the lock found the
+        # epoch advanced and reused the fresh token and socket instead of
+        # rotating the refresh token a second time.
+        mock_refresh.assert_awaited_once()
+        mock_connect.assert_awaited_once()
+
+        # Exactly one replacement socket, four emits in total, and both
+        # retries carried by the replacement - recovery always completes
+        # before either caller re-emits.
+        assert len(sockets) == 2
+        assert emits_seen == 4
+        assert sockets[1].emit.await_count >= 2
+
+        # Each caller still reports its own attempt pair.
+        refusals = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "was refused with" in r.message
+        ]
+        assert len(refusals) == 2
 
     async def test_failed_reconnect_reports_the_original_refusal(
         self, mock_coordinator, caplog

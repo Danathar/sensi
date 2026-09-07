@@ -10,6 +10,7 @@ from typing import Self
 import socketio
 from socketio.exceptions import ConnectionError
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.util.enum import try_parse_enum
@@ -73,6 +74,7 @@ class SensiClient:
         self,
         hass: HomeAssistant,
         config: AuthenticationConfig,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         """Initialize the Sensi Client."""
 
@@ -80,6 +82,7 @@ class SensiClient:
 
         self._hass = hass
         self._config = config
+        self._config_entry = config_entry
 
         self._event_queue = asyncio.Queue()
         self._futures: dict[tuple[str, str | None], list[asyncio.Future]] = {}
@@ -87,6 +90,16 @@ class SensiClient:
         self._sio: socketio.AsyncClient = None
         self._connect_error_data = None
         self._devices: dict[str, SensiDevice] = {}
+
+        # Serializes the refresh/disconnect/connect sequence a refused setter
+        # runs, and counts completed recoveries. Sensi rotates the refresh
+        # token on every exchange, so two refusals recovering concurrently
+        # would present the same refresh token twice - the second exchange is
+        # rejected and a healthy credential is misread as revoked - while
+        # their disconnect/connect pairs tear down each other's fresh socket.
+        # See _async_invoke_setter.
+        self._recovery_lock = asyncio.Lock()
+        self._recovery_epoch = 0
 
     async def __aenter__(self) -> Self:
         """Enter context manager."""
@@ -508,22 +521,48 @@ class SensiClient:
         socket is also refused, the reply is telling us something other than
         "try again", and burning more attempts inside a service call only
         delays the error the caller needs to see.
+
+        Recovery is serialized behind _recovery_lock and counted by
+        _recovery_epoch. Sensi rotates the refresh token on every exchange, so
+        two refusals recovering concurrently would present the same refresh
+        token twice; the second exchange is rejected and a healthy credential
+        is misread as revoked, on top of the two disconnect/connect pairs
+        tearing down each other's fresh socket. The epoch is read before the
+        first emit: a caller that finds it advanced by the time it holds the
+        lock was refused on the connection someone else has since replaced, so
+        it retries on the fresh one instead of rotating the token again.
         """
+
+        epoch = self._recovery_epoch
 
         response = await self._async_emit_setter(event, request_data)
         if response.error not in RETRYABLE_SETTER_ERRORS:
             return response
 
         try:
-            await self.try_refresh_access_token()
-            await self._async_disconnect()
-            await self._connect()
-        except AuthenticationError:
+            async with self._recovery_lock:
+                if self._recovery_epoch == epoch:
+                    await self.try_refresh_access_token()
+                    await self._async_disconnect()
+                    await self._connect()
+                    self._recovery_epoch += 1
+        except AuthenticationError as err:
             # A refresh token the backend has rejected outright is not this
-            # transient case, and the coordinator turns this into the reauth
-            # prompt. Swallowing it here would leave the integration retrying
-            # a credential that can never work again.
-            raise
+            # transient case. No coordinator is on a service call's path to
+            # translate this into ConfigEntryAuthFailed - its handler only
+            # wraps async_update_devices - so start the reauth flow here,
+            # where the failure is known, and fail the service call with the
+            # error type the entity layer is built to surface. Left alone, a
+            # bare AuthenticationError is an unhandled traceback for the user
+            # and the reauth prompt waits until the access token dies of old
+            # age, up to 4 hours later.
+            if self._config_entry is not None:
+                self._config_entry.async_start_reauth(self._hass)
+            raise HomeAssistantError(
+                f"Setter {event} was refused with '{response.error}' and the "
+                "stored credential could not be refreshed; Sensi needs to be "
+                "re-authenticated with a new refresh token"
+            ) from err
         except SensiConnectionError:
             # The recovery itself failed. Report the refusal the caller was
             # already going to get rather than replacing it with a connection

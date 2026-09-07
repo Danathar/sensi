@@ -33,7 +33,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
         # with. Passing it lets get_stored_config refuse a store that belongs
         # to a different account rather than connecting as the wrong one.
         config = await get_stored_config(hass, entry.unique_id)
-        client = SensiClient(hass, config)
+        # The entry lets the client start a reauth flow itself when a setter's
+        # recovery discovers the refresh token is dead - a service call has no
+        # coordinator on its path to do that translation.
+        client = SensiClient(hass, config, config_entry=entry)
         await client.wait_for_devices()
 
         entry.runtime_data = SensiUpdateCoordinator(hass, client, entry)
