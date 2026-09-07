@@ -1,6 +1,9 @@
 __pycache__
 *.py.b*
 secrets.yaml
+# Literal credentials extracted locally for the #108 history scan --
+# see docs/security-incidents.md. Never committed, by construction.
+*.secrets
 
 # Logs
 *.log

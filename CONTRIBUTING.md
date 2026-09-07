@@ -179,6 +179,9 @@ it belongs.
   on your pull request means, and what each tier asks of you
 - [`docs/SECURITY-AI.md`](docs/SECURITY-AI.md) — what automated agents are
   permitted to do here, and the two switches that gate the AI-fix workflow
+- [`docs/security-incidents.md`](docs/security-incidents.md) — the record of
+  security incidents and their remediation, written so that it never quotes
+  the thing it is about
 
 ## Reporting a problem
 
