@@ -1,0 +1,45 @@
+# Who has to look at what.
+#
+# Two jobs. GitHub auto-requests review from the owner of every path a pull
+# request touches, and -- once the master ruleset turns on code-owner review
+# (see docs/branch-protection.md) -- makes that review mandatory rather than
+# advisory.
+#
+# Until then this file is a declaration, not a gate. It is still worth having
+# committed: the list of paths that make up the control plane is the thing
+# being agreed, and agreeing it is a separate act from enforcing it.
+#
+# Ordering matters -- the LAST matching pattern wins, so the broad default is
+# first and the sensitive paths come after it.
+
+# Everything, by default.
+*                                       @Danathar
+
+# --- the control plane ----------------------------------------------------
+# Changes here alter what the other gates can do, so they are exactly the ones
+# that must not be able to ride through on an ordinary review. An agent that
+# can edit the workflow that checks it has no constraint; see
+# docs/SECURITY-AI.md, "Disable or edit the security boundary itself".
+
+# CI, release, and every other automation that holds a token.
+/.github/workflows/                     @Danathar
+
+# The ruleset definition, and this file. Both describe the boundary, so both
+# are inside it.
+/.github/rulesets/                      @Danathar
+/.github/CODEOWNERS                     @Danathar
+
+# What agents are permitted to do, and the mechanical half of it.
+/docs/SECURITY-AI.md                    @Danathar
+/docs/branch-protection.md              @Danathar
+/AGENTS.md                              @Danathar
+/.claude/settings.json                  @Danathar
+
+# Change classification feeds the labels a reviewer triages by.
+/.github/risk-tiers.yml                 @Danathar
+
+# --- credential handling ---------------------------------------------------
+# The token lives here. This repository has already had a credential committed
+# once -- see docs/SECURITY-AI.md, "What makes this repository sensitive" --
+# which is why this path is called out separately from the component.
+/custom_components/sensi/auth.py        @Danathar
