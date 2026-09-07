@@ -1,11 +1,13 @@
 """Tests for Sensi client component."""
 
+import asyncio
+import contextlib
 from dataclasses import asdict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.sensi.auth import SensiConnectionError
+from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import ActionResponse, round_humidity
 from custom_components.sensi.data import FanMode, OperatingMode
 from custom_components.sensi.event import (
@@ -18,7 +20,7 @@ from custom_components.sensi.event import (
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
 
 class TestRoundHumidity:
@@ -802,3 +804,304 @@ class TestSetterErrorsLeaveStateAlone:
 
         assert response.error == "Failed"
         assert mock_device.state.humidity_offset == 10
+
+
+class TestSetterRetryOnForbidden:
+    """Test the setter retry for auth-shaped refusals.
+
+    The backend sporadically refuses a validly-authenticated write with
+    `Forbidden` - observed once with 1h46m of token validity left, on a socket
+    seconds old, with reads healthy either side of it. Before the retry that
+    lost a `mode: single` automation's scheduled step, because nothing in the
+    client noticed an in-band refusal on an established socket.
+
+    These drive `_async_invoke_setter` directly with `_async_emit_setter`
+    stubbed, so the retry decision is what is under test rather than the
+    socket plumbing beneath it.
+    """
+
+    @staticmethod
+    def _patches(client):
+        """Patch the recovery steps the retry drives."""
+        return (
+            patch.object(client, "try_refresh_access_token"),
+            patch.object(client, "_async_disconnect"),
+            patch.object(client, "_connect"),
+        )
+
+    async def test_forbidden_then_accepted_retries_once_and_succeeds(
+        self, mock_coordinator, caplog
+    ) -> None:
+        """A refused write is retried on a fresh token and socket."""
+
+        client = mock_coordinator.client
+        refresh, disconnect, connect = self._patches(client)
+
+        with (
+            refresh as mock_refresh,
+            disconnect as mock_disconnect,
+            connect as mock_connect,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.side_effect = [
+                ActionResponse("Forbidden", None),
+                ActionResponse(None, {"target_temp": 75}),
+            ]
+
+            response = await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        # The caller sees the second attempt's success, not the first refusal.
+        assert response.error is None
+        assert response.data == {"target_temp": 75}
+
+        # Recovery ran, in the order that makes the retry meaningful: a new
+        # token first, then a socket that carries it.
+        mock_refresh.assert_awaited_once()
+        mock_disconnect.assert_awaited_once()
+        mock_connect.assert_awaited_once()
+
+        # Re-emitted the same event and payload, exactly twice in total.
+        assert mock_emit.await_count == 2
+        assert mock_emit.await_args_list[0].args == ("set_temperature", {"a": 1})
+        assert mock_emit.await_args_list[1].args == ("set_temperature", {"a": 1})
+
+        # Exactly one WARNING, naming both attempts. A silent success would
+        # hide the backend defect this exists to survive.
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "Forbidden" in warnings[0].message
+        assert "succeeded" in warnings[0].message
+
+    async def test_forbidden_twice_still_fails(self, mock_coordinator, caplog) -> None:
+        """A refusal that survives the retry is reported, as before the retry."""
+
+        client = mock_coordinator.client
+        refresh, disconnect, connect = self._patches(client)
+
+        with (
+            refresh,
+            disconnect,
+            connect,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.side_effect = [
+                ActionResponse("Forbidden", None),
+                ActionResponse("Forbidden", None),
+            ]
+
+            response = await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        # climate.py turns this into the HomeAssistantError the user saw
+        # before this change; the retry must not swallow it.
+        assert response.error == "Forbidden"
+        assert mock_emit.await_count == 2
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "was refused with 'Forbidden'" in warnings[0].message
+
+    @pytest.mark.parametrize(
+        "error",
+        ["Bad Request", "InvalidScale", "OutOfRange", "ThermostatOffline"],
+    )
+    async def test_genuine_rejections_fail_fast(
+        self, mock_coordinator, caplog, error: str
+    ) -> None:
+        """A rejected value is not retried.
+
+        These arrive with an `icd_id`: the device rejected what was sent, so a
+        second identical emit would fail identically and only delay the error.
+        """
+
+        client = mock_coordinator.client
+        refresh, disconnect, connect = self._patches(client)
+
+        with (
+            refresh as mock_refresh,
+            disconnect as mock_disconnect,
+            connect as mock_connect,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.return_value = ActionResponse(error, None)
+
+            response = await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        assert response.error == error
+        mock_emit.assert_awaited_once()
+        mock_refresh.assert_not_awaited()
+        mock_disconnect.assert_not_awaited()
+        mock_connect.assert_not_awaited()
+        assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+    async def test_revoked_refresh_token_starts_reauth_and_fails_cleanly(
+        self, mock_coordinator
+    ) -> None:
+        """A dead credential starts the reauth flow from the setter path.
+
+        No coordinator wraps an entity service call - its AuthenticationError
+        handler only wraps async_update_devices - so nothing downstream can
+        translate the failure. The client starts reauth on its config entry
+        itself and fails the call with the HomeAssistantError the entity
+        layer surfaces cleanly, instead of a bare AuthenticationError that
+        would reach the user as an unhandled traceback with the reauth prompt
+        deferred until the access token dies of old age.
+        """
+
+        client = mock_coordinator.client
+        entry = mock_coordinator.config_entry
+
+        with (
+            patch.object(
+                client,
+                "try_refresh_access_token",
+                side_effect=AuthenticationError("refresh token revoked"),
+            ),
+            patch.object(entry, "async_start_reauth") as mock_reauth,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+            pytest.raises(HomeAssistantError, match="re-authenticated"),
+        ):
+            mock_emit.return_value = ActionResponse("Forbidden", None)
+            await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        # Never re-emitted: there is no point retrying on a dead credential.
+        mock_emit.assert_awaited_once()
+        mock_reauth.assert_called_once()
+
+    async def test_without_an_entry_a_dead_credential_still_fails_cleanly(
+        self, mock_coordinator
+    ) -> None:
+        """A dead credential without a config entry still fails cleanly.
+
+        A client built without an entry cannot start reauth, but the service
+        call must still fail as a HomeAssistantError, not a raw traceback.
+        """
+
+        client = mock_coordinator.client
+        client._config_entry = None
+
+        with (
+            patch.object(
+                client,
+                "try_refresh_access_token",
+                side_effect=AuthenticationError("refresh token revoked"),
+            ),
+            patch.object(client, "_async_emit_setter") as mock_emit,
+            pytest.raises(HomeAssistantError, match="re-authenticated"),
+        ):
+            mock_emit.return_value = ActionResponse("Forbidden", None)
+            await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        mock_emit.assert_awaited_once()
+
+    async def test_concurrent_refusals_share_one_recovery(
+        self, mock_coordinator, caplog
+    ) -> None:
+        """Two refusals in flight rotate the token once, not twice.
+
+        Sensi rotates the refresh token on every exchange, so two recoveries
+        presenting the same token would get the second exchange rejected - a
+        healthy credential misread as revoked - while their two
+        disconnect/connect pairs tear down each other's replacement socket.
+
+        This one runs through the real machinery - _async_emit_setter,
+        _send_event, the emit loop, a fake socket answering acks - rather
+        than stubbing the emit, so the serialization is exercised where the
+        concurrency actually lives. Only the two network edges are stubbed:
+        the token exchange and the socket construction inside _connect.
+        """
+
+        client = mock_coordinator.client
+
+        sockets: list[MagicMock] = []
+        emits_seen = 0
+
+        def make_socket() -> MagicMock:
+            sio = MagicMock()
+            sio.connected = True
+            sio.shutdown = AsyncMock()
+            sio.wait = AsyncMock()
+
+            async def emit(_name, _data, _namespace, callback):
+                nonlocal emits_seen
+                emits_seen += 1
+                # Refuse both first attempts; accept every retry.
+                if emits_seen <= 2:
+                    callback({"error": {"description": "Forbidden"}})
+                else:
+                    callback("accepted")
+
+            sio.emit = AsyncMock(side_effect=emit)
+            sockets.append(sio)
+            return sio
+
+        async def fake_connect():
+            client._sio = make_socket()
+
+        client._sio = make_socket()
+        emit_loop = asyncio.get_running_loop().create_task(client._emit_loop())
+
+        try:
+            with (
+                patch.object(client, "try_refresh_access_token") as mock_refresh,
+                patch.object(
+                    client, "_connect", side_effect=fake_connect
+                ) as mock_connect,
+            ):
+                first, second = await asyncio.gather(
+                    client._async_invoke_setter("set_temperature", {"a": 1}),
+                    client._async_invoke_setter("set_temperature", {"b": 2}),
+                )
+        finally:
+            emit_loop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await emit_loop
+
+        assert first.error is None
+        assert second.error is None
+
+        # One recovery served both refusals: the loser of the lock found the
+        # epoch advanced and reused the fresh token and socket instead of
+        # rotating the refresh token a second time.
+        mock_refresh.assert_awaited_once()
+        mock_connect.assert_awaited_once()
+
+        # Exactly one replacement socket, four emits in total, and both
+        # retries carried by the replacement - recovery always completes
+        # before either caller re-emits.
+        assert len(sockets) == 2
+        assert emits_seen == 4
+        assert sockets[1].emit.await_count >= 2
+
+        # Each caller still reports its own attempt pair.
+        refusals = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "was refused with" in r.message
+        ]
+        assert len(refusals) == 2
+
+    async def test_failed_reconnect_reports_the_original_refusal(
+        self, mock_coordinator, caplog
+    ) -> None:
+        """If recovery fails, report the refusal rather than the plumbing."""
+
+        client = mock_coordinator.client
+
+        with (
+            patch.object(client, "try_refresh_access_token"),
+            patch.object(client, "_async_disconnect"),
+            patch.object(client, "_connect", side_effect=SensiConnectionError("nope")),
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.return_value = ActionResponse("Forbidden", None)
+
+            response = await client._async_invoke_setter("set_temperature", {"a": 1})
+
+        # The setter still did not happen, and that is what the message says -
+        # not a connection error about machinery the caller never asked for.
+        assert response.error == "Forbidden"
+        mock_emit.assert_awaited_once()
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "could not reconnect to retry" in warnings[0].message

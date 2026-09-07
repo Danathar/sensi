@@ -43,10 +43,13 @@ def mock_auth_data() -> any:
 def mock_coordinator(hass: HomeAssistant, mock_auth_data) -> SensiUpdateCoordinator:
     """Fixture to provide an instance of SensiUpdateCoordinator linked to the mock entry."""
     auth_config = AuthenticationConfig(mock_auth_data)
-    client = SensiClient(hass, auth_config)
 
     config_entry = MockConfigEntry(domain=SENSI_DOMAIN, data={}, entry_id="id1")
     config_entry.add_to_hass(hass)
+
+    # Mirrors async_setup_entry: the client holds the entry so a setter whose
+    # recovery hits a dead refresh token can start the reauth flow itself.
+    client = SensiClient(hass, auth_config, config_entry=config_entry)
 
     coordinator = SensiUpdateCoordinator(hass, client, config_entry)
     config_entry.runtime_data = coordinator
