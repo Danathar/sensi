@@ -11,13 +11,22 @@ name: Release
 # Tags carry no "v" prefix, which is the other half of telling the two lines
 # apart at a glance: upstream tags look like `v2.1.6`, ours like `2026.9.0`.
 #
-# Two ways in:
+# The version lives in custom_components/sensi/manifest.json, and it is changed
+# the way every other file here is changed: in a pull request, reviewed, and
+# merged under the repository ruleset. This workflow never writes to master.
+# It tags a commit that is already there and publishes it, so the number it
+# releases is one that passed CI and review rather than one a workflow run
+# invented and pushed past the rules that govern everyone else.
 #
-#   * Monthly, on a schedule, deriving the version from the date. Guarded -
-#     see "Decide whether to release" below - because most months here change
-#     only CI and docs, and a release users are prompted to install should
-#     contain something they can observe.
-#   * By hand, with an explicit version, for anything off-cycle.
+# Two jobs, and a run is only ever one of them:
+#
+#   * `prepare` opens the version-bump pull request and stops. Nothing is
+#     tagged or published, and the only branch it pushes is a release/* one.
+#   * `release` tags the manifest's version on the checked-out commit and
+#     publishes it - monthly on a schedule, or by hand. Guarded; see
+#     "Decide whether to release" below, because most months here change only
+#     CI and docs, and a release users are prompted to install should contain
+#     something they can observe.
 #
 # The version is never derived from commit messages. semantic-release cannot
 # produce CalVer, and this repository has no tags for it to count from - its
@@ -32,6 +41,10 @@ on:
     - cron: "0 9 1 * *"
   workflow_dispatch:
     inputs:
+      prepare:
+        description: "Open the version-bump pull request instead of releasing"
+        type: boolean
+        default: false
       version:
         description: "CalVer YYYY.M.PATCH (e.g. 2026.9.0). Leave blank to derive it."
         required: false
@@ -44,25 +57,160 @@ on:
         type: boolean
         default: false
       dry_run:
-        description: "Validate only - do not tag, push, or publish"
+        description: "Validate only - do not tag or publish"
         type: boolean
         default: false
 
-# Pushes a commit and a tag, and creates a release. Granted explicitly so it
-# does not inherit an organisation default and does not widen if that changes.
-permissions:
-  contents: write
-  checks: read
+# Nothing is granted workflow-wide; each job asks for what it needs, so a job
+# added later cannot quietly inherit the ability to write to this repository.
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  # The one definition of a release number, shared by both jobs so the check
+  # guarding the pull request and the check guarding the tag cannot drift
+  # apart. Four-digit year, unpadded 1-12 month, unpadded patch, and an
+  # optional b1/rc1 pre-release suffix.
+  CALVER_PATTERN: '^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)((b|rc)[1-9][0-9]*)?$'
+
 jobs:
+  # ------------------------------------------------------------------------
+  # Propose the next version. This is the only place the manifest changes, and
+  # it changes through a pull request like anything else.
+  # ------------------------------------------------------------------------
+  prepare:
+    name: prepare
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Pushes a release/* branch and opens a pull request - never master. The
+    # ruleset that governs master governs this pull request too, which is the
+    # point: release automation must not become a second route around it.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      # Derived from the date, not from commit messages: this month's line if
+      # it has not been released yet, otherwise the next patch in it.
+      - name: Decide the next version
+        id: version
+        env:
+          # Through the environment, never interpolated into the script below.
+          # `${{ }}` is substituted before bash parses the file, so an input
+          # containing shell syntax would otherwise become part of the program
+          # rather than data for it - and this job can write to the repository.
+          GIVEN_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          given="$GIVEN_VERSION"
+
+          if [ -n "$given" ]; then
+            # Checked before it is used for anything: as a branch name, as a
+            # commit message, or written to $GITHUB_OUTPUT, where an unchecked
+            # value carrying a newline forges outputs for later steps.
+            if ! printf '%s' "$given" | grep -qE "$CALVER_PATTERN"; then
+              echo "::error::'$given' is not CalVer YYYY.M.PATCH (e.g. 2026.9.0)," >&2
+              echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+              echo "Month must not be zero-padded; no 'v' prefix." >&2
+              exit 1
+            fi
+            version="$given"
+            echo "Using the version given: $version"
+          else
+            month="$(date -u +%Y).$(date -u +%-m)"
+            # `|| true` is load-bearing: with no tags yet, git prints nothing,
+            # grep -v exits 1 on empty input, and pipefail turns that into a
+            # failed step. The no-tags case is exactly the first release.
+            latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+
+            if [ -z "$latest" ]; then
+              version="${month}.0"
+            else
+              version="${month}.$(( ${latest##*.} + 1 ))"
+            fi
+
+            echo "Derived $version (latest this month: ${latest:-none})."
+          fi
+
+          if git rev-parse "refs/tags/$version" >/dev/null 2>&1; then
+            echo "::error::Tag $version already exists." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Bump the manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest="custom_components/sensi/manifest.json"
+          # jq, not sed: it cannot corrupt the JSON, and it fails loudly.
+          jq --arg v "$VERSION" '.version = $v' "$manifest" > "$manifest.tmp"
+          mv "$manifest.tmp" "$manifest"
+          # The manifest path and the version reach python through the
+          # environment too, rather than being pasted into its source.
+          MANIFEST="$manifest" python3 -c "import json,os;assert json.load(open(os.environ['MANIFEST']))['version']==os.environ['VERSION']"
+          git --no-pager diff -- "$manifest"
+
+      - name: Open the pull request
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "::error::The manifest is already at $VERSION." >&2
+            echo "If that version has not been released, run this workflow" >&2
+            echo "without 'prepare' to tag and publish it." >&2
+            exit 1
+          fi
+
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          branch="release/$VERSION"
+          git checkout -b "$branch"
+          git add custom_components/sensi/manifest.json
+          git commit -s -m "chore(release): $VERSION"
+          git push origin "HEAD:refs/heads/$branch"
+
+          gh pr create \
+            --base "$GITHUB_REF_NAME" \
+            --head "$branch" \
+            --title "chore(release): $VERSION" \
+            --body "Sets the manifest version to \`$VERSION\`.
+
+          Merging this is what approves the number. The Release workflow then
+          tags the commit that lands and publishes it; it does not change the
+          version itself."
+
+          echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------------
+  # Tag an approved commit and publish it. Reads the version; never sets it.
+  # ------------------------------------------------------------------------
   release:
     name: release
+    if: github.event_name != 'workflow_dispatch' || !inputs.prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Pushes a tag and creates a release; no step in this job writes a branch.
+    # Granted explicitly so it does not inherit an organisation default and
+    # does not widen if that changes.
+    permissions:
+      contents: write
+      checks: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,9 +226,10 @@ jobs:
         id: enabled
         env:
           OPTED_IN: ${{ vars.AUTO_RELEASE_ENABLED == 'true' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" != "schedule" ]; then
+          if [ "$EVENT_NAME" != "schedule" ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -100,6 +249,8 @@ jobs:
       - name: Decide whether to release
         id: decide
         if: steps.enabled.outputs.go == 'true'
+        env:
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           # `|| true` is load-bearing: with no tags yet, git prints nothing,
@@ -116,7 +267,7 @@ jobs:
           changed="$(git diff --name-only "$last"..HEAD -- custom_components/sensi | wc -l)"
           echo "Commits since $last touching the component: $changed file(s)."
 
-          if [ "$changed" -gt 0 ] || [ "${{ inputs.force }}" = "true" ]; then
+          if [ "$changed" -gt 0 ] || [ "$FORCE" = "true" ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"
@@ -150,32 +301,53 @@ jobs:
           fi
           echo "All checks on ${GITHUB_SHA::12} are green."
 
-      # Derived from the date, not from commit messages: this month's line if
-      # it has not been released yet, otherwise the next patch in it.
+      # The number comes off the merged manifest, not from this run. That file
+      # changed in a reviewed pull request, which is what makes the version an
+      # approved one; a workflow input can only confirm it, never choose it.
       - name: Decide the version
         id: version
         if: steps.decide.outputs.go == 'true'
+        env:
+          # Through the environment, never interpolated into the script below.
+          # `${{ }}` is substituted before bash parses the file, so an input
+          # containing shell syntax would otherwise become part of the program
+          # rather than data for it - and this job holds contents: write.
+          GIVEN_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          given="${{ inputs.version }}"
+          given="$GIVEN_VERSION"
+          version="$(python3 -c "import json;print(json.load(open('custom_components/sensi/manifest.json'))['version'])")"
+          echo "The manifest on this commit says $version."
 
-          if [ -n "$given" ]; then
-            echo "version=$given" >> "$GITHUB_OUTPUT"
-            echo "Using the version given: $given"
-            exit 0
+          # Validated here: after the transfer through the environment, and
+          # before the value is compared, printed, or acted on.
+          if [ -n "$given" ] && ! printf '%s' "$given" | grep -qE "$CALVER_PATTERN"; then
+            echo "::error::'$given' is not CalVer YYYY.M.PATCH (e.g. 2026.9.0)," >&2
+            echo "optionally with a b1/rc1 suffix for a pre-release." >&2
+            echo "Month must not be zero-padded; no 'v' prefix." >&2
+            exit 1
           fi
 
-          month="$(date -u +%Y).$(date -u +%-m)"
-          latest="$(git tag --list "${month}.*" | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
+          # $GITHUB_OUTPUT is a file of key=value lines, so a value carrying a
+          # newline forges outputs for every later step that reads them.
+          # Nothing unchecked is written to it.
+          if ! printf '%s' "$version" | grep -qE "$CALVER_PATTERN"; then
+            echo "::error::the manifest version '$version' is not CalVer." >&2
+            exit 1
+          fi
 
-          if [ -z "$latest" ]; then
-            version="${month}.0"
-          else
-            version="${month}.$(( ${latest##*.} + 1 ))"
+          # An explicit input confirms the number; it does not choose it.
+          # Typing one the manifest does not carry means one of the two is
+          # wrong, and guessing which would publish the wrong thing.
+          if [ -n "$given" ] && [ "$given" != "$version" ]; then
+            echo "::error::asked for $given, but the manifest says $version." >&2
+            echo "This workflow tags what master already carries; it does not" >&2
+            echo "change the version. Run it with 'prepare' to open the" >&2
+            echo "version-bump pull request for $given, and merge that first." >&2
+            exit 1
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Derived $version (latest this month: ${latest:-none})."
 
       # Everything that can be wrong is checked before anything is written.
       # A release is the one operation here that users can already have
@@ -185,15 +357,23 @@ jobs:
         if: steps.decide.outputs.go == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
 
-          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)((b|rc)[1-9][0-9]*)?$'; then
+          if ! printf '%s' "$VERSION" | grep -qE "$CALVER_PATTERN"; then
             echo "::error::'$VERSION' is not CalVer YYYY.M.PATCH (e.g. 2026.9.0)," >&2
             echo "optionally with a b1/rc1 suffix for a pre-release." >&2
             echo "Month must not be zero-padded; no 'v' prefix." >&2
             exit 1
           fi
+
+          # The `inputs` context is empty on a scheduled run - there are no
+          # inputs to a cron trigger - so an absent checkbox is an unticked
+          # one. Without this the monthly release compares "false" against ""
+          # and refuses every stable version it was asked to publish.
+          prerelease="$PRERELEASE"
+          [ -n "$prerelease" ] || prerelease=false
 
           # The suffix and the checkbox have to agree. Either one alone is a
           # mistake that publishes the wrong kind of release: a stable tag
@@ -202,14 +382,29 @@ jobs:
             *b[0-9]*|*rc[0-9]*) has_suffix=true ;;
             *) has_suffix=false ;;
           esac
-          if [ "$has_suffix" != "${{ inputs.prerelease }}" ]; then
-            echo "::error::version '$VERSION' and prerelease=${{ inputs.prerelease }} disagree." >&2
+          if [ "$has_suffix" != "$prerelease" ]; then
+            echo "::error::version '$VERSION' and prerelease=$prerelease disagree." >&2
             echo "A pre-release version must end b1/rc1, and a stable one must not." >&2
             exit 1
           fi
 
+          # The tag being free is also what proves the manifest moved: if this
+          # number is already published, master is still carrying the version
+          # of the last release and there is nothing new to tag.
           if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
-            echo "::error::Tag $VERSION already exists." >&2
+            echo "::error::Tag $VERSION already exists, so the manifest has not" >&2
+            echo "been bumped since that release. Run this workflow with" >&2
+            echo "'prepare' to open the version-bump pull request, merge it," >&2
+            echo "then release the commit that lands." >&2
+            exit 1
+          fi
+
+          # Nothing between here and the tag changes the manifest, so this is
+          # the file the tag will point at. Checked anyway: it is the single
+          # invariant that makes tagging instead of committing safe.
+          current="$(python3 -c "import json;print(json.load(open('custom_components/sensi/manifest.json'))['version'])")"
+          if [ "$current" != "$VERSION" ]; then
+            echo "::error::the manifest says $current, but $VERSION is being released." >&2
             exit 1
           fi
 
@@ -218,7 +413,6 @@ jobs:
           # number either strands users or, worse, looks like an update.
           # Stable tags only - a beta may be "older" than the last stable, and
           # must never become the number a later stable is measured against.
-          current="$(python3 -c "import json;print(json.load(open('custom_components/sensi/manifest.json'))['version'])")"
           newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
           echo "manifest: $current | newest stable tag: ${newest:-none} | releasing: $VERSION"
 
@@ -230,20 +424,7 @@ jobs:
             fi
           fi
 
-      - name: Set the manifest version
-        if: steps.decide.outputs.go == 'true'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          manifest="custom_components/sensi/manifest.json"
-          # jq, not sed: it cannot corrupt the JSON, and it fails loudly.
-          jq --arg v "$VERSION" '.version = $v' "$manifest" > "$manifest.tmp"
-          mv "$manifest.tmp" "$manifest"
-          python3 -c "import json;assert json.load(open('$manifest'))['version']=='$VERSION'"
-          git --no-pager diff -- "$manifest"
-
-      - name: Commit and tag
+      - name: Tag the approved commit
         if: steps.decide.outputs.go == 'true' && !inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -252,15 +433,10 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if ! git diff --quiet; then
-            git add custom_components/sensi/manifest.json
-            git commit -m "chore(release): $VERSION"
-          else
-            echo "Manifest already at $VERSION; tagging the current commit."
-          fi
-
+          # The tag is the only ref this workflow writes. The commit under it
+          # is already on master, having gone through a pull request and the
+          # ruleset, so a protected master needs no bypass for releases.
           git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
           git push origin "refs/tags/$VERSION"
 
       # A convenience asset for people installing by hand. HACS does NOT use
@@ -294,8 +470,9 @@ jobs:
         if: steps.decide.outputs.go == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "$DRY_RUN" = "true" ]; then
             echo "Dry run: **$VERSION** is valid. Nothing was tagged or published." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Released **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
