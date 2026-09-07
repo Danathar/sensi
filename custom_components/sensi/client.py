@@ -10,6 +10,7 @@ from typing import Self
 import socketio
 from socketio.exceptions import ConnectionError
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.util.enum import try_parse_enum
@@ -39,6 +40,20 @@ EMIT_LOOP_DELAY = 0.5
 EMIT_LOOP_DELAY_WHEN_DISCONNECTED = 1
 DISCONNECT_TIMEOUT = 10
 
+# Ack error descriptions that mean the backend refused an otherwise valid
+# write for an auth-shaped reason, rather than rejecting what it contained.
+#
+# The distinction is visible in the reply itself: InvalidScale, Bad Request,
+# OutOfRange and ThermostatOffline all arrive with an `icd_id`, naming the
+# device that rejected the value, while Forbidden arrives without one (see the
+# samples on get_error_description_from_event_callback). That marks it as a
+# server/auth-layer rejection of the request, and it is reproducible against a
+# token with hours of validity left on a socket seconds old - so it is
+# transient rather than a statement about the value being set, and re-emitting
+# it is safe. Everything else is a real rejection and must stay fail-fast:
+# retrying an out-of-range temperature would just fail twice, more slowly.
+RETRYABLE_SETTER_ERRORS = frozenset({"Forbidden"})
+
 
 @dataclass
 class ActionResponse:
@@ -59,6 +74,7 @@ class SensiClient:
         self,
         hass: HomeAssistant,
         config: AuthenticationConfig,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         """Initialize the Sensi Client."""
 
@@ -66,6 +82,7 @@ class SensiClient:
 
         self._hass = hass
         self._config = config
+        self._config_entry = config_entry
 
         self._event_queue = asyncio.Queue()
         self._futures: dict[tuple[str, str | None], list[asyncio.Future]] = {}
@@ -73,6 +90,16 @@ class SensiClient:
         self._sio: socketio.AsyncClient = None
         self._connect_error_data = None
         self._devices: dict[str, SensiDevice] = {}
+
+        # Serializes the refresh/disconnect/connect sequence a refused setter
+        # runs, and counts completed recoveries. Sensi rotates the refresh
+        # token on every exchange, so two refusals recovering concurrently
+        # would present the same refresh token twice - the second exchange is
+        # rejected and a healthy credential is misread as revoked - while
+        # their disconnect/connect pairs tear down each other's fresh socket.
+        # See _async_invoke_setter.
+        self._recovery_lock = asyncio.Lock()
+        self._recovery_epoch = 0
 
     async def __aenter__(self) -> Self:
         """Enter context manager."""
@@ -470,7 +497,106 @@ class SensiClient:
     async def _async_invoke_setter(
         self, event: str, request_data: dict
     ) -> ActionResponse:
-        """Emit event to update a setting."""
+        """Emit event to update a setting, retrying once if it is refused.
+
+        Every setter - temperature, mode, fan, humidity - routes through here,
+        so the retry covers all of them rather than one call path.
+
+        The backend sporadically answers a validly-authenticated write with
+        `Forbidden`. Observed with 1h46m of token validity remaining, on a
+        socket seconds old, with reads streaming normally either side of it:
+        one write refused, the next identical write accepted. Nothing in the
+        client noticed. `_connect` reacts to `jwt expired` in a *connection*
+        error, but an in-band refusal on an established socket never reaches
+        it, so the refusal became a HomeAssistantError and a `mode: single`
+        automation lost the step it was scheduled to make.
+
+        So a refusal is met with the strongest thing available short of
+        failing: mint a new token, drop the socket and build a new one, then
+        emit exactly once more. `_connect` alone is not enough - it refreshes
+        only when the token is expired or expired midway, and here it is
+        neither, which is why the refresh is explicit.
+
+        One retry, not a loop: if a second attempt on a new token and a new
+        socket is also refused, the reply is telling us something other than
+        "try again", and burning more attempts inside a service call only
+        delays the error the caller needs to see.
+
+        Recovery is serialized behind _recovery_lock and counted by
+        _recovery_epoch. Sensi rotates the refresh token on every exchange, so
+        two refusals recovering concurrently would present the same refresh
+        token twice; the second exchange is rejected and a healthy credential
+        is misread as revoked, on top of the two disconnect/connect pairs
+        tearing down each other's fresh socket. The epoch is read before the
+        first emit: a caller that finds it advanced by the time it holds the
+        lock was refused on the connection someone else has since replaced, so
+        it retries on the fresh one instead of rotating the token again.
+        """
+
+        epoch = self._recovery_epoch
+
+        response = await self._async_emit_setter(event, request_data)
+        if response.error not in RETRYABLE_SETTER_ERRORS:
+            return response
+
+        try:
+            async with self._recovery_lock:
+                if self._recovery_epoch == epoch:
+                    await self.try_refresh_access_token()
+                    await self._async_disconnect()
+                    await self._connect()
+                    self._recovery_epoch += 1
+        except AuthenticationError as err:
+            # A refresh token the backend has rejected outright is not this
+            # transient case. No coordinator is on a service call's path to
+            # translate this into ConfigEntryAuthFailed - its handler only
+            # wraps async_update_devices - so start the reauth flow here,
+            # where the failure is known, and fail the service call with the
+            # error type the entity layer is built to surface. Left alone, a
+            # bare AuthenticationError is an unhandled traceback for the user
+            # and the reauth prompt waits until the access token dies of old
+            # age, up to 4 hours later.
+            if self._config_entry is not None:
+                self._config_entry.async_start_reauth(self._hass)
+            raise HomeAssistantError(
+                f"Setter {event} was refused with '{response.error}' and the "
+                "stored credential could not be refreshed; Sensi needs to be "
+                "re-authenticated with a new refresh token"
+            ) from err
+        except SensiConnectionError:
+            # The recovery itself failed. Report the refusal the caller was
+            # already going to get rather than replacing it with a connection
+            # error about machinery they did not ask for - the setter still
+            # did not happen, and that is what the message should say.
+            LOGGER.warning(
+                "Setter %s was refused with '%s'; could not reconnect to retry",
+                event,
+                response.error,
+                exc_info=True,
+            )
+            return response
+
+        retry_response = await self._async_emit_setter(event, request_data)
+
+        # One WARNING carrying both attempts. A recurrence has to be visible
+        # in a default-configured log: the first attempt failing is the whole
+        # signal, and it is invisible if the retry succeeds and says nothing.
+        LOGGER.warning(
+            "Setter %s was refused with '%s'; refreshed the token, reconnected "
+            "and retried once - second attempt %s",
+            event,
+            response.error,
+            "succeeded"
+            if not retry_response.error
+            else f"was refused with '{retry_response.error}'",
+        )
+
+        return retry_response
+
+    async def _async_emit_setter(
+        self, event: str, request_data: dict
+    ) -> ActionResponse:
+        """Emit event to update a setting, once."""
 
         future = self._hass.loop.create_future()
 
