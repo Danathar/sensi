@@ -103,7 +103,12 @@ jobs:
           fetch-depth: 0
 
       - name: Run Claude Code
-        uses: anthropics/claude-code-action@v1
+        # Pinned rather than tracking the mutable @v1 tag: upstream re-points
+        # v1 at every release, so what runs in the repository's only
+        # write-privileged, secret-holding job would otherwise be decided by
+        # someone else's repo at run time -- same class as the softprops pin
+        # in release.yml. Re-resolve deliberately to update.
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
