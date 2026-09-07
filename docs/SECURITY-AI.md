@@ -33,7 +33,9 @@ supply-chain concern.
 - **Emit a credential.** Access tokens, refresh tokens, `Authorization` header
   values, and real `icd_id` values must not appear in source, log statements,
   docstrings, test fixtures, commit messages, pull request bodies, or issue
-  comments. `auth.py` exports `redact_token`; use it for anything token-shaped.
+  comments. `tests/test_no_real_identifiers.py` enforces the committed half of
+  this: every device identifier in the tree has to be one of the synthetic
+  constants it lists. `auth.py` exports `redact_token`; use it for anything token-shaped.
   This applies to values pasted into a conversation as much as to values found
   in the repository.
 - **Push to `master`.** Every change goes through a pull request. The branch is

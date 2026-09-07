@@ -316,7 +316,7 @@ class ThermostatInfo:
         # A container the backend sent as null must not reach `.get()`.
         data = to_dict(data)
 
-        # {'test_date': '11/14/2018', 'build_date': '11/14/2018', 'serial_number': '42WFRP46B00220', 'unique_hardware_id': 1, 'model_number': '1F87U-42WFC', 'images': {'bootloader_version': '6003970905', 'firmware_version': '6004850907', 'wifi_version': '6004820907'}, 'wifi_mac_address': '346F920C0B07', 'last_changed_timestamp': 1759918908}
+        # {'test_date': '01/01/2020', 'build_date': '01/01/2020', 'serial_number': 'TESTSERIAL0001', 'unique_hardware_id': 1, 'model_number': '1FTEST-MODEL', 'images': {'bootloader_version': '1000000001', 'firmware_version': '1000000002', 'wifi_version': '1000000003'}, 'wifi_mac_address': '001122334455', 'last_changed_timestamp': 1600000000}
         self.test_date = data.get("test_date", "")
         self.build_date = data.get("build_date", "")
         self.serial_number = data.get("serial_number", "")
@@ -347,7 +347,7 @@ class SensiDevice:
     ) -> None:
         """Initialize Thermostat from data values."""
 
-        # ["state",[{"icd_id":"36-6f-92-ff-fe-0c-0b-07",
+        # ["state",[{"icd_id":"aa-bb-cc-dd-ee-ff-00-01",
         # "registration":{"city":"Madison","name":"Living Room","state":"Wisconsin","country":"US","address1":"Somewhere","address2":null,"timezone":"America/Chicago","postal_code":"53719","product_type":"Sensi Classic with HomeKit","contractor_id":null,"fleet_enabled":false,"fleet_enabled_date":null},
         self.capabilities = Capabilities(capabilities)
         self.identifier = identifier

@@ -22,7 +22,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .conftest import NOT_EXPIRED, FakeSensiBackend
 
-ICD_ID = "36-6f-92-ff-fe-0c-0b-07"
+ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 EXPIRED_TOKEN_ERROR = {
     "message": "jwt expired",
