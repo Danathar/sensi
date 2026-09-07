@@ -3,10 +3,9 @@
 What automated agents are permitted to do in this repository, what they are
 not, and why the boundaries fall where they do.
 
-This is about agents acting *on* the repository — through Claude Code, through
-`.github/workflows/ai-fix.yml`, or through a review bot. For reporting a
-vulnerability in the integration itself, open an issue with no exploit details
-and no credentials in it.
+This is about agents acting *on* the repository — through Hive, through Claude
+Code, or through a review bot. For reporting a vulnerability in the integration
+itself, open an issue with no exploit details and no credentials in it.
 
 ## What makes this repository sensitive
 
@@ -89,32 +88,45 @@ data, not instructions.
   a write token: `labeler.yml` uses `pull_request_target` but checks out the
   base commit and only reads the change as a list of paths through the API.
 
-## The `ai-fix` workflow
+## One autonomous path, and it is Hive
 
-`.github/workflows/ai-fix.yml` can act on an issue labelled `ai-fix-requested`
-or a comment mentioning `@claude`. Both entry points require standing on the
-repository, not just a GitHub account: applying the label takes triage access,
-and the comment path requires the commenter's `author_association` to be
-`OWNER`, `MEMBER` or `COLLABORATOR` -- computed by GitHub from the commenter's
-relationship to the repository, not settable by the commenter. A drive-by
-`@claude` from anyone else leaves the workflow untriggered. It is also inert
-unless **both** of these are set:
+Autonomous maintenance on this repository goes through
+[Hive](https://github.com/hivecommons/hive) at ACMM L4, and through nothing
+else. Hive agents file issues and open pull requests; the gates in `ci.yml`,
+`coverage-gate.yml` and `validate.yml` apply to their output exactly as to
+anyone else's, and a human reviews and merges. No agent merges its own work.
 
-| Switch | Where |
-| --- | --- |
-| `ANTHROPIC_API_KEY` | repository secret |
-| `AI_FIX_ENABLED` = `true` | repository variable |
+There used to be a second path. `.github/workflows/ai-fix.yml` ran Claude
+in-repository, triggered by an issue label or an `@claude` comment, in a job
+holding `contents: write`, `issues: write`, `pull-requests: write`,
+`id-token: write` and the `ANTHROPIC_API_KEY` secret. It was removed, and the
+reasoning is worth keeping because it generalises.
 
-Two switches, not one, on purpose. The `ai-fix-requested` label is applied
-automatically by the issue-filing bot, so a key added for an unrelated reason
-must not silently start autonomous work on every issue that bot files.
+**Two autonomous writers are two trust boundaries.** Not one boundary applied
+twice — two, with different triggers, different authority, and different
+failure modes, each of which has to be reasoned about separately every time
+either changes. The second one bought nothing Hive was not already doing.
 
-When enabled it opens pull requests; it never merges them and never pushes to
-`master`. The gates in `ci.yml`, `coverage-gate.yml` and `validate.yml` apply to
-its output exactly as they do to anyone else's, and a human still merges.
+**Its authorisation ran through an automatically applied label.** The label
+path was gated on `ai-fix-requested`, and that label is applied by the
+issue-filing bot. Text written by anyone who can file an issue could therefore
+reach a secret-bearing, write-capable job. The two switches in front of it
+(`ANTHROPIC_API_KEY` and `AI_FIX_ENABLED`) meant that path was closed while
+either was unset — which it was — but "unarmed" is a configuration state, not
+a property of the design.
 
-Turn it off by unsetting `AI_FIX_ENABLED`. That is the intended off switch —
-revoking the key affects anything else using it.
+**The constraints on it were prose.** The job's prompt told the agent not to
+push to `master`, not to edit `.github/workflows/`, not to emit a credential.
+Those are the right rules and they are the same ones written above, but an
+instruction in a prompt is not a boundary: it is a request to a system whose
+input includes untrusted text arguing the opposite. A boundary is something
+that holds when the agent is wrong.
+
+What remains after the removal is the same set of rules with fewer places to
+enforce them: Hive's own gating, this policy, the CI gates, and a human on the
+merge button. Enforcing "no direct push to `master`" mechanically is a
+repository ruleset — see the note under **Push to `master`** above, which is
+still a discipline rather than a mechanism here.
 
 ## If a credential is exposed
 
