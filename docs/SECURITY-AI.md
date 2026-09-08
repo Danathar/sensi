@@ -36,8 +36,9 @@ supply-chain concern.
   This applies to values pasted into a conversation as much as to values found
   in the repository.
 - **Push to `master`.** Every change goes through a pull request. The branch is
-  unprotected, which makes this a discipline rather than a mechanism — treat it
-  as the rule it is.
+  unprotected today, which makes this a discipline rather than a mechanism —
+  treat it as the rule it is. `docs/branch-protection.md` is the plan for making
+  it mechanical, including the one thing that has to be merged first.
 - **Weaken a gate to make a change pass.** Lowering the coverage threshold,
   removing a `ruff` rule, deleting a failing test, or adding `continue-on-error`
   to a required job are all the same action. If a gate is wrong, that is a
@@ -142,5 +143,7 @@ still a discipline rather than a mechanism here.
 - [`AGENTS.md`](../AGENTS.md) — the operational rules
 - [`docs/review-rubric.md`](review-rubric.md) — credential exposure is level 1
 - [`docs/risk-tiers.md`](risk-tiers.md) — which paths carry which consequence
+- [`docs/branch-protection.md`](branch-protection.md) — the `master` ruleset,
+  what each rule is for, and why the review count is set where it is
 - [`.claude/settings.json`](../.claude/settings.json) — the mechanical half, for
   Claude Code sessions
