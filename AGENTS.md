@@ -76,7 +76,7 @@ requires it, say so explicitly in the PR.
 `issue_tracker` and `codeowners` point at *this* repository, not upstream. Home
 Assistant sends users to `issue_tracker` when a custom integration raises, so
 pointing it upstream files this fork's bugs on a maintainer who did not publish
-this code. Credit for the original work belongs in `README.md` and `LICENSE`,
+this code. Credit for the original work belongs in `README.md` and `LICENSE.MIT`,
 which is where it is - `codeowners` is a "who is responsible" field, not a
 credit field. Do not point any of the three back at upstream.
 
