@@ -327,14 +327,14 @@ class TestFirmware:
     def test_firmware_with_all_fields(self):
         """Test Firmware with all fields."""
         data = {
-            "firmware_version": "6004850907",
-            "bootloader_version": "6003970905",
-            "wifi_version": "6004820907",
+            "firmware_version": "1000000002",
+            "bootloader_version": "1000000001",
+            "wifi_version": "1000000003",
         }
         firmware = Firmware(data)
-        assert firmware.firmware_version == "6004850907"
-        assert firmware.bootloader_version == "6003970905"
-        assert firmware.wifi_version == "6004820907"
+        assert firmware.firmware_version == "1000000002"
+        assert firmware.bootloader_version == "1000000001"
+        assert firmware.wifi_version == "1000000003"
 
     def test_firmware_with_empty_data(self):
         """Test Firmware with empty data."""
@@ -351,27 +351,27 @@ class TestThermostatInfo:
     def test_thermostat_info_with_all_fields(self, mock_json):
         """Test ThermostatInfo with valid data."""
         info_data = {
-            "test_date": "11/14/2018",
-            "build_date": "11/14/2018",
-            "serial_number": "42WFRP46B00220",
+            "test_date": "01/01/2020",
+            "build_date": "01/01/2020",
+            "serial_number": "TESTSERIAL0001",
             "unique_hardware_id": 1,
-            "model_number": "1F87U-42WFC",
+            "model_number": "1FTEST-MODEL",
             "images": {
-                "bootloader_version": "6003970905",
-                "firmware_version": "6004850907",
-                "wifi_version": "6004820907",
+                "bootloader_version": "1000000001",
+                "firmware_version": "1000000002",
+                "wifi_version": "1000000003",
             },
-            "wifi_mac_address": "346F920C0B07",
-            "last_changed_timestamp": 1759918908,
+            "wifi_mac_address": "001122334455",
+            "last_changed_timestamp": 1600000000,
         }
         info = ThermostatInfo(info_data)
-        assert info.test_date == "11/14/2018"
-        assert info.build_date == "11/14/2018"
-        assert info.serial_number == "42WFRP46B00220"
+        assert info.test_date == "01/01/2020"
+        assert info.build_date == "01/01/2020"
+        assert info.serial_number == "TESTSERIAL0001"
         assert info.unique_hardware_id == 1
-        assert info.model_number == "1F87U-42WFC"
-        assert info.wifi_mac_address == "346F920C0B07"
-        assert info.last_changed_timestamp == 1759918908
+        assert info.model_number == "1FTEST-MODEL"
+        assert info.wifi_mac_address == "001122334455"
+        assert info.last_changed_timestamp == 1600000000
         assert isinstance(info.images, Firmware)
 
     def test_thermostat_info_with_empty_data(self):
@@ -386,16 +386,16 @@ class TestThermostatInfo:
     def test_thermostat_info_string_representation(self):
         """Test ThermostatInfo string representation."""
         data = {
-            "model_number": "1F87U-42WFC",
-            "serial_number": "42WFRP46B00220",
+            "model_number": "1FTEST-MODEL",
+            "serial_number": "TESTSERIAL0001",
             "unique_hardware_id": 1,
-            "wifi_mac_address": "346F920C0B07",
+            "wifi_mac_address": "001122334455",
         }
         info = ThermostatInfo(data)
         info_str = str(info)
         assert "ThermostatInfo" in info_str
         assert "model=" in info_str
-        assert "1F87U-42WFC" in info_str
+        assert "1FTEST-MODEL" in info_str
 
 
 class TestState:
@@ -601,7 +601,7 @@ class TestSensiDevice:
         """Test SensiDevice info update."""
         _have_state, device = SensiDevice.create(mock_json)
         current_info = device.info
-        device.update_info({"test_date": "11/14/2018"})
+        device.update_info({"test_date": "01/01/2020"})
 
         assert device.info is not None
         assert device.info != current_info
@@ -693,9 +693,9 @@ class TestNullContainers:
 
     def test_null_thermostat_info_images(self):
         """`images` is fetched then dereferenced the same way."""
-        info = ThermostatInfo({"model_number": "1F87U-42WFC", "images": None})
+        info = ThermostatInfo({"model_number": "1FTEST-MODEL", "images": None})
 
-        assert info.model_number == "1F87U-42WFC"
+        assert info.model_number == "1FTEST-MODEL"
         assert info.images.firmware_version == ""
 
     def test_null_humidity_control_members(self):

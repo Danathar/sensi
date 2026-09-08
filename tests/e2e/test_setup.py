@@ -23,7 +23,7 @@ from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from .conftest import NOT_EXPIRED, FakeSensiBackend
 
-ICD_ID = "36-6f-92-ff-fe-0c-0b-07"
+ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 
 async def test_config_flow_creates_a_loadable_entry(

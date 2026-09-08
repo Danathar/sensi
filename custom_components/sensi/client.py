@@ -827,7 +827,7 @@ class SensiClient:
             # 2026-07-15 13:52:55.326 INFO (MainThread) [custom_components.sensi] Reconnection successful
             # 2026-07-15 13:52:55.342 INFO (MainThread) [custom_components.sensi] Received event "state" [/]
             # 2026-07-15 13:52:55.350 INFO (MainThread) [custom_components.sensi] Received event "state" [/]
-            # 2026-07-15 13:52:55.351 DEBUG (MainThread) [custom_components.sensi] 36-6f-92-ff-fe-0c-0b-07 State updated to State(status=online, operating_mode=cool, display_temp=74.5°F, humidity=98%
+            # 2026-07-15 13:52:55.351 DEBUG (MainThread) [custom_components.sensi] aa-bb-cc-dd-ee-ff-00-01 State updated to State(status=online, operating_mode=cool, display_temp=74.5°F, humidity=98%
 
             # 2. Disconnect itself doesn't have useful data, the useful reason is in connect_error.
 
@@ -853,7 +853,7 @@ class SensiClient:
             # 2026-07-15 23:15:03.432 DEBUG (MainThread) [custom_components.sensi] Getting access token using refresh_token=<redacted>
             # 2026-07-15 23:15:03.756 INFO (MainThread) [custom_components.sensi] Engine.IO connection established
             # 2026-07-15 23:15:03.790 INFO (MainThread) [custom_components.sensi] Namespace / is connected
-            # 2026-07-15 23:15:03.790 DEBUG (MainThread) [custom_components.sensi] Creating future (state, 36-6f-92-ff-fe-0c-0b-07)
+            # 2026-07-15 23:15:03.790 DEBUG (MainThread) [custom_components.sensi] Creating future (state, aa-bb-cc-dd-ee-ff-00-01)
             # 2026-07-15 23:15:03.839 INFO (MainThread) [custom_components.sensi] Received event "state" [/]
 
             # But token expiry midway is not intercepted, the connection retires are being done internally in Engine.IO.
@@ -1054,8 +1054,8 @@ def get_error_description_from_event_callback(error: dict) -> str:
     if not error:
         return ""
 
-    # {'error': {'description': 'InvalidScale'}, 'icd_id': '36-6f-92-ff-fe-02-24-b7'}
-    # {'error': {'description': 'Bad Request'}, 'icd_id': '36-6f-92-ff-fe-02-24-b7'}
+    # {'error': {'description': 'InvalidScale'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
+    # {'error': {'description': 'Bad Request'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
     # {'error': {'description': 'Forbidden'}}
     return error.get("error", {}).get("description", "")
 

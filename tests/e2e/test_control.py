@@ -36,7 +36,7 @@ from .conftest import FakeSensiBackend
 CLIMATE = "climate.sensi_living_room"
 DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
-ICD_ID = "36-6f-92-ff-fe-0c-0b-07"
+ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 
 async def test_set_temperature_reaches_the_wire_and_updates_state(

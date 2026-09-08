@@ -32,7 +32,7 @@ from custom_components.sensi.data import AuthenticationConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-ICD_ID = "36-6f-92-ff-fe-0c-0b-07"
+ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 
 @pytest.fixture
@@ -397,7 +397,7 @@ class TestUpdateState:
 
     async def test_resolves_each_device_in_a_batch(self, client, mock_json) -> None:
         """A multi-device event resolves every device's future."""
-        second = {**mock_json, "icd_id": "36-6f-92-ff-fe-0c-0b-08"}
+        second = {**mock_json, "icd_id": "aa-bb-cc-dd-ee-ff-00-03"}
         first_future = await client._create_event_future("state", mock_json["icd_id"])
         second_future = await client._create_event_future("state", second["icd_id"])
 
@@ -418,7 +418,7 @@ class TestUpdateState:
         raised ConfigEntryNotReady, and at runtime every entity went
         unavailable after two failed refreshes - over one thermostat.
         """
-        broken = {**mock_json, "icd_id": "36-6f-92-ff-fe-0c-0b-99"}
+        broken = {**mock_json, "icd_id": "aa-bb-cc-dd-ee-ff-00-04"}
         initial_future = await client._create_event_future("state", None)
         broken_future = await client._create_event_future("state", broken["icd_id"])
         healthy_future = await client._create_event_future("state", mock_json["icd_id"])
@@ -489,15 +489,15 @@ class TestUpdateInfo:
 
         data = {
             "icd_id": mock_json["icd_id"],
-            "serial_number": "42WFRP46B00220",
-            "model_number": "1F87U-42WFC",
+            "serial_number": "TESTSERIAL0001",
+            "model_number": "1FTEST-MODEL",
         }
         future = await client._create_event_future("info", data["icd_id"])
 
         client._update_info(data)
 
-        assert device.info.serial_number == "42WFRP46B00220"
-        assert device.info.model_number == "1F87U-42WFC"
+        assert device.info.serial_number == "TESTSERIAL0001"
+        assert device.info.model_number == "1FTEST-MODEL"
         assert await future == data
 
     async def test_unknown_device_still_resolves(self, client) -> None:
@@ -977,7 +977,7 @@ class TestGetErrorDescriptionFromEventCallback:
         """The description is read out of the nested error object."""
         error = {
             "error": {"description": "InvalidScale"},
-            "icd_id": "36-6f-92-ff-fe-02-24-b7",
+            "icd_id": "aa-bb-cc-dd-ee-ff-00-02",
         }
         assert get_error_description_from_event_callback(error) == "InvalidScale"
 
@@ -1028,8 +1028,8 @@ class TestExtractIcdId:
 
     def test_present(self):
         """The icd_id is returned when present."""
-        assert extract_icd_id({"icd_id": "36-6f-92-ff-fe-0c-0b-07"}) == (
-            "36-6f-92-ff-fe-0c-0b-07"
+        assert extract_icd_id({"icd_id": "aa-bb-cc-dd-ee-ff-00-01"}) == (
+            "aa-bb-cc-dd-ee-ff-00-01"
         )
 
     def test_absent(self):
