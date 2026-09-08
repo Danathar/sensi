@@ -315,7 +315,7 @@ class SensiClient:
         # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
         try:
             parsed_response = SetTemperatureEventSuccess(**response)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             return ActionResponse(f"Failed to parse `{response}`", None)
 
         state.display_temp = parsed_response.current_temp
@@ -368,7 +368,7 @@ class SensiClient:
                 parsed_response = SetOperatingModeEventSuccess(**response)
                 device.state.operating_mode = parsed_response.mode
                 return ActionResponse(None, None)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return ActionResponse(f"Failed to parse `{response}`", None)
 
         return ActionResponse("No response received", None)
@@ -941,7 +941,7 @@ class SensiClient:
             self._config = await refresh_access_token(
                 self._hass, self._config.refresh_token
             )
-        except AuthenticationError, SensiConnectionError:
+        except (AuthenticationError, SensiConnectionError):
             # Both already say which kind of failure this is, and the
             # difference decides what Home Assistant does about it: the
             # coordinator turns AuthenticationError into ConfigEntryAuthFailed
