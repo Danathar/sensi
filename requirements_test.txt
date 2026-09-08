@@ -7,7 +7,9 @@
 -r requirements_component.txt
 
 pytest-homeassistant-custom-component==0.13.363
-pytest-cov
+# The pinned nightly leg uses this file. Keep its coverage runner fixed while
+# the separate latest-Home-Assistant leg deliberately upgrades pytest-cov.
+pytest-cov==7.1.0
 
 # Lint and format. Pinned deliberately: an unpinned ruff turns "a new ruff was
 # released" into "master is red", because new releases add rules to the sets

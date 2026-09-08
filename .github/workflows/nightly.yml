@@ -7,9 +7,10 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
 
+# Both test jobs install and execute PyPI packages. Keep their token read-only;
+# the dependency-free report job receives its issue scope below.
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: nightly
@@ -41,7 +42,7 @@ jobs:
       - name: Record resolved versions
         run: |
           pip list --format=freeze \
-            | grep -iE '^(homeassistant|pytest-homeassistant-custom-component|python-socketio|ruff)=' \
+            | grep -iE '^(homeassistant|pytest-cov|pytest-homeassistant-custom-component|python-socketio|ruff)=' \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Lint and format
@@ -112,6 +113,11 @@ jobs:
     name: report
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # This is the only job that calls the issue API. Job-level permissions keep
+    # that write scope out of the two jobs executing third-party dependencies.
+    permissions:
+      contents: read
+      issues: write
     needs: [pinned, latest]
     if: always() && github.event_name == 'schedule'
     steps:
