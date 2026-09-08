@@ -7,7 +7,7 @@
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
 [![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 # Sensi thermostat for Home Assistant
 
@@ -264,4 +264,8 @@ Learn more: [Hive](https://github.com/hivecommons/hive) · [Hive Hub](https://hi
 
 ## License
 
-MIT, inherited from upstream. Copyright (c) 2022 Indu Prakash. See [LICENSE](LICENSE).
+This fork is licensed under the [GNU General Public License v3.0](LICENSE).
+
+It incorporates code from [`iprak/sensi`](https://github.com/iprak/sensi), Copyright (c) 2022 Indu Prakash, released under the MIT License. That code remains under MIT; its licence text and copyright notice are preserved in [LICENSE.MIT](LICENSE.MIT) as the MIT licence requires. The combined work - upstream code together with this fork's changes - is distributed under GPL-3.0.
+
+Changes from this fork that are proposed upstream are offered to upstream under MIT, so that they can be accepted there.
