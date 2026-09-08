@@ -242,17 +242,17 @@ class TestDemandResponse:
 
         assert demand_response.start_time == dt_util.as_local(start_time)
 
-    def test_demand_response_repr_contains_fields(self):
-        """Test DemandResponse string representation includes key fields."""
+    def test_demand_response_repr_is_balanced(self):
+        """Test DemandResponse string representation is complete and balanced."""
         data = {
             "event_id": "event-abc",
             "event_status": "completed",
         }
         demand_response = DemandResponse(data)
 
-        repr_str = repr(demand_response)
-
-        assert "DemandResponse(event_id='event-abc'" in repr_str
+        assert repr(demand_response) == (
+            "DemandResponse(event_id='event-abc', start_time=None, end_time=None)"
+        )
 
     @pytest.mark.parametrize(
         ("event_status", "now_offset", "expected_state"),
