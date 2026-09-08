@@ -140,7 +140,7 @@ Upstream is [`iprak/sensi`](https://github.com/iprak/sensi); this fork tracks it
 - **An end-to-end test tier** covering setup, connection lifecycle and control, on top of the existing unit tests, plus contributor and agent documentation ([CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), [docs/](docs/)).
 - **Correctness and lifecycle fixes** found by a full-component scan: swapped humidity capability defaults that produced `min_humidity > max_humidity`; a device class passed where a state class belongs on the WiFi sensor, which silently kept it out of long-term statistics; leaked socket.io clients on reconnect; an aux-heat switch that could not be turned off if Home Assistant started while the thermostat was already aux heating; reauth accepting a token for a different Sensi account; hardcoded Fahrenheit offset bounds applied to a Celsius scale; and several unhandled-value crashes.
 
-Full detail is in the commit history. Changes that make sense upstream get proposed there.
+Full detail is in the commit history.
 
 **Version numbers do not line up with upstream's, on purpose.** This fork releases on CalVer — `2026.9.0`, tagged without a `v` — while upstream continues its `v2.x` semver line. Sharing the numbering would mean two different releases both called `v2.1.7`. Because `2026.x` compares as newer than `2.1.x`, upgrading from an upstream install works normally. [CONTRIBUTING.md](CONTRIBUTING.md#releases) has the details.
 
@@ -267,5 +267,3 @@ Learn more: [Hive](https://github.com/hivecommons/hive) · [Hive Hub](https://hi
 This fork is licensed under the [GNU General Public License v3.0](LICENSE).
 
 It incorporates code from [`iprak/sensi`](https://github.com/iprak/sensi), Copyright (c) 2022 Indu Prakash, released under the MIT License. That code remains under MIT; its licence text and copyright notice are preserved in [LICENSE.MIT](LICENSE.MIT) as the MIT licence requires. The combined work - upstream code together with this fork's changes - is distributed under GPL-3.0.
-
-Changes from this fork that are proposed upstream are offered to upstream under MIT, so that they can be accepted there.
