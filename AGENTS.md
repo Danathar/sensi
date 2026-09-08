@@ -58,10 +58,11 @@ image supplies one. Ruff config belongs in `ruff.toml`, pytest config in
 **Keep `manifest.json` `requirements` in sync with `requirements_component.txt`.**
 `scripts/check_requirements_sync.py` enforces this and CI fails on drift.
 
-**Do not bump `manifest.json` `version` by hand.** `release.yml` sets it from
-the version given when the release is run. This fork uses CalVer
-(`YYYY.M.PATCH`, no `v` prefix) on its own line, not upstream's 2.x semver -
-see CONTRIBUTING.md, "Releases".
+**Do not bump `manifest.json` `version` in an unrelated pull request.** The
+version moves in a release pull request of its own, which `release.yml` opens
+when it is run with `prepare` - the release itself only tags the commit that
+lands. This fork uses CalVer (`YYYY.M.PATCH`, no `v` prefix) on its own line,
+not upstream's 2.x semver - see CONTRIBUTING.md, "Releases".
 
 **`strings.json` cannot contain literal URLs.** hassfest rejects them. Pass them
 through `description_placeholders` instead — `SENSI_LOGIN_URL` in `const.py` is

@@ -131,11 +131,31 @@ shape (`2026.9.0` against upstream's `v2.1.6`) makes the two obvious at a
 glance, and Home Assistant itself uses CalVer. Because `2026.x` compares as
 newer than `2.1.x`, an existing install upgrades cleanly rather than stranding.
 
-Releases happen **monthly, on the 1st**, from the `Release` workflow. It derives
-the version from the date - this month's `.0` if there has not been one yet,
-otherwise the next patch - and publishes with notes generated from the merged
-pull requests. You can also run it by hand at any time, optionally passing an
-explicit version.
+The version lives in `custom_components/sensi/manifest.json`, and it changes
+the way everything else here changes: in a pull request, reviewed, and merged
+under the repository ruleset. The `Release` workflow never writes to `master`.
+It tags a commit that is already there and publishes it, so the number that
+ships is one that passed CI and review rather than one a workflow run invented
+and pushed past the rules.
+
+That makes a release two steps:
+
+1. **Propose the number.** Run the `Release` workflow with **prepare** ticked.
+   It derives the version from the date - this month's `.0` if there has not
+   been one yet, otherwise the next patch - or takes the one you type, sets the
+   manifest to it on a `release/<version>` branch, and opens a pull request.
+   Nothing is tagged.
+2. **Release it.** Once that pull request is merged, run the workflow again
+   without **prepare**, or wait for the monthly run. It reads the version off
+   the merged manifest, tags that commit, and publishes with notes generated
+   from the merged pull requests.
+
+Passing an explicit **version** to a release run is a confirmation, not an
+instruction: it has to be the number the manifest already carries, and the run
+stops if it is not. If the tag already exists, the manifest was never bumped -
+step 1 is the missing piece.
+
+Releases happen **monthly, on the 1st**, and by hand at any time.
 
 Three things have to be true before a scheduled run publishes anything:
 
@@ -147,12 +167,18 @@ Three things have to be true before a scheduled run publishes anything:
 
 Then, as for a manual run, it validates before writing anything - the CalVer
 shape, that the tag is free, that the number is newer than the latest stable
-tag, and that a `b1`/`rc1` suffix agrees with the pre-release checkbox - and
-only then sets `manifest.json`, commits, tags, and publishes. **dry_run**
-validates and stops.
+tag, that the manifest on the commit agrees with it, and that a `b1`/`rc1`
+suffix agrees with the pre-release checkbox - and only then tags and publishes.
+**dry_run** validates and stops.
 
 Do not tag by hand: the manifest version and the tag have to move together, and
 the workflow is what guarantees that.
+
+Workflow inputs reach the shell through `env:`, never by `${{ }}` interpolation
+into a `run:` body. Interpolation happens before bash parses the script, so a
+crafted input would become part of the program rather than data for it - and
+both jobs can write to this repository. `tests/test_release_workflow.py`
+enforces it for every step in the file.
 
 The attached `sensi.zip` is for people installing by hand. HACS does not use
 it - that would need `zip_release` and `filename` in `hacs.json`, both
