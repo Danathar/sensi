@@ -191,10 +191,10 @@ class TestRedactIdentifier:
     @pytest.mark.parametrize("value", ["a", "abcde"])
     def test_short_identifier_reveals_nothing(self, value):
         """Too short to keep a tail from without reproducing most of it."""
-        redacted = redact_identifier(value)
-
-        assert value not in redacted
-        assert redacted == "<device:redacted>"
+        # Equality, not `value not in redacted`: the placeholder is a constant
+        # with letters of its own, so a one-character value reads as leaked
+        # when it merely collides with one of them.
+        assert redact_identifier(value) == "<device:redacted>"
 
 
 class TestBoolToOnoff:
