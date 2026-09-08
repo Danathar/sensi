@@ -1,0 +1,33 @@
+# Keep the pinned action SHAs from going stale.
+#
+# Every `uses:` in .github/workflows/ names a commit rather than a tag, which
+# is what makes a workflow run reproducible and stops an upstream tag being
+# re-pointed under us. The cost of that is that a pin does not move on its own:
+# without something proposing updates, "pinned" becomes "stuck on whatever was
+# current the day it was pinned", including through a security fix.
+#
+# Dependabot reads the `# vX.Y.Z` comment beside each SHA, so it opens
+# pull requests that move both together and stay readable in review.
+#
+# Only github-actions is configured here. The Python side is pinned in two
+# places that Dependabot cannot see anyway -- `pip install` lines inside
+# workflow `run:` blocks, and requirements files that track Home Assistant's
+# own constraints -- so pointing it at those would produce noise rather than
+# updates. That is a separate decision, not an oversight.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request for all of them. Four separate bumps a week for
+    # first-party actions is the kind of volume that gets reviewed by reflex,
+    # and reviewing these by reflex is the thing pinning was meant to prevent.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
