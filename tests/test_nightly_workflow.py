@@ -30,6 +30,7 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "nightly.yml"
+_TEST_REQUIREMENTS = _ROOT / "requirements_test.txt"
 
 _STEP = "Open, update or close the nightly issue"
 _JOB = "report"
@@ -68,6 +69,36 @@ def _step() -> dict:
         f"the {_JOB!r} job in nightly.yml has no step named {_STEP!r}; these "
         "tests cover its logic and must be updated with it"
     )
+
+
+def test_only_the_report_job_can_write_issues() -> None:
+    """Dependency-running jobs inherit read-only access; the reporter writes."""
+
+    document = _workflow()
+
+    assert document["permissions"] == {"contents": "read"}
+    for job_name in ("pinned", "latest"):
+        assert "permissions" not in document["jobs"][job_name]
+    assert document["jobs"][_JOB]["permissions"] == {
+        "contents": "read",
+        "issues": "write",
+    }
+
+
+def test_the_pinned_leg_has_no_floating_direct_test_dependencies() -> None:
+    """Every direct test tool installed by the pinned leg names its version."""
+
+    requirements = _TEST_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+    for package in (
+        "pytest-cov",
+        "pytest-homeassistant-custom-component",
+        "ruff",
+    ):
+        matches = [line for line in requirements if line.startswith(f"{package}==")]
+        assert len(matches) == 1, (
+            f"requirements_test.txt must pin exactly one {package} version; "
+            f"found {matches}"
+        )
 
 
 def _render(text: str, context: dict[str, str]) -> str:
