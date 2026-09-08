@@ -32,6 +32,7 @@ from .event import (
     SetTemperatureEventSuccess,
     SettingEventName,
 )
+from .utils import redact_identifier
 
 SOCKET_URL = "https://rt.sensiapi.io"
 PREPARE_DEVICES_TIMEOUT = 20
@@ -663,14 +664,20 @@ class SensiClient:
         try:
             return await asyncio.wait_for(future, timeout)
         except asyncio.exceptions.TimeoutError:
-            LOGGER.error(f"Timed out waiting for event '{event}' on device {icd_id}")
+            # Redacted: this is an ERROR, so it is written with stock logging,
+            # and a setter timeout is the failure users are asked to paste a
+            # log for. See docs/SECURITY-AI.md on real icd_id values.
+            LOGGER.error(
+                f"Timed out waiting for event '{event}' on device "
+                f"{redact_identifier(icd_id)}"
+            )
 
     async def _create_event_future(
         self, event: str, icd_id: str | None
     ) -> asyncio.Future:
         """Create an event future."""
 
-        LOGGER.debug(f"Creating future ({event}, {icd_id})")
+        LOGGER.debug(f"Creating future ({event}, {redact_identifier(icd_id)})")
         future_key = (event, icd_id)
         futures = self._futures.get(future_key)
 
@@ -714,7 +721,9 @@ class SensiClient:
 
         count = len(pending_futures)
         if count:
-            LOGGER.debug(f"Resolving {count} futures for ({event}, {icd_id})")
+            LOGGER.debug(
+                f"Resolving {count} futures for ({event}, {redact_identifier(icd_id)})"
+            )
 
             for future in pending_futures:
                 # Suppress per future, not around the loop. set_result() on a

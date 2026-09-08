@@ -5,6 +5,7 @@ import pytest
 from custom_components.sensi.client import ActionResponse, raise_if_error
 from custom_components.sensi.utils import (
     bool_to_onoff,
+    redact_identifier,
     redact_token,
     to_bool,
     to_float,
@@ -157,6 +158,43 @@ class TestRedactToken:
     def test_missing_token(self, value):
         """A missing token is reported as such."""
         assert redact_token(value) == "<missing>"
+
+
+class TestRedactIdentifier:
+    """Test cases for redact_identifier function."""
+
+    def test_identifier_is_not_revealed(self):
+        """The identifier that addresses the thermostat must not reach the log."""
+        icd_id = "aa-bb-cc-dd-ee-ff-00-01"
+
+        redacted = redact_identifier(icd_id)
+
+        assert icd_id not in redacted
+        assert "aa-bb-cc" not in redacted
+        assert redacted == "<device:...00-01>"
+
+    def test_two_devices_stay_distinguishable(self):
+        """A multi-thermostat log has to remain readable."""
+        first = redact_identifier("aa:bb:cc:dd:ee:ff:00:01")
+        second = redact_identifier("aa:bb:cc:dd:ee:ff:00:02")
+
+        assert first != second
+
+    def test_none_is_not_a_redaction(self):
+        """`icd_id` is None for the initial state event; keep that visible."""
+        assert redact_identifier(None) == "<no-device>"
+
+    def test_empty_identifier(self):
+        """An empty identifier is distinct from an absent one."""
+        assert redact_identifier("") == "<empty-device>"
+
+    @pytest.mark.parametrize("value", ["a", "abcde"])
+    def test_short_identifier_reveals_nothing(self, value):
+        """Too short to keep a tail from without reproducing most of it."""
+        # Equality, not `value not in redacted`: the placeholder is a constant
+        # with letters of its own, so a one-character value reads as leaked
+        # when it merely collides with one of them.
+        assert redact_identifier(value) == "<device:redacted>"
 
 
 class TestBoolToOnoff:
