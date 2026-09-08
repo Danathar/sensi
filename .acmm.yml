@@ -1,0 +1,31 @@
+# ACMM waivers — criteria satisfied outside this repository.
+#
+# The ACMM evaluation detects capability by looking for files, which cannot
+# distinguish "never built this" from "deliberately moved this somewhere the
+# file check cannot see". Each entry below states the second case: the
+# capability exists, here is what provides it, here is why it is not here.
+#
+# A waiver cannot advance an ACMM level — level pass/fail is computed on
+# detected criteria alone. These entries restore an accurate reading of L4;
+# they do not claim a level this repository has not earned.
+#
+# See docs/SECURITY-AI.md and https://github.com/hivecommons/hive/issues/6263.
+
+waivers:
+  - id: acmm:ai-fix-workflow
+    satisfied_by: hive
+    reason: >
+      The in-repo AI-fix path (.github/workflows/ai-fix.yml) was removed in
+      PR #118. It duplicated what Hive already does at ACMM L4, and did it
+      across a second trust boundary: a job holding contents/issues/
+      pull-requests/id-token write plus ANTHROPIC_API_KEY, gated on a label
+      the issue-filing bot applied to its own issues. Hive is now the sole
+      autonomous path. See docs/SECURITY-AI.md, "One autonomous path, and it
+      is Hive".
+
+  - id: acmm:copilot-review-apply
+    satisfied_by: hive
+    reason: >
+      Same removal — ai-fix.yml was the only file matching this criterion's
+      patterns as well. Review feedback is applied by Hive, under the same
+      single autonomous path. See docs/SECURITY-AI.md.
