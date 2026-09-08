@@ -66,13 +66,41 @@ async def _get_new_tokens(hass: HomeAssistant, refresh_token: str) -> any:
                 OAUTH_URL2,
                 data=post_data,
                 headers=headers,
-                allow_redirects=True,
+                # post_data carries the refresh token and the client secret.
+                # Following a redirect would resend all of it to wherever the
+                # response points -- and 307/308 preserve the method and body
+                # precisely so that it does. The token endpoint is expected to
+                # answer directly, so an unexpected redirect is either a
+                # misconfiguration or an interception, and neither is worth
+                # handing credentials to. Fail closed instead; see the 3xx
+                # branch below.
+                allow_redirects=False,
             )
     except (TimeoutError, aiohttp.ClientError) as err:
         LOGGER.warning("Timed out getting access token", exc_info=True)
         raise SensiConnectionError("Timed out getting access token") from err
 
     if response.status != HTTPStatus.OK:
+        # A redirect is not the backend reporting a failure; it is the endpoint
+        # pointing somewhere else, and this request declined to follow it while
+        # carrying a refresh token and a client secret. It is a connection
+        # fault rather than an authentication one: the stored token is not what
+        # is wrong, so escalating to reauth would ask the user to replace a
+        # credential that is fine and would not fix anything.
+        #
+        # The Location value is deliberately not logged. If the endpoint is
+        # compromised that string is attacker-chosen, and the status is enough
+        # to say what happened.
+        if 300 <= response.status < 400:
+            LOGGER.warning(
+                "Token endpoint returned a redirect (HTTP %s); not resending "
+                "credentials to it",
+                response.status,
+            )
+            raise SensiConnectionError(
+                f"Token endpoint returned a redirect (HTTP {response.status})"
+            )
+
         # Only a client error (e.g. 400/401/403 invalid_grant) means the refresh
         # token is genuinely bad and reauth is required. A 5xx or other
         # non-success is a transient backend failure and must be retried rather
@@ -281,7 +309,10 @@ async def refresh_access_token(
 #                 OAUTH_URL.format(device_id),
 #                 data=post_data,
 #                 headers=headers,
-#                 allow_redirects=True,
+#                 # Same reason as the live request above: this body carries a
+#                 # password and a client secret. Kept correct here so that
+#                 # uncommenting it does not reintroduce the redirect.
+#                 allow_redirects=False,
 #             )
 #     except (asyncio.TimeoutError, aiohttp.ClientError) as err:
 #         LOGGER.warning("Timed out getting access token", exc_info=True)

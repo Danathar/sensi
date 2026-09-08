@@ -2,12 +2,13 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 
 from custom_components.sensi.auth import (
+    CLIENT_SECRET2,
     KEY_ACCESS_TOKEN,
     KEY_EXPIRES_AT,
     KEY_REFRESH_TOKEN,
@@ -521,3 +522,151 @@ class TestGetStoredConfigAccountGuard:
             await get_stored_config(hass, "account_a")
 
         assert "missing refresh_token" in str(context.value)
+
+
+class TestTokenPostDoesNotFollowRedirects:
+    """The refresh POST carries a refresh token and the client secret.
+
+    Following a redirect resends both to wherever the response points, and
+    307/308 preserve the method and body precisely so that they do. #115.
+
+    The two halves are tested separately on purpose. `aioclient_mock` accepts
+    `allow_redirects` and then discards it -- it never follows a redirect
+    whatever the caller asked for -- so a test that mocks a 302 and asserts an
+    error passes just as happily with the flag deleted. Only the first test
+    below can fail when the flag goes missing, and only the rest can fail when
+    the handling does.
+    """
+
+    @staticmethod
+    def _session_returning(status: int, payload: dict | None = None) -> MagicMock:
+        """Build a stand-in session whose post() records how it was called."""
+        response = MagicMock()
+        response.status = status
+        response.json = AsyncMock(return_value=payload or {})
+        session = MagicMock()
+        session.post = AsyncMock(return_value=response)
+        return session
+
+    async def test_the_post_is_made_with_redirects_disabled(
+        self, hass: HomeAssistant, mock_auth_data
+    ) -> None:
+        """The flag itself, asserted on the call rather than on the outcome."""
+        session = self._session_returning(
+            200,
+            {
+                KEY_ACCESS_TOKEN: "new_access",
+                KEY_REFRESH_TOKEN: "new_refresh",
+                KEY_USER_ID: "user-1",
+                "expires_in": 3600,
+            },
+        )
+
+        with (
+            patch(
+                "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+                return_value=session,
+            ),
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save"),
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+        session.post.assert_called_once()
+        assert session.post.call_args.kwargs["allow_redirects"] is False
+
+    @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+    async def test_a_redirect_fails_closed(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock, status: int
+    ) -> None:
+        """Every redirect shape, including the two that would resend the body."""
+        aioclient_mock.post(OAUTH_URL2, status=status)
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            pytest.raises(SensiConnectionError, match="redirect"),
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+    async def test_a_redirect_is_not_treated_as_a_bad_token(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """It must not send the user to reauth.
+
+        The stored token is not what is wrong when the endpoint redirects, so
+        asking the user to paste a new one would be asking them to fix
+        something that is not broken -- and would not fix it.
+        """
+        aioclient_mock.post(OAUTH_URL2, status=302)
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            pytest.raises(SensiConnectionError) as caught,
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+        # The two are unrelated classes, so the raises() above already implies
+        # this. Asserting it is what records *why* the type was chosen: the
+        # reauth flow keys off AuthenticationError.
+        assert not isinstance(caught.value, AuthenticationError)
+
+    async def test_a_redirect_leaves_the_stored_credentials_alone(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """Failing closed must not also clobber the working token on disk."""
+        aioclient_mock.post(OAUTH_URL2, status=307)
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as saved,
+            pytest.raises(SensiConnectionError),
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+        saved.assert_not_called()
+
+    async def test_the_redirect_path_logs_no_credential(
+        self,
+        hass: HomeAssistant,
+        mock_auth_data,
+        aioclient_mock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Acceptance criterion 3, checked rather than asserted in prose.
+
+        The Location header is not logged either: if the endpoint is
+        compromised that value is attacker-chosen, and the status says enough.
+        """
+        refresh_token = "refresh_token_123"
+        aioclient_mock.post(
+            OAUTH_URL2, status=302, headers={"Location": "https://evil.invalid/token"}
+        )
+
+        with (
+            caplog.at_level("DEBUG"),
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            pytest.raises(SensiConnectionError),
+        ):
+            await refresh_access_token(hass, refresh_token)
+
+        assert refresh_token not in caplog.text
+        assert CLIENT_SECRET2 not in caplog.text
+        assert "evil.invalid" not in caplog.text
+        # It still has to say what happened.
+        assert "redirect" in caplog.text
+        assert "302" in caplog.text
