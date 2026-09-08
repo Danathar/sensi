@@ -66,3 +66,30 @@ def redact_token(value: str | None) -> str:
         return "<missing>"
 
     return f"<redacted:...{value[-4:]}>"
+
+
+def redact_identifier(value: str | None) -> str:
+    """Return a device identifier rendering that is safe to write to the log.
+
+    An `icd_id` names one physical thermostat, and a Home Assistant log is
+    routinely pasted into an issue or a forum post when a setter misbehaves -
+    so a log statement is a publication path, not a private record.
+
+    The last two octets are kept deliberately. A fully masked identifier makes
+    a multi-thermostat report unreadable, because every line then names the
+    same anonymous device; two octets are enough to tell one unit's timeouts
+    from another's without writing down the value the backend addresses it by.
+
+    `None` renders as its own thing rather than as a redaction: `_resolve_futures`
+    is documented to receive `icd_id=None` for the initial `state` event, and
+    that is a real distinction to keep in the log.
+    """
+    if value is None:
+        return "<no-device>"
+    if not value:
+        return "<empty-device>"
+    # Too short to keep a tail from without reproducing most of the value.
+    if len(value) <= 5:
+        return "<device:redacted>"
+
+    return f"<device:...{value[-5:]}>"
