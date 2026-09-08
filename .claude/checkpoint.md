@@ -3,7 +3,7 @@
 Where this repository stands right now. One screen, current state only — the
 history is in [`session-summary.md`](session-summary.md).
 
-**Updated:** 2026-09-05
+**Updated:** 2026-09-07
 
 ## State
 
@@ -24,10 +24,9 @@ followed. Every issue that was open at the start of this work is closed.
 - `labeler.yml` applies path, `tier/*` and `size/*` labels to every pull request.
 - `nightly.yml` runs the whole gate daily, plus a leg against the *latest* Home
   Assistant as advance warning. A failure opens one self-closing issue.
-- `ai-fix.yml` is **inert**. It needs both an `ANTHROPIC_API_KEY` secret and an
-  `AI_FIX_ENABLED` repository variable set to `true`. Read `docs/SECURITY-AI.md`
-  before enabling it — the second switch exists because `ai-fix-requested` is
-  applied automatically by the issue-filing bot.
+- `ai-fix.yml` is **gone** (#110). Autonomous maintenance runs through Hive at
+  ACMM L4 and through nothing else; there is no repository-local agent workflow
+  to enable. See `docs/SECURITY-AI.md`, "One autonomous path, and it is Hive".
 
 ## Next
 

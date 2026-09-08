@@ -232,7 +232,7 @@ Hive runs specialised agents — quality, security, CI, docs — continuously ra
 - Every other agent stays **advisory**: it reports, it does not act.
 - **A human reviews and merges everything.** No agent merges its own work, and nothing reaches `master` without a person having read it.
 
-The one agent-driven path that touches this repository directly, [`ai-fix.yml`](.github/workflows/ai-fix.yml), is inert unless *two* separate switches are on — an API key secret and an `AI_FIX_ENABLED` repository variable. Two rather than one is on purpose: the `ai-fix-requested` label is applied automatically, so a key added for something unrelated must not quietly start autonomous work. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, including the prompt-injection surface that comes with parsing an untrusted backend's payloads.
+Hive is the *only* autonomous path into this repository. A second one used to exist — a repository-local workflow that ran Claude against a labelled issue — and it was removed rather than left switched off: two autonomous writers are two trust boundaries, and its authorisation ran through a label applied automatically by the issue-filing bot. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, why that path is gone, and the prompt-injection surface that comes with parsing an untrusted backend's payloads.
 
 ### Why it matters for this integration in particular
 
