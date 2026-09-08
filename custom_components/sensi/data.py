@@ -507,4 +507,4 @@ class DemandResponse:
 
     def __repr__(self) -> str:
         """Return the representation."""
-        return f"DemandResponse(event_id={self.event_id!r}, start_time={self.start_time!r}, end_time={self.end_time!r}"
+        return f"DemandResponse(event_id={self.event_id!r}, start_time={self.start_time!r}, end_time={self.end_time!r})"
