@@ -20,6 +20,7 @@ from custom_components.sensi.event import (
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
 )
+from custom_components.sensi.utils import redact_identifier
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 
 
@@ -687,7 +688,7 @@ class TestWaitForDevices:
             await client.wait_for_devices()
 
     async def test_wait_for_devices_timeout_then_retry_fails(
-        self, mock_coordinator, mock_device, monkeypatch
+        self, mock_coordinator, mock_device, monkeypatch, caplog
     ):
         """If device info times out, the retry path raises ConfigEntryNotReady."""
 
@@ -715,6 +716,13 @@ class TestWaitForDevices:
             await client.wait_for_devices()
 
         assert mock_device.state.fan_mode == FanMode.ON
+
+        # This one is a WARNING, so it reaches a log with no debug logging
+        # turned on - the log a user attaches to "my thermostats did not
+        # appear". The identifier that addresses the device stays out of it.
+        assert "Timed out waiting for info/capabilities" in caplog.text
+        assert mock_device.identifier not in caplog.text
+        assert redact_identifier(mock_device.identifier) in caplog.text
 
 
 class TestSetterErrorsLeaveStateAlone:

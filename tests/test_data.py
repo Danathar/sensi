@@ -1,6 +1,7 @@
 """Tests for Sensi data component."""
 
 from datetime import datetime
+import logging
 import time
 
 import pytest
@@ -22,6 +23,7 @@ from custom_components.sensi.data import (
     get_hvac_mode_from_operating_mode,
     get_operating_mode_from_hvac_mode,
 )
+from custom_components.sensi.utils import redact_identifier
 from homeassistant.components.climate import HVACMode
 from homeassistant.const import UnitOfTemperature
 from homeassistant.util import dt as dt_util
@@ -396,6 +398,12 @@ class TestThermostatInfo:
         assert "ThermostatInfo" in info_str
         assert "model=" in info_str
         assert "1FTEST-MODEL" in info_str
+        # This rendering exists to be logged, and the log gets shared. The
+        # model names a product; the other three name one physical unit.
+        assert "TESTSERIAL0001" not in info_str
+        assert "001122334455" not in info_str
+        assert "serial=" in info_str
+        assert "wifi_mac=" in info_str
 
 
 class TestState:
@@ -790,3 +798,54 @@ class TestUpdatesWithoutASource:
         device.update_info(source)
 
         assert device.info is current_info
+
+
+class TestDeviceIdentifiersStayOutOfTheLog:
+    """A device identifier must not reach a log statement.
+
+    `docs/SECURITY-AI.md` forbids a real `icd_id` in a log statement, and
+    `tests/test_no_real_identifiers.py` keeps identifiers, serials and MAC
+    addresses out of the committed tree. These are the runtime half of the
+    same rule: a Home Assistant log is pasted into an issue routinely, so a
+    debug statement is a publication path rather than a private record.
+    """
+
+    def test_construction_redacts_the_identifier(self, mock_json, caplog):
+        """The three statements in SensiDevice.__init__ redact the icd_id."""
+        icd_id = mock_json["icd_id"]
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.sensi"):
+            SensiDevice.create(mock_json)
+
+        assert icd_id not in caplog.text
+        assert redact_identifier(icd_id) in caplog.text
+
+    def test_state_update_redacts_the_identifier(self, mock_json, caplog):
+        """update_state logs the same way __init__ does."""
+        _have_state, device = SensiDevice.create(mock_json)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.sensi"):
+            caplog.clear()
+            assert device.update_state({"state": {"status": "online"}}) is True
+
+        assert device.identifier not in caplog.text
+        assert "State updated to" in caplog.text
+
+    def test_hardware_values_are_redacted_but_the_model_is_not(self, caplog):
+        """Serial, hardware id and MAC identify a unit; the model does not."""
+        data = {
+            "icd_id": "aa-bb-cc-dd-ee-ff-00-02",
+            "thermostat_info": {
+                "serial_number": "TESTSERIAL0001",
+                "unique_hardware_id": 1,
+                "model_number": "1FTEST-MODEL",
+                "wifi_mac_address": "001122334455",
+            },
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.sensi"):
+            SensiDevice.create(data)
+
+        assert "TESTSERIAL0001" not in caplog.text
+        assert "001122334455" not in caplog.text
+        assert "1FTEST-MODEL" in caplog.text

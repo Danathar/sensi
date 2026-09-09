@@ -17,7 +17,7 @@ from .const import (
     TEMPERATURE_LOWER_LIMIT,
     TEMPERATURE_UPPER_LIMIT,
 )
-from .utils import to_bool, to_dict, to_float, to_int
+from .utils import redact_identifier, to_bool, to_dict, to_float, to_int
 
 # Refresh the access token this many seconds before its real expiry so the
 # socket.io namespace handshake is never presented a token that expires
@@ -327,10 +327,19 @@ class ThermostatInfo:
         self.last_changed_timestamp = to_int(data.get("last_changed_timestamp"), 0)
 
     def __str__(self):
-        """Return string representation of ThermostatInfo."""
+        """Return string representation of ThermostatInfo.
+
+        The serial number, hardware id and MAC address name one physical unit,
+        and this rendering exists to be written to a log that gets pasted into
+        an issue. They are redacted for the same reason `icd_id` is; the model
+        number is what makes the line diagnostically useful and identifies a
+        product rather than a thermostat, so it stays in the clear.
+        """
         return (
-            f"ThermostatInfo(model={self.model_number}, serial={self.serial_number}, "
-            f"hw_id={self.unique_hardware_id}, wifi_mac={self.wifi_mac_address}"
+            f"ThermostatInfo(model={self.model_number}, "
+            f"serial={redact_identifier(str(self.serial_number))}, "
+            f"hw_id={redact_identifier(str(self.unique_hardware_id))}, "
+            f"wifi_mac={redact_identifier(str(self.wifi_mac_address))}"
         )
 
 
@@ -355,9 +364,12 @@ class SensiDevice:
         self.name = to_dict(registration).get("name", "")
         self.state = State(state)
 
-        LOGGER.debug(f"{self.identifier} Capabilities={self.capabilities}")
-        LOGGER.debug(f"{self.identifier} Info={self.info}")
-        LOGGER.debug(f"{self.identifier} State={self.state}")
+        # `identifier` is the `icd_id`; see SensiDevice.create. It addresses
+        # the thermostat, so it is redacted on the way to the log.
+        redacted = redact_identifier(self.identifier)
+        LOGGER.debug(f"{redacted} Capabilities={self.capabilities}")
+        LOGGER.debug(f"{redacted} Info={self.info}")
+        LOGGER.debug(f"{redacted} State={self.state}")
 
     @classmethod
     def create(cls, data: any) -> tuple[bool, Self]:
@@ -383,7 +395,9 @@ class SensiDevice:
         source = data.get("state")
         if source:
             self.state = State(source)
-            LOGGER.debug(f"{self.identifier} State updated to {self.state}")
+            LOGGER.debug(
+                f"{redact_identifier(self.identifier)} State updated to {self.state}"
+            )
             return True
 
         return False
