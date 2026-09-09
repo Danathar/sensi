@@ -154,9 +154,12 @@ class SensiClient:
                 unresponsive = {task_icd_ids[t] for t in pending}
                 for t in pending:
                     t.cancel()
+                # WARNING reaches a default-configured log, which is the one
+                # that gets pasted into a bug report, so the identifiers are
+                # redacted here as much as in the debug statements.
                 LOGGER.warning(
                     "Timed out waiting for info/capabilities from device(s) %s; continuing without them",
-                    ", ".join(sorted(unresponsive)),
+                    ", ".join(redact_identifier(i) for i in sorted(unresponsive)),
                 )
 
             if not done:
@@ -379,8 +382,12 @@ class SensiClient:
         """Set the circulating fan mode. This updates the device on success."""
 
         if not device.capabilities.circulating_fan.capable:
+            # Home Assistant logs the message of a raised HomeAssistantError as
+            # well as showing it, so the identifier is redacted. `device.name`
+            # is what tells the user which thermostat refused anyway.
             raise HomeAssistantError(
-                f"{device.identifier}: circulating fan mode was set but the device does not support it"
+                f"{device.name} ({redact_identifier(device.identifier)}): circulating "
+                "fan mode was set but the device does not support it"
             )
 
         # "circulating_fan":{"capable":"yes","max_duty_cycle":100,"min_duty_cycle":10,"step":5}
@@ -1025,7 +1032,7 @@ class SensiClient:
                     LOGGER.debug(
                         "Unable to parse the state payload for device %s; "
                         "leaving it at its previous state",
-                        icd_id,
+                        redact_identifier(icd_id),
                         exc_info=True,
                     )
                     continue

@@ -15,6 +15,7 @@ asserts the payload each waiter receives rather than only that it completed.
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,7 @@ from custom_components.sensi.client import (
     is_token_expired,
 )
 from custom_components.sensi.data import AuthenticationConfig
+from custom_components.sensi.utils import redact_identifier
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -446,6 +448,32 @@ class TestUpdateState:
 
         broken_future.cancel()
 
+    async def test_the_unparseable_device_is_not_named_in_the_log(
+        self, client, mock_json, caplog
+    ) -> None:
+        """The parse failure is logged; the identifier in it is redacted.
+
+        `docs/SECURITY-AI.md` forbids a real `icd_id` in a log statement, and
+        this one repeats every 30 seconds for as long as the backend keeps
+        sending the shape it cannot read.
+        """
+        broken = {**mock_json, "icd_id": "aa-bb-cc-dd-ee-ff-00-04"}
+
+        def create(item):
+            raise AttributeError("'NoneType' object has no attribute 'get'")
+
+        with (
+            patch(
+                "custom_components.sensi.client.SensiDevice.create", side_effect=create
+            ),
+            caplog.at_level(logging.DEBUG, logger="custom_components.sensi"),
+        ):
+            client._update_state([broken])
+
+        assert "Unable to parse the state payload" in caplog.text
+        assert broken["icd_id"] not in caplog.text
+        assert redact_identifier(broken["icd_id"]) in caplog.text
+
     async def test_a_null_container_no_longer_discards_the_event(
         self, client, mock_json_with_nulls
     ) -> None:
@@ -818,8 +846,14 @@ class TestCirculatingFan:
         """The thermostat is never asked for something it cannot do."""
         mock_device.capabilities.circulating_fan.capable = False
 
-        with pytest.raises(HomeAssistantError, match="does not support it"):
+        with pytest.raises(HomeAssistantError, match="does not support it") as err:
             await client.async_set_circulating_fan_mode(mock_device, True, 20)
+
+        # Home Assistant logs this message as well as showing it, so it is
+        # subject to the same rule as a log statement: the device name says
+        # which thermostat refused, the icd_id stays redacted.
+        assert mock_device.identifier not in str(err.value)
+        assert mock_device.name in str(err.value)
 
 
 class TestTokenRefresh:
