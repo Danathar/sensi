@@ -14,7 +14,9 @@ month, and then the bypass actor would go unnoticed too.
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -319,3 +321,283 @@ def test_a_github_failure_is_reported_not_treated_as_clean(
 
     assert exit_code == 2
     assert "Unable to list rulesets" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Talking to GitHub.
+#
+# Every test above patches `fetch_live` out, so the function that actually
+# produces the answer -- two `gh api` calls, a name match between them, and
+# two failure paths -- runs in none of them. It is the only part of the script
+# that can report a protected branch when GitHub says otherwise, so it is
+# exercised here for real: a recording `gh` on PATH, and assertions on the
+# argv it was handed rather than on what got printed.
+# --------------------------------------------------------------------------
+
+
+_GH_STUB = """#!{python}
+import json, os, sys
+
+with open(os.environ["GH_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+
+replies = json.loads(os.environ["GH_REPLIES"])
+reply = replies.get(sys.argv[-1])
+if reply is None:
+    sys.stderr.write("unstubbed call: " + " ".join(sys.argv[1:]) + "\\n")
+    sys.exit(3)
+sys.stdout.write(reply.get("stdout", ""))
+sys.stderr.write(reply.get("stderr", ""))
+sys.exit(reply.get("code", 0))
+"""
+
+
+@pytest.fixture(name="gh")
+def gh_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Put a recording `gh` on PATH and return (set_replies, recorded_argv)."""
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    stub = stub_dir / "gh"
+    stub.write_text(_GH_STUB.format(python=sys.executable), encoding="utf-8")
+    stub.chmod(0o755)
+
+    log = tmp_path / "gh.log"
+    log.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GH_LOG", str(log))
+    monkeypatch.setenv("GH_REPLIES", "{}")
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+    def set_replies(replies: dict) -> None:
+        monkeypatch.setenv("GH_REPLIES", json.dumps(replies))
+
+    def calls() -> list[list[str]]:
+        return [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    return set_replies, calls
+
+
+def test_fetch_live_asks_for_the_named_ruleset_by_its_id(gh) -> None:
+    """The listing gives ids, not definitions; the detail call is the payload.
+
+    Both paths are asserted because a wrong one is not an error -- `gh api`
+    would fail, and the failure reads as "cannot reach GitHub" rather than
+    "this script asks for the wrong thing".
+    """
+    set_replies, calls = gh
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps(
+                    [{"id": 7, "name": "protect master"}, {"id": 9, "name": "tags"}]
+                )
+            },
+            "repos/Danathar/sensi/rulesets/7": {
+                "stdout": json.dumps({"id": 7, "name": "protect master"})
+            },
+        }
+    )
+
+    live = check_ruleset.fetch_live("Danathar/sensi", "protect master")
+
+    assert live == {"id": 7, "name": "protect master"}
+    assert calls() == [
+        ["api", "repos/Danathar/sensi/rulesets"],
+        ["api", "repos/Danathar/sensi/rulesets/7"],
+    ]
+
+
+def test_fetch_live_matches_on_name_not_on_being_first(gh) -> None:
+    """A repository can hold several rulesets, and only one is the agreement.
+
+    Returning whichever came back first would compare `master`'s protection
+    against a rule for tags and report drift, or worse, agreement.
+    """
+    set_replies, calls = gh
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps([{"id": 9, "name": "tags"}])
+            }
+        }
+    )
+
+    assert check_ruleset.fetch_live("Danathar/sensi", "protect master") is None
+    assert calls() == [["api", "repos/Danathar/sensi/rulesets"]]
+
+
+def test_fetch_live_takes_the_repository_it_is_given(gh) -> None:
+    """`--repo` has to reach the API call, or it checks the wrong repository."""
+    set_replies, calls = gh
+    set_replies({"repos/other/fork/rulesets": {"stdout": "[]"}})
+
+    assert check_ruleset.fetch_live("other/fork", "protect master") is None
+    assert calls() == [["api", "repos/other/fork/rulesets"]]
+
+
+def test_an_empty_listing_is_no_ruleset_rather_than_a_crash(gh) -> None:
+    """`gh api` can exit 0 having printed nothing.
+
+    A JSONDecodeError here would surface as an unhandled traceback, which no
+    caller distinguishes from the script not having run at all.
+    """
+    set_replies, _ = gh
+    set_replies({"repos/Danathar/sensi/rulesets": {"stdout": ""}})
+
+    assert check_ruleset.fetch_live("Danathar/sensi", "protect master") is None
+
+
+def test_a_failed_listing_is_raised_not_read_as_no_ruleset(gh) -> None:
+    """The difference between "unprotected" and "unknown".
+
+    Both would exit non-zero, but only one of them says the branch is open.
+    """
+    set_replies, _ = gh
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "code": 1,
+                "stderr": "gh: HTTP 404\ngh: Not Found (repos/Danathar/sensi/rulesets)\n",
+            }
+        }
+    )
+
+    with pytest.raises(check_ruleset.DefinitionError) as raised:
+        check_ruleset.fetch_live("Danathar/sensi", "protect master")
+
+    # The last line, because gh puts the useful part after the status line.
+    assert "gh: Not Found (repos/Danathar/sensi/rulesets)" in str(raised.value)
+    assert "Danathar/sensi" in str(raised.value)
+
+
+def test_a_failed_listing_with_no_stderr_still_says_something(gh) -> None:
+    """`gh` exits non-zero silently when it cannot find a token."""
+    set_replies, _ = gh
+    set_replies({"repos/Danathar/sensi/rulesets": {"code": 1}})
+
+    with pytest.raises(check_ruleset.DefinitionError, match="gh failed"):
+        check_ruleset.fetch_live("Danathar/sensi", "protect master")
+
+
+def test_a_failed_detail_read_is_raised_not_silently_skipped(gh) -> None:
+    """The ruleset exists and could not be read; that is not "no ruleset"."""
+    set_replies, _ = gh
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps([{"id": 7, "name": "protect master"}])
+            },
+            "repos/Danathar/sensi/rulesets/7": {"code": 1, "stderr": "gh: HTTP 403\n"},
+        }
+    )
+
+    with pytest.raises(check_ruleset.DefinitionError, match="Unable to read ruleset 7"):
+        check_ruleset.fetch_live("Danathar/sensi", "protect master")
+
+
+def test_online_mode_runs_end_to_end_against_a_live_ruleset(
+    agreed: dict, gh, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`main` -> real `fetch_live` -> `compare`, with nothing patched out.
+
+    The name searched for is the definition's own `name`, so renaming it in
+    the file makes the script stop finding the ruleset it is enforcing.
+    """
+    set_replies, calls = gh
+    live = _live(agreed)
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps([{"id": 42, "name": agreed["name"]}])
+            },
+            "repos/Danathar/sensi/rulesets/42": {"stdout": json.dumps(live)},
+        }
+    )
+
+    exit_code = check_ruleset.main([])
+
+    assert exit_code == 0
+    assert "matches the committed definition" in capsys.readouterr().out
+    assert calls() == [
+        ["api", "repos/Danathar/sensi/rulesets"],
+        ["api", "repos/Danathar/sensi/rulesets/42"],
+    ]
+
+
+def test_online_mode_reports_drift_read_from_github(
+    agreed: dict, gh, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point of the online mode, with the API call left in."""
+    set_replies, _ = gh
+    live = _live(agreed, bypass_actors=[{"actor_id": 1, "actor_type": "Integration"}])
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps([{"id": 42, "name": agreed["name"]}])
+            },
+            "repos/Danathar/sensi/rulesets/42": {"stdout": json.dumps(live)},
+        }
+    )
+
+    exit_code = check_ruleset.main([])
+
+    assert exit_code == 1
+    assert "bypass_actors" in capsys.readouterr().out
+
+
+def test_repo_reaches_the_api_call(agreed: dict, gh) -> None:
+    """`--repo` is how this is pointed at a fork; it must not be ignored."""
+    set_replies, calls = gh
+    set_replies({"repos/someone/sensi/rulesets": {"stdout": "[]"}})
+
+    assert check_ruleset.main(["--repo", "someone/sensi"]) == 1
+    assert calls() == [["api", "repos/someone/sensi/rulesets"]]
+
+
+# --------------------------------------------------------------------------
+# Definition validation that nothing above reaches.
+# --------------------------------------------------------------------------
+
+
+def test_a_definition_that_targets_tags_is_refused(
+    tmp_path: Path, agreed: dict
+) -> None:
+    """A branch rule with `target: tag` applies to no branch at all."""
+    agreed["target"] = "tag"
+    path = tmp_path / "ruleset.json"
+    path.write_text(json.dumps(agreed), encoding="utf-8")
+
+    with pytest.raises(check_ruleset.DefinitionError, match="target must be 'branch'"):
+        check_ruleset.load_definition(path)
+
+
+def test_a_definition_pinned_to_a_branch_name_is_refused(
+    tmp_path: Path, agreed: dict
+) -> None:
+    """`master` renamed leaves a rule that reads as protection and guards nothing.
+
+    `~DEFAULT_BRANCH` follows the role. A literal ref does not, and the diff
+    that renames the branch never touches this file.
+    """
+    agreed["conditions"]["ref_name"]["include"] = ["refs/heads/master"]
+    path = tmp_path / "ruleset.json"
+    path.write_text(json.dumps(agreed), encoding="utf-8")
+
+    with pytest.raises(check_ruleset.DefinitionError, match="~DEFAULT_BRANCH"):
+        check_ruleset.load_definition(path)
+
+
+def test_required_checks_of_a_ruleset_without_the_rule_is_empty(agreed: dict) -> None:
+    """A live ruleset can lack the rule entirely.
+
+    `compare` subtracts one set from the other, so returning None or raising
+    here would turn "every required check was dropped" into a crash or a pass.
+    """
+    live = _live(agreed)
+    live["rules"] = [r for r in live["rules"] if r["type"] != "required_status_checks"]
+
+    assert check_ruleset._required_checks(live) == set()
+    assert any("no longer required" in p for p in check_ruleset.compare(agreed, live))
