@@ -51,6 +51,19 @@ repository's history; treat it as the highest-priority rule here.
 helpers in `utils.py`. Degrade to "unknown" rather than raising. `data.py` and
 `capabilities.py` are the models for this.
 
+**`except A, B:` without parentheses is correct here — do not "fix" it.**
+This is [PEP 758](https://peps.python.org/pep-0758/) syntax, valid since Python
+3.14, not the Python 2 form it resembles. `ruff.toml` sets
+`target-version = "py314"`, under which the parentheses are redundant and
+`ruff format` strips them back out — so adding them turns `ruff format --check`
+red in CI. Nor can the tree reach an interpreter that rejects the form:
+`hacs.json` pins Home Assistant `2026.3.0`, which itself requires Python 3.14.2,
+and `tests/test_metadata.py` enforces that floor. Automated scanners have filed
+this as a fatal syntax error five times (#79, #95, #133, #147, #148); run
+`python3 -m py_compile` before reporting any syntax problem in this repository.
+The full account is in
+[`.claude/memory/except-tuple-without-parentheses-is-valid.md`](.claude/memory/except-tuple-without-parentheses-is-valid.md).
+
 **Do not add `pyproject.toml`.** It is gitignored on purpose — the devcontainer
 image supplies one. Ruff config belongs in `ruff.toml`, pytest config in
 `pytest.ini`.
