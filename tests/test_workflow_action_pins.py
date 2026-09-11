@@ -25,15 +25,26 @@ _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 _DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 
+# GitHub Actions runs a file in `.github/workflows/` that ends in either
+# extension. Scanning one of them would leave the other free to hold an
+# unpinned `uses:` and a write token while everything below still passed, by
+# never having been looked at.
+_WORKFLOW_GLOBS = ("*.yml", "*.yaml")
+
 # `uses: owner/repo@ref  # comment`, tolerating `- uses:` and any indentation.
 _USES = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)(?:\s+#\s*(?P<comment>.*?))?\s*$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _workflow_paths(directory: Path = _WORKFLOWS) -> list[Path]:
+    """Every workflow file in `directory`, whichever extension it uses."""
+    return sorted(path for glob in _WORKFLOW_GLOBS for path in directory.glob(glob))
+
+
 def _action_references() -> list[tuple[str, int, str, str | None]]:
     """(workflow, line number, ref, comment) for every external action used."""
     found: list[tuple[str, int, str, str | None]] = []
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in _workflow_paths():
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             match = _USES.match(line)
             if match is None:
@@ -60,7 +71,7 @@ def test_the_parser_finds_the_action_references_that_are_there() -> None:
     # Cross-check against a dumber count: every line mentioning `uses:` that is
     # not a comment should have been parsed.
     raw = 0
-    for path in _WORKFLOWS.glob("*.yml"):
+    for path in _workflow_paths():
         for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if stripped.startswith("#"):
@@ -145,5 +156,21 @@ def test_dependabot_watches_the_directory_the_workflows_are_in() -> None:
 
 def test_every_workflow_still_parses_as_yaml() -> None:
     """Cheap, and the pins were applied by rewriting lines."""
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in _workflow_paths():
         assert yaml.safe_load(path.read_text(encoding="utf-8")), f"{path.name} is empty"
+
+
+def test_the_scan_reads_both_workflow_extensions(tmp_path: Path) -> None:
+    """`.yaml` is as real to GitHub Actions as `.yml`.
+
+    Every assertion in this module is driven by the file list this returns, so
+    an extension missing from it is not a narrower check - it is no check at
+    all for that file, reported as a pass. The guard above catches a `uses:`
+    written in a form the regex misses; it cannot catch a file the glob never
+    opened, because an unread file lowers no count.
+    """
+    (tmp_path / "a.yml").write_text("on: push\n", encoding="utf-8")
+    (tmp_path / "b.yaml").write_text("on: push\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("not a workflow\n", encoding="utf-8")
+
+    assert [path.name for path in _workflow_paths(tmp_path)] == ["a.yml", "b.yaml"]
