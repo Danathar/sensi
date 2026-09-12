@@ -100,6 +100,7 @@ custom_components/sensi/
   __init__.py      async_setup_entry / async_unload_entry, config option helpers
   auth.py          token refresh, credential storage, redact_token
   client.py        socket.io client - connect, event queue, emit loop, setters
+  config_flow.py   the UI setup flow - credentials in, config entry out
   coordinator.py   DataUpdateCoordinator wrapper (30s interval)
   data.py          SensiDevice / State - raw payload parsing
   capabilities.py  what a given thermostat model supports
