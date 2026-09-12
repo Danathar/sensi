@@ -87,8 +87,9 @@ The Sensi protocol is reverse engineered and undocumented. Ask:
 - Does it match the surrounding style, or import a different idiom?
 - Is new logic in the layer that owns it — payload shape in `data.py` /
   `capabilities.py` / `event.py`, not leaked into a platform module?
-- Is the commit prefix honest? `feat:` and `fix:` bump the version users see in
-  HACS; tooling and docs must not use them.
+- Is the commit prefix honest? The prefix does not select the version — CalVer
+  is chosen when the release is cut — but `feat:` and `fix:` are what a user
+  reads in the generated release notes; tooling and docs must not use them.
 
 ## Verdicts
 

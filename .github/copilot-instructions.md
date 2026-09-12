@@ -46,6 +46,8 @@ Before treating a change as complete: `pytest && ruff check . && ruff format --c
 
 ## Commit messages
 
-Conventional Commits. `feat:` and `fix:` bump the released version, so use them
-only for user-visible integration changes. Tooling, CI and docs are `ci:`,
-`docs:`, `test:`, `refactor:` or `chore:`.
+Conventional Commits. The prefix no longer decides the version — CalVer is
+chosen when the release is cut — but the release notes are generated from the
+merged pull requests, so use `feat:` and `fix:` only for user-visible
+integration changes. Tooling, CI and docs are `ci:`, `docs:`, `test:`,
+`refactor:` or `chore:`.

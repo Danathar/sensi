@@ -74,8 +74,10 @@ image. Do not create one — ruff config goes in `ruff.toml`, pytest config in
 where you stand. `tests/e2e/` is usually the cheapest way to move it, because it
 covers the connect handshake and emit loop that unit tests cannot reach.
 
-**Commit prefixes decide the released version.** `feat:` and `fix:` bump it.
-Tooling, CI, docs and agent instructions are `ci:` / `docs:` / `chore:`, never
-`feat:`.
+**Commit prefixes decide the release notes, not the version.** CalVer is chosen
+when the release is cut, so the prefix no longer selects a number — but release
+notes are generated from the merged pull requests, so `feat:` and `fix:` are
+what a user reads. Tooling, CI, docs and agent instructions are `ci:` /
+`docs:` / `chore:`, never `feat:`.
 
 **Do not edit `manifest.json` `version`.** The release workflow owns it.

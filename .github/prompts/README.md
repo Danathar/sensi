@@ -8,6 +8,7 @@ be pasted into any assistant — nothing here depends on a particular tool.
 | [`triage-issue.md`](triage-issue.md) | a user has reported a problem with logs attached |
 | [`protocol-change.md`](protocol-change.md) | Sensi changed something and the integration broke |
 | [`upgrade-home-assistant.md`](upgrade-home-assistant.md) | bumping the pinned Home Assistant / test harness |
+| [`review.md`](review.md) | reviewing a pull request against `docs/review-rubric.md` |
 | [`release-readiness.md`](release-readiness.md) | before triggering the release workflow |
 
 Claude Code users have the same workflows as slash commands under
