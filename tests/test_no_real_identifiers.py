@@ -22,6 +22,16 @@ would fail *open* on the file type nobody has added yet -- a credential in a
 `.sh`, a `Dockerfile` or a `.env` would simply not be looked at -- so the file
 set is every tracked file, and text is decided from the bytes rather than from
 the name.
+
+The credential searches need one more thing on top of that. `_JWT` and
+`_BEARER` recognise a value by its *shape*, which works for an access token
+because a JWT announces itself, and not at all for a refresh token, which is
+an opaque string with no shape to match. A refresh token is the credential
+`docs/SECURITY-AI.md` names first, the one this repository has already had
+committed once, and the one that stays valid for years. So values are also
+recognised by the *key* they are written against: anything long assigned to
+`refresh_token`, `access_token`, `client_secret`, `api_key`, `password` or
+`authorization` is treated as a credential regardless of what it looks like.
 """
 
 from pathlib import Path
@@ -40,6 +50,21 @@ _BEARER = re.compile(rb"[Bb]earer\s+[A-Za-z0-9._~+/=-]{20,}")
 # `"key": "value"` for the fields that identify a physical unit.
 _HARDWARE = re.compile(
     r"['\"](serial_number|wifi_mac_address)['\"]\s*:\s*['\"]([^'\"]+)['\"]"
+)
+# A credential named by the key it is written against rather than by its shape.
+# Deliberately tolerant of the forms the same assignment takes in this tree: a
+# JSON `"refresh_token": "..."`, a keyword argument, and an annotated module
+# constant whose value is wrapped onto the next line inside parentheses
+# (`CLIENT_SECRET: Final = (\n    "..."\n)`). A secret written in the form the
+# pattern does not read is a secret this test reports as absent.
+_CREDENTIAL = re.compile(
+    r"""(?ix)
+    ['"]?\b(refresh[_-]?token|access[_-]?token|client[_-]?secret
+            |api[_-]?key|password|authorization)\b['"]?
+    (?:\s*:\s*[A-Za-z_][\w.\[\], |]*)?   # an optional type annotation
+    \s*[:=]\s*\(?\s*                     # `:` in a mapping, `=` in code
+    ['"]([^'"\n]{4,})['"]
+    """
 )
 
 # The device identifiers this repository is allowed to contain. Add to this
@@ -66,6 +91,48 @@ ALLOWED_HARDWARE_VALUES = frozenset(
         "",
     }
 )
+
+# How long a value assigned to a credential key has to be before it is treated
+# as a real credential rather than a stand-in. Every such value committed today
+# is a readable placeholder - `test_token`, `refresh_token_123`, `new_token` -
+# and the longest is 23 characters; a Sensi refresh token is an opaque string
+# far longer than that, and no bearer credential worth having is shorter than
+# 20. Lowering this is widening the guard; raising it is narrowing it, and
+# should be done only alongside the value that forced it.
+MIN_CREDENTIAL_LENGTH = 20
+
+# The invented values this module assigns to credential keys, to prove the
+# check fires. They are fixtures of the guard rather than of the integration,
+# but they are committed text like any other, so they are listed here instead
+# of exempting this file - a path this scan skips is a path a real token could
+# be pasted into.
+_FAKE_OPAQUE = "c7d41a9e6b3f42a8be5107d9f3c28a41e0b6d7529af134c8"
+_FAKE_SHORT = "9f2b7c14ad6e40518b3c2fa7d05e8963"
+_FAKE_WRAPPED = "Kx7Hs2QpLm4Rt9Vb1Nc6Wd3Zf8Gj5Yh0Ua2Ee7T"
+_FAKE_API_KEY = "7c1f0bd2e5a94836b0d1c7e4f2a6580913be4d7c"
+
+# Committed values at or above that length. Listed rather than absorbed by a
+# higher threshold: an exception that is visible in a diff is an exception
+# somebody decided on.
+ALLOWED_CREDENTIAL_VALUES = frozenset(
+    {
+        "bearer access_token_123",
+        "token_for_someone_else",
+        _FAKE_OPAQUE,
+        _FAKE_SHORT,
+        _FAKE_WRAPPED,
+        _FAKE_API_KEY,
+    }
+)
+
+# `auth.py` carries the two OAuth client secrets extracted from the vendor's
+# Android app. They are public constants of the Sensi API rather than this
+# repository's secrets - the integration cannot talk to the backend without
+# them - so that one file is allowed to hold a `client_secret`. Exempted by
+# path and key rather than by listing the values, which would copy them into a
+# second file for nothing. Every other key is still checked in `auth.py`, and
+# `client_secret` is still checked everywhere else.
+_VENDOR_SECRET_FILE = "custom_components/sensi/auth.py"
 
 
 def _tracked_files() -> list[Path]:
@@ -106,6 +173,30 @@ def _tracked_text_files() -> list[Path]:
 def _mask(value: str) -> str:
     """Name a value without reproducing it."""
     return f"<{len(value)} chars, starts {value[:2]!r}>"
+
+
+def _credential_offenders(
+    text: str,
+    relative_path: str,
+    allowed: frozenset[str] = ALLOWED_CREDENTIAL_VALUES,
+) -> list[str]:
+    """Credential-key assignments in `text` that carry a real-looking value.
+
+    `allowed` is a parameter so the tests below can ask what this function does
+    with a value nobody has approved. Passing an empty set is the only way to
+    check that a value is caught, given that the values they use are committed
+    here and therefore listed in the default.
+    """
+    offenders: list[str] = []
+    for key, value in _CREDENTIAL.findall(text):
+        if len(value) < MIN_CREDENTIAL_LENGTH:
+            continue
+        if value in allowed:
+            continue
+        if key.lower() == "client_secret" and relative_path == _VENDOR_SECRET_FILE:
+            continue
+        offenders.append(f"{relative_path}: {key} = {_mask(value)}")
+    return offenders
 
 
 def test_the_scan_reads_the_files_it_claims_to() -> None:
@@ -206,6 +297,91 @@ def test_no_fixture_carries_a_bearer_credential() -> None:
         f"JWT-shaped strings outside the redaction test: {jwt_files}"
     )
     assert bearer_files == [], f"Bearer credentials in tracked files: {bearer_files}"
+
+
+def test_no_credential_key_carries_a_real_looking_value() -> None:
+    """The shapeless half of the rule: a refresh token looks like nothing.
+
+    `_JWT` and `_BEARER` cannot see an opaque token, so this reads the key it
+    was written against instead.
+    """
+    offenders: list[str] = []
+    for path in _tracked_text_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        offenders.extend(_credential_offenders(text, str(path.relative_to(_ROOT))))
+
+    assert offenders == [], (
+        "credential keys carrying a value long enough to be a real credential:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A fixture, which is where a captured payload gets pasted.
+        f'{{"refresh_token": "{_FAKE_OPAQUE}"}}',
+        # A keyword argument in a test written from a real session.
+        f'config = AuthenticationConfig(refresh_token="{_FAKE_SHORT}")',
+        # An annotated constant whose value is wrapped onto the next line.
+        f'CLIENT_SECRET: Final = (\n    "{_FAKE_WRAPPED}"\n)',
+        # A shell export in a file no extension allowlist would have read.
+        f'API_KEY="{_FAKE_API_KEY}"',
+    ],
+)
+def test_a_committed_credential_is_rejected_whatever_its_shape(source: str) -> None:
+    """None of these is a JWT and none says `Bearer`; all four are credentials."""
+    assert _credential_offenders(source, "tests/fixture.json", frozenset()) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'refresh_token="test_token"',
+        'access_token="new_access_token"',
+        '"refresh_token": "Refresh token"',
+        'refresh_token="token_for_someone_else"',
+    ],
+)
+def test_the_placeholders_the_suite_already_uses_stay_accepted(source: str) -> None:
+    """A guard that reddens on every test double gets weakened, not obeyed."""
+    assert _credential_offenders(source, "tests/test_config_flow.py") == []
+
+
+def test_only_auth_py_may_carry_a_client_secret() -> None:
+    """The vendor's constants are public; a secret elsewhere is not."""
+    source = f'CLIENT_SECRET: Final = "{_FAKE_WRAPPED}"'
+
+    assert _credential_offenders(source, _VENDOR_SECRET_FILE, frozenset()) == []
+    assert _credential_offenders(source, "tests/conftest.py", frozenset()) != []
+
+
+def test_auth_py_is_still_checked_for_the_other_credential_keys() -> None:
+    """The exemption is one key in one file, not an exemption for the file."""
+    source = f'refresh_token = "{_FAKE_SHORT}"'
+
+    assert _credential_offenders(source, _VENDOR_SECRET_FILE, frozenset()) != []
+
+
+def test_the_vendor_client_secrets_are_the_reason_for_the_exemption() -> None:
+    """If they leave `auth.py`, the exemption should leave with them.
+
+    Asserted by reading the file rather than by naming the values, for the
+    reason the module docstring gives: a guard against committing a secret
+    must not need a copy of one.
+    """
+    text = (_ROOT / _VENDOR_SECRET_FILE).read_text(encoding="utf-8")
+    found = _CREDENTIAL.findall(text)
+
+    long_secrets = [
+        key
+        for key, value in found
+        if key.lower() == "client_secret" and len(value) >= MIN_CREDENTIAL_LENGTH
+    ]
+    assert long_secrets, (
+        f"{_VENDOR_SECRET_FILE} no longer carries a client secret, so the "
+        "exemption in _credential_offenders is now unused - remove it"
+    )
 
 
 def test_no_captured_log_is_committed() -> None:
