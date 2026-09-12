@@ -65,30 +65,3 @@ class SensiUpdateCoordinator(DataUpdateCoordinator):
     def consecutive_connection_failures(self) -> int:
         """Return the number of consecutive failed updates."""
         return self._consecutive_failed_count
-
-    # async def _verify_authentication(self) -> bool:
-    #     """Verify that authentication is not expired. Login again if necessary."""
-    #     if datetime.now().timestamp() >= self._expires_at:
-    #         LOGGER.info("Token expired, getting new token")
-
-    #         self._login_retry = self._login_retry + 1
-    #         if self._login_retry > MAX_LOGIN_RETRY:
-    #             LOGGER.info(
-    #                 "Login failed %d times. Suspending data update", self._login_retry
-    #             )
-    #             self.update_interval = None
-    #             return False
-
-    #         try:
-    #             await get_access_token(self.hass, self._auth_config, True)
-    #             self._login_retry = 0
-    #         except AuthenticationError:
-    #             LOGGER.warning("Unable to authenticate", exc_info=True)
-    #             return False
-    #         except SensiConnectionError:
-    #             LOGGER.warning("Failed to connect", exc_info=True)
-    #             return False
-
-    #         self._save_auth_config(self._auth_config)
-
-    #     return True
