@@ -23,6 +23,21 @@ would fail *open* on the file type nobody has added yet -- a credential in a
 set is every tracked file, and text is decided from the bytes rather than from
 the name.
 
+Which values count is decided by `docs/review-rubric.md` and by the
+`capture-payload` runbook, not by this module: both name `icd_id`,
+`serial_number`, `unique_hardware_id`, `wifi_mac_address` and the
+`registration` address fields as the set a captured payload has to lose before
+it becomes a fixture. A guard that reads a subset of that list reports success
+over the fields it does not read, so all of them are checked here.
+
+Two of those need care rather than another name in a pattern.
+`unique_hardware_id` is an integer in the payload, so a check that only reads
+quoted values does not see it; and `city` and `state` are ordinary words in a
+thermostat integration -- an entity state, a review state -- so they are read
+only inside a `registration` mapping, where they mean a building. `address1`,
+`address2` and `postal_code` mean the same thing wherever they appear and are
+read everywhere.
+
 The credential searches need one more thing on top of that. `_JWT` and
 `_BEARER` recognise a value by its *shape*, which works for an access token
 because a JWT announces itself, and not at all for a refresh token, which is
@@ -47,10 +62,38 @@ _ICD = re.compile(r"\b(?:[0-9a-fA-F]{2}[-:]){5,7}[0-9a-fA-F]{2}\b")
 # A credential shape that must never appear in a fixture at all.
 _JWT = re.compile(rb"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 _BEARER = re.compile(rb"[Bb]earer\s+[A-Za-z0-9._~+/=-]{20,}")
-# `"key": "value"` for the fields that identify a physical unit.
+# The fields that identify a physical unit, in either form they are written
+# in: a JSON mapping, and a keyword argument in a test built from a real
+# session. The unquoted branch is digits only, because
+# `unique_hardware_id` is a number in the payload while a bare word after `=`
+# is an expression (`serial_number=device.info.serial_number`) rather than a
+# committed value.
 _HARDWARE = re.compile(
-    r"['\"](serial_number|wifi_mac_address)['\"]\s*:\s*['\"]([^'\"]+)['\"]"
+    r"""(?x)
+    ['"]?\b(serial_number|wifi_mac_address|unique_hardware_id)\b['"]?
+    \s*[:=]\s*
+    (?: ['"]([^'"\n]*)['"] | (\d+) )
+    """
 )
+
+# The `registration` fields that name a building rather than a device. The
+# first three are unambiguous wherever they appear; `city` and `state` are read
+# only inside a registration mapping, for the reason in the module docstring.
+_ADDRESS_ANYWHERE = re.compile(
+    r"""(?ix)
+    ['"]?\b(address1|address2|postal_code)\b['"]?
+    \s*[:=]\s*
+    ['"]([^'"\n]*)['"]
+    """
+)
+_ADDRESS_IN_REGISTRATION = re.compile(
+    r"""(?ix)
+    ['"]?\b(address1|address2|postal_code|city|state)\b['"]?
+    \s*[:=]\s*
+    ['"]([^'"\n]*)['"]
+    """
+)
+_REGISTRATION_KEY = re.compile(r"""(?i)['"]?\bregistration\b['"]?\s*[:=]\s*\{""")
 # A credential named by the key it is written against rather than by its shape.
 # Deliberately tolerant of the forms the same assignment takes in this tree: a
 # JSON `"refresh_token": "..."`, a keyword argument, and an annotated module
@@ -83,12 +126,45 @@ ALLOWED_ICD_IDS = frozenset(
     }
 )
 
+# The invented hardware and location values this module assigns, to prove the
+# checks fire. Listed here for the same reason as `_FAKE_OPAQUE` below: the
+# alternative is exempting this file, and a path this scan skips is a path a
+# real value could be pasted into.
+_FAKE_HARDWARE_ID = "4419382"
+_FAKE_KWARG_SERIAL = "ZR41WQ88X2K7"
+_FAKE_STREET = "1742 Ridgecrest Drive"
+_FAKE_UNIT = "Apt 6B"
+_FAKE_POSTCODE = "99709"
+_FAKE_CITY = "Fairbanks"
+_FAKE_STATE = "Alaska"
+
 ALLOWED_HARDWARE_VALUES = frozenset(
     {
         "TESTSERIAL0001",
         "001122334455",
         "S1",  # a deliberately short serial used to test truncation
+        "1",  # the synthetic unique_hardware_id, a number in the payload
         "",
+        _FAKE_HARDWARE_ID,
+        _FAKE_KWARG_SERIAL,
+    }
+)
+
+# The placeholders standing in for the account's address. `capture-payload.md`
+# tells a scrubber to reuse exactly these, so they are the whole permitted set;
+# anything else in a `registration` block came from a real account.
+ALLOWED_LOCATION_VALUES = frozenset(
+    {
+        "Somewhere",
+        "Madison",
+        "Wisconsin",
+        "53719",
+        "",
+        _FAKE_STREET,
+        _FAKE_UNIT,
+        _FAKE_POSTCODE,
+        _FAKE_CITY,
+        _FAKE_STATE,
     }
 )
 
@@ -175,6 +251,63 @@ def _mask(value: str) -> str:
     return f"<{len(value)} chars, starts {value[:2]!r}>"
 
 
+def _hardware_offenders(
+    text: str,
+    relative_path: str,
+    allowed: frozenset[str] = ALLOWED_HARDWARE_VALUES,
+) -> list[str]:
+    """Report assignments in `text` naming a unit with a real-looking value."""
+    offenders: list[str] = []
+    for key, quoted, unquoted in _HARDWARE.findall(text):
+        value = quoted or unquoted
+        if value in allowed:
+            continue
+        offenders.append(f"{relative_path}: {key} = {_mask(value)}")
+    return offenders
+
+
+def _registration_regions(text: str) -> list[str]:
+    """Return the `registration` mappings in `text`, read with braces matched.
+
+    A captured payload arrives either as a fixture or pasted into a comment --
+    `data.py` carries one of each -- so this reads the text rather than a
+    parsed document, and gets both.
+    """
+    regions: list[str] = []
+    for match in _REGISTRATION_KEY.finditer(text):
+        start = text.rindex("{", match.start(), match.end())
+        depth = 0
+        for index in range(start, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    regions.append(text[start : index + 1])
+                    break
+    return regions
+
+
+def _location_offenders(
+    text: str,
+    relative_path: str,
+    allowed: frozenset[str] = ALLOWED_LOCATION_VALUES,
+) -> list[str]:
+    """Address fields in `text` carrying something other than a placeholder."""
+    found: list[tuple[str, str]] = _ADDRESS_ANYWHERE.findall(text)
+    for region in _registration_regions(text):
+        found.extend(_ADDRESS_IN_REGISTRATION.findall(region))
+
+    offenders: list[str] = []
+    for key, value in found:
+        if value in allowed:
+            continue
+        entry = f"{relative_path}: {key} = {_mask(value)}"
+        if entry not in offenders:
+            offenders.append(entry)
+    return offenders
+
+
 def _credential_offenders(
     text: str,
     relative_path: str,
@@ -258,17 +391,35 @@ def test_every_device_identifier_is_synthetic() -> None:
     )
 
 
-def test_every_serial_and_mac_is_synthetic() -> None:
-    """The same rule for the other two values that name a physical unit."""
+def test_every_serial_mac_and_hardware_id_is_synthetic() -> None:
+    """The same rule for the other three values that name a physical unit."""
     offenders: list[str] = []
     for path in _tracked_text_files():
         text = path.read_text(encoding="utf-8", errors="replace")
-        for key, value in _HARDWARE.findall(text):
-            if value not in ALLOWED_HARDWARE_VALUES:
-                offenders.append(f"{path.relative_to(_ROOT)}: {key} = {_mask(value)}")
+        offenders.extend(_hardware_offenders(text, str(path.relative_to(_ROOT))))
 
     assert offenders == [], (
-        "serial or MAC values that are not synthetic:\n  " + "\n  ".join(offenders)
+        "serial, MAC or hardware id values that are not synthetic:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_every_registration_address_is_a_placeholder() -> None:
+    """A captured payload names the building the thermostat is in.
+
+    `docs/review-rubric.md` puts the `registration` address fields in the same
+    list as the device identifiers, and they are the entry on it that is about
+    a person rather than a unit: a street address and a postal code locate a
+    home, and a thermostat payload says whether anyone is currently heating it.
+    """
+    offenders: list[str] = []
+    for path in _tracked_text_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        offenders.extend(_location_offenders(text, str(path.relative_to(_ROOT))))
+
+    assert offenders == [], (
+        "address fields that are not the committed placeholders:\n  "
+        + "\n  ".join(offenders)
     )
 
 
@@ -382,6 +533,114 @@ def test_the_vendor_client_secrets_are_the_reason_for_the_exemption() -> None:
         f"{_VENDOR_SECRET_FILE} no longer carries a client secret, so the "
         "exemption in _credential_offenders is now unused - remove it"
     )
+
+
+def _mapping(key: str, value: str) -> str:
+    """Write a `key: value` pair at run time rather than in this source.
+
+    The checks above read this file like any other, so a test case written as
+    a literal would be a committed assignment of exactly the shape they
+    reject, and would have to be allowlisted to keep the suite green --
+    which is how an exemption gets added to a guard for the guard's own sake.
+    Assembling the pair here leaves nothing in the text to match.
+    """
+    return '{"' + key + '": "' + value + '"}'
+
+
+def _unquoted_mapping(key: str, value: str) -> str:
+    """Build the same, for the number `unique_hardware_id` arrives as."""
+    return '{"' + key + '": ' + value + "}"
+
+
+def _keyword_argument(key: str, value: str) -> str:
+    """Build the same, for the form a test written from a session uses."""
+    return "INFO = dict(" + key + '="' + value + '")'
+
+
+@pytest.mark.parametrize(
+    ("build", "key", "value"),
+    [
+        # The payload form: a number, which a quoted-value check cannot see.
+        (_unquoted_mapping, "unique_hardware_id", _FAKE_HARDWARE_ID),
+        # A keyword argument in a test written from a real session.
+        (_keyword_argument, "serial_number", _FAKE_KWARG_SERIAL),
+    ],
+)
+def test_a_real_hardware_value_is_rejected_in_either_form(
+    build, key: str, value: str
+) -> None:
+    """A serial in a mapping was the only shape the previous check read."""
+    source = build(key, value)
+
+    assert _hardware_offenders(source, "tests/sample_new.json", frozenset()) != []
+
+
+def test_an_expression_is_not_a_committed_hardware_value() -> None:
+    """`entity.py` passes the field through; that is not a value to reject."""
+    source = "serial_number=device.info.serial_number,"
+
+    assert _hardware_offenders(source, "custom_components/sensi/entity.py") == []
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("address1", _FAKE_STREET),
+        ("address2", _FAKE_UNIT),
+        ("postal_code", _FAKE_POSTCODE),
+        ("city", _FAKE_CITY),
+        ("state", _FAKE_STATE),
+    ],
+)
+def test_a_captured_address_is_rejected(key: str, value: str) -> None:
+    """Every field the runbook tells a scrubber to replace."""
+    source = '{"registration": ' + _mapping(key, value) + "}"
+
+    assert _location_offenders(source, "tests/sample_new.json", frozenset()) != []
+
+
+def test_a_street_address_is_read_outside_a_registration_block_too() -> None:
+    """`address1` means one thing wherever a payload gets pasted."""
+    source = "# captured: " + _mapping("address1", _FAKE_STREET)
+
+    assert _location_offenders(source, "custom_components/sensi/data.py", frozenset())
+
+
+def test_city_and_state_are_read_only_inside_a_registration_block() -> None:
+    """Both are ordinary words here: an entity state, a review state.
+
+    Checking them everywhere would redden the guard on code that has nothing to
+    do with an address, and a guard that reddens on ordinary code gets weakened
+    rather than obeyed.
+    """
+    source = "review = " + _mapping("state", "APPROVED")
+
+    assert _location_offenders(source, "scripts/pr_metrics.py", frozenset()) == []
+
+
+def test_the_registration_block_is_read_to_its_closing_brace() -> None:
+    """A nested mapping must not end the region early."""
+    inner = _mapping("city", _FAKE_CITY)
+    source = (
+        '{"registration": {"nested": {"a": 1}, '
+        + inner.lstrip("{").rstrip("}")
+        + "}, "
+        + _mapping("state", "later").lstrip("{").rstrip("}")
+        + "}"
+    )
+    offenders = _location_offenders(source, "tests/sample_new.json", frozenset())
+
+    assert len(offenders) == 1, offenders
+    assert "city" in offenders[0]
+
+
+def test_the_committed_placeholders_stay_accepted() -> None:
+    """The fixtures must keep passing, or the guard gets an exemption."""
+    for name in ("sample.json", "sample_with_nulls.json"):
+        text = (_ROOT / "tests" / name).read_text(encoding="utf-8")
+
+        assert _location_offenders(text, f"tests/{name}") == []
+        assert _hardware_offenders(text, f"tests/{name}") == []
 
 
 def test_no_captured_log_is_committed() -> None:
