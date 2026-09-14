@@ -29,11 +29,16 @@
 /.github/rulesets/                      @Danathar
 /.github/CODEOWNERS                     @Danathar
 
-# What agents are permitted to do, and the mechanical half of it.
+# What agents are permitted to do, and the mechanical half of it. The hooks
+# directory is here for the same reason settings.json is: Claude Code runs
+# what is in it after every Edit and Write, with no permission prompt, so
+# rewriting a hook script is the same capability as rewriting the settings
+# file that names it.
 /docs/SECURITY-AI.md                    @Danathar
 /docs/branch-protection.md              @Danathar
 /AGENTS.md                              @Danathar
 /.claude/settings.json                  @Danathar
+/.claude/hooks/                         @Danathar
 
 # Change classification feeds the labels a reviewer triages by.
 /.github/risk-tiers.yml                 @Danathar

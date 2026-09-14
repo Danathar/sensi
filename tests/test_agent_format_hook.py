@@ -49,6 +49,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _HOOK = _ROOT / ".claude" / "hooks" / "format-edited-python.sh"
 _SETTINGS = _ROOT / ".claude" / "settings.json"
 _RUFF_CONFIG = _ROOT / "ruff.toml"
+_POLICY = _ROOT / "docs" / "SECURITY-AI.md"
 
 # The hook's own `ruff` invocations, in the order the script runs them. Import
 # sorting first and only (`--select I`), then formatting; the header explains
@@ -876,31 +877,193 @@ def test_allowed_and_asked_permission_rules_name_paths_that_exist() -> None:
     )
 
 
-def test_denied_permission_rules_name_paths_that_stay_absent() -> None:
-    """The deny list guards files this repository deliberately does not have.
+# The deny list guards two kinds of path, and which kind a rule guards is the
+# whole of what it is for. Splitting them is not bookkeeping: the assertion
+# that makes an ABSENT rule meaningful is the exact opposite of the one that
+# makes a BOUNDARY rule meaningful, so a single list could only check one of
+# them and would quietly stop checking the other.
+#
+# ABSENT - files this repository deliberately does not have. `pyproject.toml`
+# is the interesting one: `ruff.toml`'s header explains that the devcontainer
+# image supplies a `pyproject.toml`, so one appearing here would silently take
+# over lint configuration. A rule here stops meaning anything the moment the
+# file arrives, which is what makes "it is still absent" the assertion.
+_DENIED_ABSENT = (
+    "secrets.yaml",
+    ".env",
+    "config",
+    "pyproject.toml",
+)
 
-    `pyproject.toml` is the interesting one: `ruff.toml`'s header explains
-    that the devcontainer image supplies a `pyproject.toml`, so one appearing
-    here would silently take over lint configuration. Checking that these stay
-    absent is what makes the deny rules more than decoration.
+# BOUNDARY - files this repository does have, and which decide what an agent
+# may do at all (#173). The assertion is the mirror image: each must still be
+# committed, because a deny rule pointing at a path that has been renamed away
+# reads as protection in a diff and guards nothing.
+_DENIED_BOUNDARY = (
+    ".claude/hooks",
+    ".claude/settings.json",
+    "docs/SECURITY-AI.md",
+)
+
+
+def _denied_paths() -> set[str]:
+    """Return every repository path the deny list names, normalised."""
+
+    deny = _settings()["permissions"]["deny"]
+    return {path for rule in deny for path in _rule_paths(rule)}
+
+
+def test_every_denied_path_is_classified() -> None:
+    """Each deny rule is claimed by exactly one of the two lists above.
+
+    A rule added to settings.json without a decision about which kind it is
+    would otherwise be checked by neither test, which is the same as not being
+    checked. A list entry that no rule produces is the rename failure, caught
+    from the other side.
+    """
+
+    denied = _denied_paths()
+    assert len(denied) >= 4, (
+        f"only {len(denied)} denied paths were parsed; the rule parser has "
+        "stopped seeing the paths in settings.json"
+    )
+
+    classified = set(_DENIED_ABSENT) | set(_DENIED_BOUNDARY)
+    assert not set(_DENIED_ABSENT) & set(_DENIED_BOUNDARY), (
+        "a path cannot be both deliberately absent and part of the boundary"
+    )
+    assert denied == classified, (
+        "the deny list and its classification disagree: "
+        f"unclassified={sorted(denied - classified)}, "
+        f"claimed but not denied={sorted(classified - denied)}"
+    )
+
+
+def test_denied_absent_paths_stay_absent() -> None:
+    """The files the deny list keeps out have not arrived.
+
+    Checking that these stay absent is what makes those deny rules more than
+    decoration.
     """
 
     tracked = _tracked_files()
-    permissions = _settings()["permissions"]
 
-    checked = 0
-    for rule in permissions["deny"]:
-        for path in _rule_paths(rule):
-            checked += 1
-            assert path not in tracked, (
-                f"deny rule {rule!r} names {path!r}, which is now tracked; the "
-                "rule and this test need a decision, not a quiet pass"
-            )
-            assert not (_ROOT / path).exists(), (
-                f"deny rule {rule!r} names {path!r}, which exists in the tree"
-            )
+    for path in _DENIED_ABSENT:
+        assert path not in tracked, (
+            f"deny rule for {path!r} names a path that is now tracked; the "
+            "rule and this test need a decision, not a quiet pass"
+        )
+        assert not (_ROOT / path).exists(), (
+            f"deny rule for {path!r} names a path that exists in the tree"
+        )
 
-    assert checked >= 4, (
-        f"only {checked} denied paths were checked; the rule parser has "
-        "stopped seeing the paths in settings.json"
+
+def test_denied_boundary_paths_are_committed() -> None:
+    """The boundary files the deny list protects are still where it says.
+
+    These rules are the only thing standing between "can edit files in this
+    repository" and "can run arbitrary commands": Claude Code executes the
+    hook script after every `Edit` and `Write` without a permission prompt, so
+    a rule that has drifted off the script's path removes the gate without
+    changing a character of the script.
+    """
+
+    tracked = _tracked_files()
+    directories = {
+        parent for path in tracked for parent in (str(p) for p in Path(path).parents)
+    }
+
+    for path in _DENIED_BOUNDARY:
+        assert path in tracked or path in directories, (
+            f"deny rule for {path!r} names a path git does not track; either "
+            "it was renamed and the rule still points at the old name, or the "
+            "rule is now guarding nothing"
+        )
+
+
+# --------------------------------------------------------------------------
+# The join: a hook Claude Code runs unprompted is inside the boundary (#173)
+# --------------------------------------------------------------------------
+
+# The bullet in docs/SECURITY-AI.md that lists what an automated fix may not
+# touch. Matched on its bolded lead-in rather than on the paths it names, so
+# that renaming a path in the policy is caught by the assertion below instead
+# of silently making the search miss.
+_BOUNDARY_RULE = "**Disable or edit the security boundary itself.**"
+
+
+def _boundary_rule_text() -> str:
+    """Return the "Disable or edit the security boundary itself" bullet."""
+
+    policy = _POLICY.read_text(encoding="utf-8")
+    assert _BOUNDARY_RULE in policy, (
+        f"{_POLICY.name} no longer contains {_BOUNDARY_RULE!r}; the rule this "
+        "test reads has been renamed or removed"
     )
+    rest = policy[policy.index(_BOUNDARY_RULE) :]
+    end = rest.find("\n- ")
+    return rest if end == -1 else rest[:end]
+
+
+def _named_in(text: str, path: str) -> bool:
+    """Whether `text` names `path` in backticks, or a directory above it."""
+
+    candidates = [f"`{path}`"]
+    candidates += [
+        f"`{parent}/`" for parent in Path(path).parents if str(parent) != "."
+    ]
+    return any(candidate in text for candidate in candidates)
+
+
+def _covered_by_deny(denied: set[str], path: str) -> bool:
+    """Whether a deny rule names `path`, or a directory that contains it."""
+
+    if path in denied:
+        return True
+    return any(str(parent) in denied for parent in Path(path).parents)
+
+
+def test_every_registered_hook_command_is_inside_the_boundary() -> None:
+    """A script Claude Code runs unprompted is protected like settings.json.
+
+    This is the join #173 reported missing. `.claude/settings.json` was named
+    in the deny list, in `docs/SECURITY-AI.md` and in `.github/CODEOWNERS`;
+    the script that settings file executes was named in none of them, and the
+    two are the same capability. Hook execution is not a tool call, so the
+    permission system never sees it: appending a line to the script is enough
+    to have it run, in-process and with the operator's environment, on the
+    agent's own next `Edit` or `Write`.
+
+    Deriving the paths from the `hooks` block rather than listing them means
+    the next hook wired into this repository has to be brought inside the
+    boundary in the same diff that wires it, instead of arriving unprotected
+    and waiting for someone to notice a second time.
+
+    CODEOWNERS is asserted separately, in `tests/test_codeowners.py`, where
+    the pattern matcher that can answer "is this owned by something narrower
+    than the catch-all" already lives.
+    """
+
+    commands = [
+        entry["command"]
+        for event in _settings().get("hooks", {})
+        for entry in _hook_entries(event)
+    ]
+    assert commands, "settings.json registers no hooks; this test covers them"
+
+    denied = _denied_paths()
+    boundary_rule = _boundary_rule_text()
+
+    for command in commands:
+        path = command.removeprefix("$CLAUDE_PROJECT_DIR/")
+        assert _covered_by_deny(denied, path), (
+            f"hook {path!r} is run by Claude Code without a permission "
+            "prompt, and no deny rule in .claude/settings.json covers it or a "
+            "directory above it. Editing it is the same capability as editing "
+            "settings.json"
+        )
+        assert _named_in(boundary_rule, path), (
+            f"hook {path!r} is not named in docs/SECURITY-AI.md under "
+            f"{_BOUNDARY_RULE!r}. The deny rule is the mechanism; the policy "
+            "is where a reader finds out the mechanism is deliberate"
+        )
