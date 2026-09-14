@@ -824,6 +824,17 @@ def test_every_registered_hook_command_names_a_tracked_executable() -> None:
         assert os.access(resolved, os.X_OK), f"{relative} is not executable"
 
 
+def test_hook_directory_cannot_be_edited_by_claude_code() -> None:
+    """The command hook is a security boundary, not ordinary source code.
+
+    Claude Code executes this script after every Edit and Write without a
+    separate permission check. Denying edits to its directory prevents a
+    session that can edit the checkout from replacing the command it runs.
+    """
+
+    assert "Edit(.claude/hooks/**)" in _settings()["permissions"]["deny"]
+
+
 _PATH_RULE = re.compile(r"^(?:Edit|Write|Read)\((?P<path>[^)]+)\)$")
 _BASH_PATH = re.compile(r"(?<![\w./-])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)")
 
@@ -890,6 +901,12 @@ def test_denied_permission_rules_name_paths_that_stay_absent() -> None:
 
     checked = 0
     for rule in permissions["deny"]:
+        if rule in {
+            "Edit(.claude/hooks/**)",
+            "Edit(.claude/settings.json)",
+            "Edit(docs/SECURITY-AI.md)",
+        }:
+            continue
         for path in _rule_paths(rule):
             checked += 1
             assert path not in tracked, (

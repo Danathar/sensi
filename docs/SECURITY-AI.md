@@ -46,8 +46,13 @@ supply-chain concern.
   to a required job are all the same action. If a gate is wrong, that is a
   separate change with its own justification.
 - **Disable or edit the security boundary itself.** `.github/workflows/`,
-  `.claude/settings.json`, and this file are outside what an automated fix may
-  touch. An agent that can rewrite its own constraints does not have any.
+  `.claude/settings.json`, `.claude/hooks/`, and this file are outside what an
+  automated fix may touch. An agent that can rewrite its own constraints does
+  not have any. `.claude/hooks/` is on the list for the same reason
+  `.claude/settings.json` is, and not as an extension of it: Claude Code runs
+  the hook script after every `Edit` and `Write` without a permission prompt,
+  so editing the script the settings file names is the same capability as
+  editing the settings file.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.

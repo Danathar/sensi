@@ -34,6 +34,7 @@
 /docs/branch-protection.md              @Danathar
 /AGENTS.md                              @Danathar
 /.claude/settings.json                  @Danathar
+/.claude/hooks/                         @Danathar
 
 # Change classification feeds the labels a reviewer triages by.
 /.github/risk-tiers.yml                 @Danathar
