@@ -71,6 +71,7 @@ _CONTROL_PLANE = (
     "docs/branch-protection.md",
     "AGENTS.md",
     ".claude/settings.json",
+    ".claude/hooks/format-edited-python.sh",
     "custom_components/sensi/auth.py",
 )
 

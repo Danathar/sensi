@@ -42,8 +42,10 @@
       "Bash(git push -f:*)",
       "Bash(git reset --hard:*)",
       "Bash(git clean -fdx:*)",
-      "Write(./pyproject.toml)",
-      "Edit(./pyproject.toml)"
+      "Edit(./pyproject.toml)",
+      "Edit(.claude/hooks/**)",
+      "Edit(.claude/settings.json)",
+      "Edit(docs/SECURITY-AI.md)"
     ]
   },
   "hooks": {
