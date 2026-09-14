@@ -1,34 +1,34 @@
 {
-	"name": "Home Assistant Custom Component Dev",
-	"context": "..",
-	"dockerFile": "../Dockerfile",
-	"appPort": "9123:8123",
-	"containerUser": "root",
-	"remoteUser": "root",
-	"postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && /workspaces/container_content/scripts/setup.sh",
-	"containerEnv": {
-		"TZ": "America/Chicago"
-	},
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"charliermarsh.ruff",
-				"ms-python.pylint",
-				"ms-python.vscode-pylance"
-			],
-			"settings": {
-				"python.pythonPath": "/usr/local/bin/python",
-				"python.testing.pytestArgs": [
-					"--no-cov"
-				],
-				"editor.formatOnPaste": false,
-				"editor.formatOnSave": true,
-				"editor.formatOnType": true,
-				"files.trimTrailingWhitespace": true,
-				"[python]": {
-					"editor.defaultFormatter": "charliermarsh.ruff"
-				}
-			}
-		}
-	}
+  "name": "Home Assistant Custom Component Dev",
+  "context": "..",
+  "dockerFile": "../Dockerfile",
+  "appPort": "9123:8123",
+  "containerUser": "root",
+  "remoteUser": "root",
+  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && /workspaces/container_content/scripts/setup.sh",
+  "containerEnv": {
+    "TZ": "America/Chicago"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "ms-python.pylint",
+        "ms-python.vscode-pylance"
+      ],
+      "settings": {
+        "python.pythonPath": "/usr/local/bin/python",
+        "python.testing.pytestArgs": [
+          "--no-cov"
+        ],
+        "editor.formatOnPaste": false,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "files.trimTrailingWhitespace": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  }
 }
