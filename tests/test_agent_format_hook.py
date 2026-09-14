@@ -825,27 +825,44 @@ def test_every_registered_hook_command_names_a_tracked_executable() -> None:
         assert os.access(resolved, os.X_OK), f"{relative} is not executable"
 
 
-_PATH_RULE = re.compile(r"^(?:Edit|Write|Read)\((?P<path>[^)]+)\)$")
+_PATH_RULE = re.compile(r"^(?P<op>Edit|Write|Read)\((?P<path>[^)]+)\)$")
 _BASH_PATH = re.compile(r"(?<![\w./-])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)")
 
 
-def _rule_paths(rule: str) -> list[str]:
-    """Return the repository paths a permission rule names, normalised."""
+def _rule_op_paths(rule: str) -> list[tuple[str, str]]:
+    """Return the (operation, path) pairs a permission rule names, normalised.
+
+    The OPERATION is half of what a rule means and dropping it makes a rule
+    unfalsifiable: `Read(.claude/hooks/**)` and `Edit(.claude/hooks/**)` name
+    the same path and do completely different things. Read denies reading the
+    hook; only Edit denies rewriting it, which is the whole point of guarding
+    it. Anything asserting about the deny list has to see both halves.
+    """
 
     found = []
     match = _PATH_RULE.match(rule)
     if match:
-        found.append(match.group("path"))
+        found.append((match.group("op"), match.group("path")))
     elif rule.startswith("Bash("):
-        found.extend(_BASH_PATH.findall(rule[len("Bash(") : -1]))
+        found.extend(("Bash", p) for p in _BASH_PATH.findall(rule[len("Bash(") : -1]))
 
     normalised = []
-    for path in found:
+    for op, path in found:
         path = path.removeprefix("./").removesuffix(":*")
         path = re.sub(r"/\*\*$", "", path).removesuffix("/*")
         if path and not path.startswith("*"):
-            normalised.append(path)
+            normalised.append((op, path))
     return normalised
+
+
+def _rule_paths(rule: str) -> list[str]:
+    """Return just the repository paths a permission rule names, normalised.
+
+    For the callers that genuinely only care about existence. Anything that
+    asserts a rule still PROTECTS something must use `_rule_op_paths`.
+    """
+
+    return [path for _, path in _rule_op_paths(rule)]
 
 
 def test_allowed_and_asked_permission_rules_name_paths_that_exist() -> None:
@@ -889,28 +906,34 @@ def test_allowed_and_asked_permission_rules_name_paths_that_exist() -> None:
 # over lint configuration. A rule here stops meaning anything the moment the
 # file arrives, which is what makes "it is still absent" the assertion.
 _DENIED_ABSENT = (
-    "secrets.yaml",
-    ".env",
-    "config",
-    "pyproject.toml",
+    ("Read", "secrets.yaml"),
+    ("Read", ".env"),
+    ("Read", "config"),
+    ("Edit", "pyproject.toml"),
 )
 
 # BOUNDARY - files this repository does have, and which decide what an agent
 # may do at all (#173). The assertion is the mirror image: each must still be
 # committed, because a deny rule pointing at a path that has been renamed away
 # reads as protection in a diff and guards nothing.
+#
+# Every one of these is an EDIT denial, and the operation is load-bearing
+# rather than incidental. The threat is an agent REWRITING the hook the
+# settings file executes; `Read(.claude/hooks/**)` would deny reading it and
+# leave it fully editable, which is protection in a diff and none in fact.
+# Pinning the operation here is what makes an Edit→Read downgrade fail.
 _DENIED_BOUNDARY = (
-    ".claude/hooks",
-    ".claude/settings.json",
-    "docs/SECURITY-AI.md",
+    ("Edit", ".claude/hooks"),
+    ("Edit", ".claude/settings.json"),
+    ("Edit", "docs/SECURITY-AI.md"),
 )
 
 
-def _denied_paths() -> set[str]:
-    """Return every repository path the deny list names, normalised."""
+def _denied_op_paths() -> set[tuple[str, str]]:
+    """Return every (operation, path) pair the deny list names, normalised."""
 
     deny = _settings()["permissions"]["deny"]
-    return {path for rule in deny for path in _rule_paths(rule)}
+    return {pair for rule in deny for pair in _rule_op_paths(rule)}
 
 
 def test_every_denied_path_is_classified() -> None:
@@ -922,9 +945,9 @@ def test_every_denied_path_is_classified() -> None:
     from the other side.
     """
 
-    denied = _denied_paths()
+    denied = _denied_op_paths()
     assert len(denied) >= 4, (
-        f"only {len(denied)} denied paths were parsed; the rule parser has "
+        f"only {len(denied)} denied rules were parsed; the rule parser has "
         "stopped seeing the paths in settings.json"
     )
 
@@ -948,13 +971,13 @@ def test_denied_absent_paths_stay_absent() -> None:
 
     tracked = _tracked_files()
 
-    for path in _DENIED_ABSENT:
+    for op, path in _DENIED_ABSENT:
         assert path not in tracked, (
-            f"deny rule for {path!r} names a path that is now tracked; the "
-            "rule and this test need a decision, not a quiet pass"
+            f"{op} deny rule for {path!r} names a path that is now tracked; "
+            "the rule and this test need a decision, not a quiet pass"
         )
         assert not (_ROOT / path).exists(), (
-            f"deny rule for {path!r} names a path that exists in the tree"
+            f"{op} deny rule for {path!r} names a path that exists in the tree"
         )
 
 
@@ -973,11 +996,20 @@ def test_denied_boundary_paths_are_committed() -> None:
         parent for path in tracked for parent in (str(p) for p in Path(path).parents)
     }
 
-    for path in _DENIED_BOUNDARY:
+    for op, path in _DENIED_BOUNDARY:
         assert path in tracked or path in directories, (
-            f"deny rule for {path!r} names a path git does not track; either "
-            "it was renamed and the rule still points at the old name, or the "
-            "rule is now guarding nothing"
+            f"{op} deny rule for {path!r} names a path git does not track; "
+            "either it was renamed and the rule still points at the old name, "
+            "or the rule is now guarding nothing"
+        )
+        # The operation is the other half of the guard. Claude Code checks
+        # file writes against Edit rules, so a boundary path denied only for
+        # Read is readable-proof and rewritable in practice -- the exact
+        # shape this whole section exists to prevent.
+        assert op == "Edit", (
+            f"boundary path {path!r} is denied for {op}, not Edit. Only an "
+            "Edit denial stops the file being rewritten; a Read denial leaves "
+            "the hook fully editable while still looking guarded in the diff"
         )
 
 
@@ -1015,12 +1047,18 @@ def _named_in(text: str, path: str) -> bool:
     return any(candidate in text for candidate in candidates)
 
 
-def _covered_by_deny(denied: set[str], path: str) -> bool:
-    """Whether a deny rule names `path`, or a directory that contains it."""
+def _edit_denied(denied: set[tuple[str, str]], path: str) -> bool:
+    """Whether an EDIT deny rule names `path`, or a directory containing it.
 
-    if path in denied:
+    Edit specifically, not any rule: a hook denied only for Read is still
+    rewritable, and a rewritable hook is arbitrary code execution on the
+    agent's next edit. The operation is the guard.
+    """
+
+    edited = {p for op, p in denied if op == "Edit"}
+    if path in edited:
         return True
-    return any(str(parent) in denied for parent in Path(path).parents)
+    return any(str(parent) in edited for parent in Path(path).parents)
 
 
 def test_every_registered_hook_command_is_inside_the_boundary() -> None:
@@ -1051,16 +1089,16 @@ def test_every_registered_hook_command_is_inside_the_boundary() -> None:
     ]
     assert commands, "settings.json registers no hooks; this test covers them"
 
-    denied = _denied_paths()
+    denied = _denied_op_paths()
     boundary_rule = _boundary_rule_text()
 
     for command in commands:
         path = command.removeprefix("$CLAUDE_PROJECT_DIR/")
-        assert _covered_by_deny(denied, path), (
+        assert _edit_denied(denied, path), (
             f"hook {path!r} is run by Claude Code without a permission "
-            "prompt, and no deny rule in .claude/settings.json covers it or a "
-            "directory above it. Editing it is the same capability as editing "
-            "settings.json"
+            "prompt, and no Edit deny rule in .claude/settings.json covers it "
+            "or a directory above it. Editing it is the same capability as "
+            "editing settings.json -- and a Read-only denial does not stop it"
         )
         assert _named_in(boundary_rule, path), (
             f"hook {path!r} is not named in docs/SECURITY-AI.md under "
