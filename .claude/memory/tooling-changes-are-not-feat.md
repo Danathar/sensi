@@ -7,17 +7,23 @@ ruff config and contributor docs was committed as
 **Why the wrong answer looked right** — the change adds a lot, and "feature"
 is the natural English word for it.
 
-**Rule** — `.releaserc` drives `jossef/action-semantic-release-info`, which
-computes the released version of the *integration* from commit prefixes.
-`feat:` produces a minor bump and `fix:` a patch bump, both of which appear in
-the HACS release notes users read. A tooling change that bumps 2.1.6 to 2.2.0
-tells every user something shipped when nothing did.
+**Rule** — the prefix no longer decides the version. `.github/workflows/release.yml`
+tags the CalVer number already committed in
+`custom_components/sensi/manifest.json`, and states the reason in its own
+header: "The version is never derived from commit messages." What the prefix
+still decides is how the change reads in the release notes GitHub generates
+(`generate_release_notes: true`), which is the list a user is shown when HACS
+offers them the update. A tooling change filed as `feat:` is announced there as
+something shipped when nothing did.
 
 Reserve `feat:` and `fix:` for user-visible integration behaviour. Everything
 else — CI, lint config, tests, docs, agent instructions — is `ci:`, `test:`,
-`docs:`, `refactor:` or `chore:`.
+`docs:`, `refactor:` or `chore:`. The same table is in `AGENTS.md`, "Commits
+and pull requests"; this file records why the wrong answer looked right, not a
+second copy of the rule.
 
-The release workflow is `workflow_dispatch` only, so a wrong prefix is not an
-immediate incident; it is still wrong at the next manual release.
+A wrong prefix is not an immediate incident — the release workflow runs monthly
+on a schedule and on `workflow_dispatch`, and neither reads the commit log. It
+is still wrong in the notes at the next release.
 
 **Source** — PR #39, amended before merge.
