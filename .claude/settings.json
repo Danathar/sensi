@@ -31,7 +31,6 @@
       "Bash(gh release:*)",
       "Bash(gh workflow run:*)",
       "Bash(pip install:*)",
-      "Edit(.github/workflows/**)",
       "Edit(custom_components/sensi/manifest.json)"
     ],
     "deny": [
@@ -45,7 +44,8 @@
       "Edit(./pyproject.toml)",
       "Edit(.claude/hooks/**)",
       "Edit(.claude/settings.json)",
-      "Edit(docs/SECURITY-AI.md)"
+      "Edit(docs/SECURITY-AI.md)",
+      "Edit(.github/workflows/**)"
     ]
   },
   "hooks": {

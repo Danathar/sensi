@@ -38,10 +38,10 @@ Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
 
 - **Permissions.** Read-only inspection, `pytest` and `ruff` run without asking.
   Anything that leaves the machine or changes shared state — `git push`,
-  `gh pr create`, `gh pr merge`, `gh release`, editing a workflow or
-  `manifest.json` — asks first. Writing `pyproject.toml` and reading
-  `secrets.yaml` / `.env` / `config/` are denied outright, as is editing the
-  boundary itself — `.claude/hooks/`, `.claude/settings.json` and
+  `gh pr create`, `gh pr merge`, `gh release`, editing `manifest.json` —
+  asks first. Writing `pyproject.toml` and reading `secrets.yaml` / `.env` /
+  `config/` are denied outright, as is editing the boundary itself —
+  `.github/workflows/`, `.claude/hooks/`, `.claude/settings.json` and
   `docs/SECURITY-AI.md`.
 - **A PostToolUse hook** (`.claude/hooks/format-edited-python.sh`) that sorts
   imports and runs `ruff format` on any `.py` file after an edit, so a change
