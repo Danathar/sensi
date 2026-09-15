@@ -21,6 +21,15 @@ coverage gate, `ruff.toml` for the line length, `ci.yml` for the interpreter,
 `.github/rulesets/master.json` for the required checks, the committed tree for
 every path and symbol named, and `release.yml` for how a version is chosen.
 
+`.claude/checkpoint.md` is here for the same reason with one twist: it states
+*current state*, and a state file is read before anything else, so a wrong
+number in it is the first thing an agent learns. The claim ban below is
+therefore enforced twice - once over the files that must state the rule
+correctly, and once over every markdown file git tracks, because a list of
+files someone remembered to update is exactly what let the corrected claim
+survive in `checkpoint.md`. Dated records are exempt, and the exemption is
+itself checked.
+
 Two conventions carried from `tests/test_codeowners.py`:
 
 - A claim table is a list of claims, not a cache. Dropping a rule from the
@@ -62,6 +71,16 @@ _REVIEW_RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _SECURITY_AI_DOC = _ROOT / "docs" / "SECURITY-AI.md"
 _README = _ROOT / "README.md"
 
+# The two files under `.claude/` that an agent session is told to read first.
+# `checkpoint.md` states current state; `session-summary.md` is the dated log
+# behind it, and is treated as a historical record below.
+_CHECKPOINT = _ROOT / ".claude" / "checkpoint.md"
+_SESSION_SUMMARY = _ROOT / ".claude" / "session-summary.md"
+_ACMM_REFLECTION = _ROOT / "docs" / "reflections" / "2026-09-05-acmm-remediation.md"
+_ACMM_POLICY = _ROOT / ".acmm.yml"
+_CONTRIBUTOR_TEMPLATE_TEST = _ROOT / "tests" / "test_contributor_templates.py"
+_WORKFLOWS = _ROOT / ".github" / "workflows"
+
 _COMPONENT = _ROOT / "custom_components" / "sensi"
 _COVERAGE_GATE = _ROOT / ".github" / "workflows" / "coverage-gate.yml"
 _CI = _ROOT / ".github" / "workflows" / "ci.yml"
@@ -86,6 +105,8 @@ _PROSE_FILES = (
     _REVIEW_RUBRIC,
     _SECURITY_AI_DOC,
     _README,
+    _CHECKPOINT,
+    _SESSION_SUMMARY,
 )
 
 
@@ -269,6 +290,7 @@ _GATE_COPIES = {
     _QUALITY_DOC: 2,
     _METRICS_DOC: 1,
     _README: 2,
+    _CHECKPOINT: 1,
 }
 
 
@@ -689,6 +711,7 @@ _COMMIT_PREFIX_RULE_FILES = (
     _COPILOT,
     _CURSOR,
     _REVIEW_RUBRIC,
+    _CHECKPOINT,
 )
 
 # The claim that is wrong: that a prefix moves the number users install. The
@@ -704,6 +727,15 @@ _PREFIX_DECIDES_THE_VERSION = (
     re.compile(
         r"prefix(?:es)?(?![^.]{0,60}(?:no longer|not|never))"
         r"[^.]{0,60}(?:decide|select)s? the (?:released )?version",
+        re.I,
+    ),
+    # "Commit prefixes drive the version users see in HACS" is the same claim
+    # in a wording none of the three patterns above reach. It is spelled out
+    # because a pattern set that only recognises the wording already corrected
+    # is a pattern set that catches nothing the next time.
+    re.compile(
+        r"prefix(?:es)?(?![^.]{0,60}(?:no longer|not|never))"
+        r"[^.]{0,60}drives? the (?:released )?version",
         re.I,
     ),
 )
@@ -784,3 +816,340 @@ def test_every_restating_file_points_back_at_agents_md() -> None:
             f"AGENTS.md no longer names {pointer} as a file that restates it, "
             "so a rule change there will not prompt re-checking this one"
         )
+
+
+# --------------------------------------------------------------------------
+# The claim scan is repository-wide, not a list of files someone remembered
+# --------------------------------------------------------------------------
+
+# `_COMMIT_PREFIX_RULE_FILES` above is a list of files that must state the rule
+# correctly. It cannot catch a file that states it *wrongly* and was never
+# added to the list - which is how `.claude/checkpoint.md` kept the corrected
+# claim through the change that corrected it everywhere else. So the ban is
+# also enforced the other way round, over every markdown file git tracks.
+#
+# Two files are exempt, and the exemption is not a convenience: both are dated
+# records of what was decided at the time, and the commit that removed
+# `ai-fix.yml` says in as many words that retro-editing them to match the
+# present makes them worse records. The tests below make that exemption
+# falsifiable - a file only qualifies if it is dated, and only stays listed
+# while it actually carries the wording.
+_HISTORICAL_RECORDS = (_SESSION_SUMMARY, _ACMM_REFLECTION)
+
+_MARKDOWN_SUFFIXES = (".md", ".mdc")
+
+_DATE_HEADING = re.compile(r"^#{1,6} +(\d{4}-\d{2}-\d{2})\b", re.MULTILINE)
+_DATED_FILENAME = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def _tracked_markdown() -> list[Path]:
+    """Return every markdown file git tracks, newest naming convention included."""
+    return [
+        _ROOT / path for path in sorted(_TRACKED) if path.endswith(_MARKDOWN_SUFFIXES)
+    ]
+
+
+def test_the_markdown_scan_sees_the_files_it_claims_to() -> None:
+    """Guard the scan below: an empty file list would agree with anything."""
+    found = _tracked_markdown()
+    assert len(found) >= 20, (
+        f"the tracked-markdown scan found {len(found)} files, so the "
+        "repository-wide claim ban below is not looking at the repository"
+    )
+    for required in (_AGENTS, _CHECKPOINT, *_HISTORICAL_RECORDS):
+        assert required in found, f"{_rel(required)} is not in the scanned set"
+
+
+def test_no_live_markdown_file_says_a_commit_prefix_decides_the_version() -> None:
+    """The ban applies to every tracked markdown file, not to a chosen list.
+
+    This is the assertion that would have caught `.claude/checkpoint.md`:
+    the file was not in `_COMMIT_PREFIX_RULE_FILES`, so the claim the rest of
+    the tree had already corrected survived in the one file whose own heading
+    is "Before you touch anything".
+    """
+    exempt = set(_HISTORICAL_RECORDS)
+    offenders: list[str] = []
+    for doc in _tracked_markdown():
+        if doc in exempt:
+            continue
+        text = " ".join(_read(doc).split())
+        for pattern in _PREFIX_DECIDES_THE_VERSION:
+            found = pattern.search(text)
+            if found:
+                offenders.append(
+                    f"{_rel(doc)}: "
+                    f"{text[max(0, found.start() - 60) : found.end() + 60]!r}"
+                )
+                break
+
+    assert not offenders, (
+        "these files say a commit prefix decides the released version, which "
+        f"release.yml contradicts ({_RELEASE_PREMISE}): {offenders}. Correct "
+        "the wording; adding the file to _HISTORICAL_RECORDS is only right "
+        "for a dated record of a past decision."
+    )
+
+
+@pytest.mark.parametrize("doc", _HISTORICAL_RECORDS, ids=_rel)
+def test_each_historical_record_is_actually_dated(doc: Path) -> None:
+    """A file is exempt because it is dated, not because it is listed.
+
+    Without this, `_HISTORICAL_RECORDS` is a way to silence the ban on any
+    file at all, which is the failure it exists to prevent.
+    """
+    assert _DATE_HEADING.search(_read(doc)) or _DATED_FILENAME.match(doc.name), (
+        f"{_rel(doc)} is exempt from the commit-prefix ban as a historical "
+        "record, but carries no date - neither a dated heading nor a dated "
+        "file name. A file a reader cannot date reads as current."
+    )
+
+
+@pytest.mark.parametrize("doc", _HISTORICAL_RECORDS, ids=_rel)
+def test_each_historical_record_still_needs_its_exemption(doc: Path) -> None:
+    """Drop a record from the list in the change that drops the wording."""
+    text = " ".join(_read(doc).split())
+    assert any(pattern.search(text) for pattern in _PREFIX_DECIDES_THE_VERSION), (
+        f"{_rel(doc)} no longer states that a commit prefix decides the "
+        "version, so it no longer needs an exemption; remove it from "
+        "_HISTORICAL_RECORDS in the same change."
+    )
+
+
+# --------------------------------------------------------------------------
+# `.claude/checkpoint.md`: the file that states current state
+# --------------------------------------------------------------------------
+
+# A number cached in prose is wrong the day after it is written, and this file
+# is read *before* anything else, so a wrong number here is read first. The
+# rule the file now states about itself is that it carries no test count and no
+# measured coverage figure - only the gate, which is a committed value.
+_TEST_COUNT_CLAIM = re.compile(r"\b\d+\s+tests\b", re.I)
+_ANY_PERCENTAGE = re.compile(r"\b(\d+)\s?%")
+
+
+def test_the_checkpoint_states_no_test_count() -> None:
+    """A test total moves with every merge; it cannot be kept true here."""
+    found = _TEST_COUNT_CLAIM.search(_read(_CHECKPOINT))
+    assert found is None, (
+        f"{_rel(_CHECKPOINT)} states a test count ({found.group(0)!r}). It is "
+        "stale as soon as one test is added, and nothing updates it. State "
+        "which command prints the number instead."
+    )
+
+
+def test_every_percentage_the_checkpoint_states_is_the_coverage_gate() -> None:
+    """The only percentage that can stay true here is a committed one.
+
+    `MIN_COVERAGE` lives in `coverage-gate.yml`, so quoting it is checkable -
+    `test_quoted_coverage_gate_matches_the_workflow` does exactly that. A
+    *measured* percentage is not: it is the output of a run, and this file has
+    no way to notice the run moved.
+    """
+    threshold = _coverage_threshold()
+    quoted = sorted(
+        {match.group(1) for match in _ANY_PERCENTAGE.finditer(_read(_CHECKPOINT))}
+    )
+    assert quoted == [threshold], (
+        f"{_rel(_CHECKPOINT)} states the percentages {quoted}; the only one it "
+        f"can keep true is the coverage gate ({threshold}%), which "
+        f"{_rel(_COVERAGE_GATE)} sets. A measured coverage number belongs in "
+        "the output of a run, not in a file nothing recomputes."
+    )
+
+
+# `ai-fix.yml` is named here in order to say it is gone. Its absence is
+# asserted by `tests/test_contributor_templates.py`, against
+# `.acmm.yml`'s waiver, using `ls-files --cached --others` so an unstaged
+# re-introduction is caught too; re-asserting it here would be a second,
+# weaker copy. The deferral is checked below rather than assumed.
+_NAMED_TO_SAY_IT_IS_GONE = {
+    "ai-fix.yml": (
+        "removed by PR #118; tests/test_contributor_templates.py owns the "
+        "assertion that it stays absent"
+    ),
+}
+
+# Only the live-state file. `session-summary.md` names `tests.yml`, which was
+# renamed to `ci.yml` afterwards, and `pyproject.toml`, which is gitignored -
+# both correct for the day the entry describes. Holding a dated record to the
+# current tree is the retro-edit the ai-fix removal commit argues against; its
+# markdown links are still checked, through `_PROSE_FILES`.
+_STATE_FILES = (_CHECKPOINT,)
+
+
+@pytest.mark.parametrize("doc", _STATE_FILES, ids=_rel)
+def test_every_path_the_state_files_name_is_committed(doc: Path) -> None:
+    """These files point an agent at the tree; a dead pointer misdirects it."""
+    named = _named_paths(doc)
+    assert len(named) >= 3, (
+        f"{_rel(doc)}: found only {len(named)} backticked paths, so this scan "
+        "is not looking at the file it thinks it is"
+    )
+
+    missing = sorted(
+        {
+            name
+            for name in named
+            if name not in _NAMED_TO_SAY_IT_IS_GONE and not _path_exists(name)
+        }
+    )
+    assert not missing, (
+        f"{_rel(doc)} names paths that are not committed: {missing}. Either "
+        "the path was renamed and this file still points at the old name, or "
+        "it is named in order to say it is gone and belongs in "
+        "_NAMED_TO_SAY_IT_IS_GONE with where its absence is asserted."
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_NAMED_TO_SAY_IT_IS_GONE))
+def test_absent_paths_the_state_files_name_are_owned_by_another_module(
+    name: str,
+) -> None:
+    """The deferral must be real, or this list excuses a lost file.
+
+    If the module named in the reason stops asserting the absence, nothing
+    does, and `_NAMED_TO_SAY_IT_IS_GONE` quietly becomes an allowlist.
+    """
+    assert not _path_exists(name), (
+        f"`{name}` is committed again, but the state files describe it as gone"
+    )
+    assert name in _read(_CONTRIBUTOR_TEMPLATE_TEST), (
+        f"`{name}` is excused here because "
+        f"{_rel(_CONTRIBUTOR_TEMPLATE_TEST)} asserts its absence, and that "
+        "module no longer mentions it; assert the absence here instead"
+    )
+
+
+def _acmm_waiver_reason(waiver_id: str) -> str:
+    """Return one waiver's reason from `.acmm.yml`, whitespace collapsed."""
+    policy = yaml.safe_load(_read(_ACMM_POLICY))
+    reasons = [
+        " ".join(waiver["reason"].split())
+        for waiver in policy["waivers"]
+        if waiver["id"] == waiver_id
+    ]
+    assert len(reasons) == 1, (
+        f"{_rel(_ACMM_POLICY)} has {len(reasons)} waivers with id "
+        f"{waiver_id!r}, expected exactly one"
+    )
+    return reasons[0]
+
+
+def test_the_checkpoint_and_the_acmm_policy_agree_on_how_ai_fix_went() -> None:
+    """Two hand-kept copies of one pull request number.
+
+    The checkpoint credited the removal to `#110` with no label on the number,
+    while `.acmm.yml` says `PR #118`. Both are real - #110 is the issue and
+    #118 the pull request that closed it - and a reader with one file in front
+    of them cannot tell which kind of number they are looking at.
+    """
+    quoted = re.findall(r"PR #(\d+)", _read(_CHECKPOINT))
+    assert len(quoted) == 1, (
+        f"{_rel(_CHECKPOINT)} names {len(quoted)} pull requests for the "
+        "ai-fix.yml removal, expected exactly one; an unlabelled number "
+        "cannot be told from an issue number"
+    )
+    waiver = _acmm_waiver_reason("acmm:ai-fix-workflow")
+    from_policy = re.findall(r"PR #(\d+)", waiver)
+    assert from_policy == quoted, (
+        f"{_rel(_CHECKPOINT)} says ai-fix.yml was removed by PR #{quoted} and "
+        f"{_rel(_ACMM_POLICY)}'s waiver says PR #{from_policy}. One of them is "
+        "wrong and nothing else compares them."
+    )
+
+
+def test_the_checkpoint_cites_a_heading_that_exists() -> None:
+    """The checkpoint sends the reader to a named section of the AI policy."""
+    citation = re.search(
+        r"See `(docs/[\w./-]+\.md)`,\s*\n?\s*\"([^\"]+)\"", _read(_CHECKPOINT)
+    )
+    assert citation, (
+        f"{_rel(_CHECKPOINT)} no longer cites a heading of a document in "
+        "docs/; drop this test in the same change that drops the citation"
+    )
+    doc = _ROOT / citation.group(1)
+    assert doc.exists(), f"{_rel(_CHECKPOINT)} cites the missing {citation.group(1)}"
+    headings = [
+        line.lstrip("#").strip()
+        for line in _read(doc).splitlines()
+        if line.startswith("#")
+    ]
+    assert headings.count(citation.group(2)) == 1, (
+        f"{_rel(_CHECKPOINT)} cites {citation.group(2)!r} in "
+        f"{citation.group(1)}, which has that heading "
+        f"{headings.count(citation.group(2))} times"
+    )
+
+
+def test_every_workflow_the_checkpoint_calls_live_is_committed() -> None:
+    """A workflow listed as live must exist; one listed as gone must not.
+
+    This is the whole job of a state file: to say what the tree currently is.
+    Both directions fail silently otherwise - a deleted workflow keeps being
+    described as running, and a re-introduced one keeps being described as
+    removed.
+    """
+    section = re.search(
+        r"^## Automation that is now live\n(.*?)(?=^## )",
+        _read(_CHECKPOINT),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert section, f"{_rel(_CHECKPOINT)} no longer has the automation section"
+
+    named = re.findall(r"`([\w.-]+\.yml)`", section.group(1))
+    assert len(named) >= 3, (
+        f"the automation section names {len(named)} workflows, so this scan "
+        "is not reading the list it thinks it is"
+    )
+
+    gone = set(_NAMED_TO_SAY_IT_IS_GONE)
+    committed = {path.name for path in _WORKFLOWS.iterdir() if path.suffix == ".yml"}
+    for workflow in named:
+        if workflow in gone:
+            assert workflow not in committed, (
+                f"{_rel(_CHECKPOINT)} says {workflow} is gone, but "
+                f"{_rel(_WORKFLOWS)}/{workflow} is committed"
+            )
+        else:
+            assert workflow in committed, (
+                f"{_rel(_CHECKPOINT)} describes {workflow} as live automation, "
+                f"but there is no {_rel(_WORKFLOWS)}/{workflow}"
+            )
+
+
+def test_the_checkpoint_update_date_is_not_older_than_its_last_edit() -> None:
+    """An edit that leaves the date behind makes the whole file read as fresh.
+
+    This is the only check here that needs history, so it is skipped on a
+    shallow clone rather than passing vacuously: CI checks out at depth 1.
+    """
+    stated = re.search(r"\*\*Updated:\*\* (\d{4}-\d{2}-\d{2})", _read(_CHECKPOINT))
+    assert stated, (
+        f"{_rel(_CHECKPOINT)} no longer carries an **Updated:** date in "
+        "ISO form, so a reader cannot tell how old what it says is"
+    )
+
+    shallow = subprocess.run(
+        ["git", "-C", str(_ROOT), "rev-parse", "--is-shallow-repository"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if shallow != "false":
+        pytest.skip("shallow clone: no history to compare the date against")
+
+    last_edit = subprocess.run(
+        ["git", "-C", str(_ROOT), "log", "-1", "--format=%cs", "--", str(_CHECKPOINT)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if not last_edit:
+        pytest.skip("no commit touching the checkpoint is present in this clone")
+
+    assert stated.group(1) >= last_edit, (
+        f"{_rel(_CHECKPOINT)} says it was updated {stated.group(1)} but was "
+        f"last committed {last_edit}. Bump the date in the change that edits "
+        "the file, or the staleness of what it says is invisible."
+    )
