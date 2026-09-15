@@ -738,6 +738,19 @@ _PREFIX_DECIDES_THE_VERSION = (
         r"[^.]{0,60}drives? the (?:released )?version",
         re.I,
     ),
+    # The two wordings `.claude/memory/tooling-changes-are-not-feat.md` used.
+    # That file said `.releaserc` computed the version from commit prefixes
+    # and went on for a year past the change that corrected the claim
+    # everywhere else, because it phrased it in terms of the *size* of the
+    # bump and of what the tooling "computes" - and none of the four patterns
+    # above reach either. A pattern set only ever catches the wording it was
+    # written against, so the answer is to keep adding the ones that got out.
+    re.compile(r"`(?:feat|fix):`[^.]{0,60}\b(?:major|minor|patch) bump", re.I),
+    re.compile(
+        r"(?:computes?|calculates?)[^.]{0,60}version[^.]{0,40}"
+        r"from commit (?:prefixes|messages)",
+        re.I,
+    ),
 )
 
 # What the files say instead, taken from AGENTS.md: "the prefix no longer
@@ -888,6 +901,68 @@ def test_no_live_markdown_file_says_a_commit_prefix_decides_the_version() -> Non
         f"release.yml contradicts ({_RELEASE_PREMISE}): {offenders}. Correct "
         "the wording; adding the file to _HISTORICAL_RECORDS is only right "
         "for a dated record of a past decision."
+    )
+
+
+# The second half of the same drift, and the more expensive one. A file may
+# get the prefix rule right and still tell a release operator that the
+# workflow picks the number - `.github/prompts/release-readiness.md` said
+# "Predict the version the workflow will compute" and "Do not edit that field
+# by hand; the workflow owns it". Following that produces a release tagged at
+# the version already published, because nothing bumps the manifest but a
+# pull request.
+_RELEASE_READS_THE_VERSION = "Reads the version; never sets it."
+
+_WORKFLOW_CHOOSES_THE_VERSION = (
+    re.compile(r"(?:predict|compute)[^.]{0,40}version[^.]{0,60}workflow will", re.I),
+    re.compile(r"the workflow owns it", re.I),
+    # The negation - "it never derives the version from commit messages" - is
+    # the correct statement, and it precedes the verb, so it has to be
+    # excluded with a lookbehind rather than a lookahead.
+    re.compile(
+        r"(?<!never )(?<!not )(?:derives?|derived)[^.]{0,40}version"
+        r"[^.]{0,60}from[^.]{0,40}commit",
+        re.I,
+    ),
+)
+
+
+def test_release_workflow_still_only_reads_the_version() -> None:
+    """Pin the artefact the ban below is derived from."""
+    assert _read(_RELEASE).count(_RELEASE_READS_THE_VERSION) == 1, (
+        f"release.yml no longer states {_RELEASE_READS_THE_VERSION!r} about its "
+        "release job; the ban below on prose that says the workflow chooses "
+        "the number rests on it"
+    )
+
+
+def test_no_live_markdown_file_says_the_release_workflow_sets_the_version() -> None:
+    """A runbook that says the workflow owns the version misroutes a release.
+
+    The manifest is bumped by the `prepare` job's pull request and by nothing
+    else. Prose that tells an operator to leave the field alone and read a
+    number out of the workflow leaves the number unchanged, and the release
+    run then tries to tag a version that is already published.
+    """
+    exempt = set(_HISTORICAL_RECORDS)
+    offenders: list[str] = []
+    for doc in _tracked_markdown():
+        if doc in exempt:
+            continue
+        text = " ".join(_read(doc).split())
+        for pattern in _WORKFLOW_CHOOSES_THE_VERSION:
+            found = pattern.search(text)
+            if found:
+                offenders.append(
+                    f"{_rel(doc)}: "
+                    f"{text[max(0, found.start() - 60) : found.end() + 60]!r}"
+                )
+                break
+
+    assert not offenders, (
+        "these files say the release workflow chooses or owns the version, "
+        f"which release.yml contradicts ({_RELEASE_READS_THE_VERSION}): "
+        f"{offenders}"
     )
 
 
