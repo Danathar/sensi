@@ -1118,20 +1118,72 @@ def test_every_registered_hook_command_is_inside_the_boundary() -> None:
 # rule is consulted when the Edit or Write tool touches the path, and not when
 # a Bash command writes it, so in `acceptEdits` mode a `sed -i` over an
 # ask-tier path runs with no prompt at all.
-_POLICY_PATH = re.compile(r"`([^`]*/[^`]*)`")
+_POLICY_LITERAL = re.compile(r"`([^`]+)`")
+
+# Spelled like a repository path: it has a directory separator, or a file
+# extension. Requiring a "/" alone would silently drop a root-level boundary
+# such as `AGENTS.md` while the cardinality check below stayed satisfied by
+# the four paths already there -- green, with no deny rule behind it.
+_PATH_SHAPED = re.compile(r"/|\.[A-Za-z0-9]+$")
 
 # The bullet says "and this file" rather than naming itself in backticks, so
 # the self-reference has to be supplied.
 _POLICY_SELF = "docs/SECURITY-AI.md"
 
 
+def _policy_paths(text: str, tracked: set[str], directories: set[str]) -> set[str]:
+    """Return the repository paths `text` names in backticks.
+
+    The bullet backticks prose literals as well as paths -- `Edit` and `Write`
+    are tool names, not files -- so the two have to be told apart. A literal
+    counts as a path when git tracks it, when it is a directory with tracked
+    contents, or when it is spelled like one. The last of those is what keeps
+    a path the policy names *before* it exists from being read as prose: being
+    untracked makes it more interesting here, not less.
+    """
+
+    found: set[str] = set()
+    for literal in _POLICY_LITERAL.findall(text):
+        candidate = literal.rstrip("/")
+        if (
+            candidate in tracked
+            or candidate in directories
+            or _PATH_SHAPED.search(candidate)
+        ):
+            found.add(candidate)
+    return found
+
+
 def _boundary_paths() -> set[str]:
     """Return every repository path the boundary bullet puts off limits."""
 
-    text = _boundary_rule_text()
-    paths = {path.rstrip("/") for path in _POLICY_PATH.findall(text)}
+    tracked = _tracked_files()
+    directories = {
+        parent for path in tracked for parent in (str(p) for p in Path(path).parents)
+    }
+    paths = _policy_paths(_boundary_rule_text(), tracked, directories)
     paths.add(_POLICY_SELF)
     return paths
+
+
+def test_policy_paths_reads_a_root_level_path() -> None:
+    """A boundary path with no directory separator is still a path."""
+
+    assert _policy_paths("`AGENTS.md` is off limits", set(), set()) == {"AGENTS.md"}
+
+
+def test_policy_paths_reads_a_tracked_extensionless_path() -> None:
+    """Neither a slash nor an extension, but git tracks it, so it is a path."""
+
+    assert _policy_paths("`Makefile` is off limits", {"Makefile"}, set()) == {
+        "Makefile"
+    }
+
+
+def test_policy_paths_ignores_prose_literals() -> None:
+    """`Edit` and `Write` are tool names the bullet backticks, not files."""
+
+    assert _policy_paths("after every `Edit` and `Write`", set(), set()) == set()
 
 
 def test_every_boundary_path_is_denied_rather_than_asked() -> None:
