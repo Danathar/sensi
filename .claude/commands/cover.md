@@ -8,7 +8,7 @@ Raise test coverage. Target: $ARGUMENTS (if empty, pick the weakest module).
 1. Measure first:
 
    ```bash
-   pytest --cov=custom_components.sensi --cov-report=term-missing
+   python3 scripts/run_tests.py --cov=custom_components.sensi --cov-report=term-missing
    ```
 
 2. Pick by risk, not by percentage. A missing line in `client.py`'s reconnect
