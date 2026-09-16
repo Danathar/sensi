@@ -2,11 +2,10 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(pytest:*)",
-      "Bash(python3 -m pytest:*)",
       "Bash(ruff check:*)",
       "Bash(ruff format:*)",
       "Bash(python3 scripts/check_requirements_sync.py)",
+      "Bash(python3 scripts/run_tests.py:*)",
       "Bash(python3 scripts/pr_metrics.py:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
@@ -24,6 +23,8 @@
       "Bash(gh run list:*)"
     ],
     "ask": [
+      "Bash(pytest:*)",
+      "Bash(python3 -m pytest:*)",
       "Bash(git push:*)",
       "Bash(git commit:*)",
       "Bash(gh pr create:*)",
@@ -45,7 +46,8 @@
       "Edit(.claude/hooks/**)",
       "Edit(.claude/settings.json)",
       "Edit(docs/SECURITY-AI.md)",
-      "Edit(.github/workflows/**)"
+      "Edit(.github/workflows/**)",
+      "Edit(scripts/run_tests.py)"
     ]
   },
   "hooks": {

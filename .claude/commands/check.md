@@ -8,7 +8,7 @@ Run every check CI runs, in the order that fails fastest, and report the result.
 ruff format --check .
 ruff check .
 python3 scripts/check_requirements_sync.py
-pytest --cov=custom_components.sensi --cov-report=term-missing
+python3 scripts/run_tests.py --cov=custom_components.sensi --cov-report=term-missing
 ```
 
 Then:
