@@ -339,7 +339,7 @@ class ThermostatInfo:
             f"ThermostatInfo(model={self.model_number}, "
             f"serial={redact_identifier(str(self.serial_number))}, "
             f"hw_id={redact_identifier(str(self.unique_hardware_id))}, "
-            f"wifi_mac={redact_identifier(str(self.wifi_mac_address))}"
+            f"wifi_mac={redact_identifier(str(self.wifi_mac_address))})"
         )
 
 
