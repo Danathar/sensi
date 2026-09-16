@@ -930,6 +930,7 @@ _DENIED_BOUNDARY = (
     ("Edit", ".claude/settings.json"),
     ("Edit", "docs/SECURITY-AI.md"),
     ("Edit", ".github/workflows"),
+    ("Edit", "scripts/run_tests.py"),
 )
 
 
@@ -1219,3 +1220,63 @@ def test_every_boundary_path_is_denied_rather_than_asked() -> None:
             "as outside what an automated fix may touch, but no Edit deny "
             f"rule in .claude/settings.json covers it{weaker}"
         )
+
+
+# --------------------------------------------------------------------------
+# The join: the allow list's execution reach is inside the boundary (#185)
+# --------------------------------------------------------------------------
+
+# The allow list is the other half of the boundary, and until #185 nothing
+# looked at it. A deny rule is only worth what the allow list leaves
+# unreachable: `Bash(pytest:*)` approved a command that imports whatever module
+# it is pointed at, which reaches every denied path without a tool call the
+# permission system can see.
+_RUNS_PYTEST = re.compile(r"^Bash\((?:python3? -m )?pytest[ :)]")
+_TEST_RUNNER = "Bash(python3 scripts/run_tests.py:*)"
+
+
+def test_the_unprompted_test_runner_is_the_wrapper_not_bare_pytest() -> None:
+    """An allow rule is auto-approved in every mode, so its reach is a boundary.
+
+    pytest imports each collected module before it evaluates an assertion, and
+    an import is not a tool call. Allowing bare `pytest` therefore allows
+    arbitrary Python -- from `tests/`, where no rule stops a write, and from
+    outside the repository, because `testpaths` applies only when the command
+    line names no target. The wrapper refuses a target outside `tests/`;
+    `tests/test_run_tests.py` is where that refusal is asserted.
+    """
+
+    allowed = _settings()["permissions"]["allow"]
+
+    assert _TEST_RUNNER in allowed, (
+        f"{_TEST_RUNNER!r} is not in the allow list; the suite is either "
+        "unrunnable without a prompt or being run by something unchecked"
+    )
+    for rule in allowed:
+        assert not _RUNS_PYTEST.match(rule), (
+            f"allow rule {rule!r} runs pytest directly, which imports whatever "
+            "module it is given -- inside tests/ or outside the repository -- "
+            "with no prompt and no tool call for a deny rule to match"
+        )
+
+
+def test_the_wrapper_is_inside_the_boundary_it_enforces() -> None:
+    """The allowed runner is denied for Edit, like the hook it is modelled on.
+
+    Without this the wrapper is the new unprotected hook: an agent that can
+    rewrite `scripts/run_tests.py` can make it forward any path, and the allow
+    rule then approves the rewritten script exactly as it approved the
+    original. `_edit_denied` and `_named_in` are the same joins the hook test
+    runs, so the wrapper is held to the same two standards -- the deny rule is
+    the mechanism, and the policy is where a reader learns it is deliberate.
+    """
+
+    path = "scripts/run_tests.py"
+
+    assert _edit_denied(_denied_op_paths(), path), (
+        f"{path!r} is run by an allow rule without a permission prompt, and no "
+        "Edit deny rule in .claude/settings.json covers it"
+    )
+    assert _named_in(_boundary_rule_text(), path), (
+        f"{path!r} is not named in docs/SECURITY-AI.md under {_BOUNDARY_RULE!r}"
+    )

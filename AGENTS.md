@@ -24,9 +24,9 @@ convention below follows from that one fact.
 ```bash
 pip install -r requirements_test.txt   # Python >= 3.14.2
 
-pytest                                 # whole suite (~11s)
-pytest tests/e2e                       # end-to-end only
-pytest --cov=custom_components.sensi --cov-report=term-missing
+python3 scripts/run_tests.py           # whole suite (~11s)
+python3 scripts/run_tests.py tests/e2e # end-to-end only
+python3 scripts/run_tests.py --cov=custom_components.sensi --cov-report=term-missing
 
 ruff check .                           # lint  (config: ruff.toml)
 ruff format .                          # format
@@ -34,8 +34,11 @@ ruff format .                          # format
 python3 scripts/check_requirements_sync.py
 ```
 
-Run `pytest` and both `ruff` commands before proposing a change. CI runs
-exactly these, plus Home Assistant's `hassfest` and HACS validation.
+Run the test wrapper and both `ruff` commands before proposing a change. CI
+runs exactly these, plus Home Assistant's `hassfest` and HACS validation. The
+wrapper is plain `pytest` with one rule, that every target must be inside
+`tests/`, because `.claude/settings.json` runs it without a permission prompt.
+Bare `pytest` still works and asks first.
 
 ## Rules
 

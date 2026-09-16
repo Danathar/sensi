@@ -15,7 +15,7 @@ payload field you cannot find in `tests/sample.json`.
 Before proposing any change:
 
 ```bash
-pytest && ruff check . && ruff format --check .
+python3 scripts/run_tests.py && ruff check . && ruff format --check .
 ```
 
 Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
@@ -36,13 +36,16 @@ Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
 
 `.claude/settings.json` is checked in. It does two things:
 
-- **Permissions.** Read-only inspection, `pytest` and `ruff` run without asking.
-  Anything that leaves the machine or changes shared state — `git push`,
-  `gh pr create`, `gh pr merge`, `gh release`, editing `manifest.json` —
-  asks first. Writing `pyproject.toml` and reading `secrets.yaml` / `.env` /
-  `config/` are denied outright, as is editing the boundary itself —
-  `.github/workflows/`, `.claude/hooks/`, `.claude/settings.json` and
-  `docs/SECURITY-AI.md`.
+- **Permissions.** Read-only inspection, `ruff` and
+  `python3 scripts/run_tests.py` run without asking. Bare `pytest` asks,
+  because it runs whatever file it is handed; the wrapper in
+  `scripts/run_tests.py` is pytest with one rule — every target must be inside
+  `tests/`. Anything that leaves the machine or changes shared state —
+  `git push`, `gh pr create`, `gh pr merge`, `gh release`, editing
+  `manifest.json` — asks first. Writing `pyproject.toml` and reading
+  `secrets.yaml` / `.env` / `config/` are denied outright, as is editing the
+  boundary itself — `.github/workflows/`, `.claude/hooks/`,
+  `.claude/settings.json`, `scripts/run_tests.py` and `docs/SECURITY-AI.md`.
 - **A PostToolUse hook** (`.claude/hooks/format-edited-python.sh`) that sorts
   imports and runs `ruff format` on any `.py` file after an edit, so a change
   never reaches CI failing `ruff format --check` for a reason nobody thought

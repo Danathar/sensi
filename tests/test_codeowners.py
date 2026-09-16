@@ -72,6 +72,7 @@ _CONTROL_PLANE = (
     "AGENTS.md",
     ".claude/settings.json",
     ".claude/hooks/format-edited-python.sh",
+    "scripts/run_tests.py",
     "custom_components/sensi/auth.py",
 )
 

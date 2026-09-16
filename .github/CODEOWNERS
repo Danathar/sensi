@@ -33,12 +33,15 @@
 # directory is here for the same reason settings.json is: Claude Code runs
 # what is in it after every Edit and Write, with no permission prompt, so
 # rewriting a hook script is the same capability as rewriting the settings
-# file that names it.
+# file that names it. The test wrapper is here for the same reason again: the
+# allow list runs it without a prompt, and it is what keeps that command
+# from being pointed at a file outside tests/ (#185).
 /docs/SECURITY-AI.md                    @Danathar
 /docs/branch-protection.md              @Danathar
 /AGENTS.md                              @Danathar
 /.claude/settings.json                  @Danathar
 /.claude/hooks/                         @Danathar
+/scripts/run_tests.py                   @Danathar
 
 # Change classification feeds the labels a reviewer triages by.
 /.github/risk-tiers.yml                 @Danathar
