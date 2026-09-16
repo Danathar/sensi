@@ -395,15 +395,20 @@ class TestThermostatInfo:
         }
         info = ThermostatInfo(data)
         info_str = str(info)
-        assert "ThermostatInfo" in info_str
-        assert "model=" in info_str
-        assert "1FTEST-MODEL" in info_str
+
+        # Asserted exactly rather than by substring: a substring-only check
+        # passes even when the rendering is truncated or unbalanced, which is
+        # how a missing closing paren survived here once already.
+        assert info_str == (
+            "ThermostatInfo(model=1FTEST-MODEL, "
+            "serial=<device:...L0001>, "
+            "hw_id=<device:redacted>, "
+            "wifi_mac=<device:...34455>)"
+        )
         # This rendering exists to be logged, and the log gets shared. The
         # model names a product; the other three name one physical unit.
         assert "TESTSERIAL0001" not in info_str
         assert "001122334455" not in info_str
-        assert "serial=" in info_str
-        assert "wifi_mac=" in info_str
 
 
 class TestState:
