@@ -88,10 +88,18 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         ["-o", "addopts=-p evil"],
         ["--override-ini=addopts=-p evil"],
         ["--config-file=/tmp/evil.ini"],
+        ["--confcutdir=/"],
+        ["--confcutdir", "/"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
-    """These reach code without naming a path the target check can see."""
+    """These reach code without naming a path the target check can see.
+
+    `--confcutdir=/` is the one that is not an import by name: it tells pytest
+    to import `conftest.py` from every ancestor of the target, so a file in
+    `/` or in the directory above the checkout runs before collection with
+    nothing in the tree to show for it.
+    """
 
     assert run_tests.refusals(argv), (
         f"{argv} reaches an importable module or the ini that names one"
@@ -140,6 +148,35 @@ def test_main_refuses_before_it_reaches_pytest(capsys: pytest.CaptureFixture) ->
     stderr = capsys.readouterr().err
     assert "/etc/passwd" in stderr
     assert "run pytest directly if you mean it" in stderr
+
+
+def test_main_pins_conftest_discovery_to_the_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command `main` runs carries `--confcutdir=<repo>` ahead of argv.
+
+    pytest defaults `confcutdir` to the ini file's directory, which is the
+    repository root - but the wrapper's guarantee that nothing above the
+    checkout is imported should not rest on a default. It is asserted against
+    the argv handed to `subprocess.run`, which is the only place it exists.
+    """
+
+    seen: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        seen.append(command)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(run_tests.subprocess, "run", fake_run)
+
+    assert run_tests.main(["-q", "tests"]) == 0
+    assert len(seen) == 1
+    command = seen[0]
+    assert f"--confcutdir={run_tests.ROOT}" in command
+    assert command.index(f"--confcutdir={run_tests.ROOT}") < command.index("-q"), (
+        "the pin is the wrapper's, not the caller's, so it goes ahead of argv"
+    )
+    assert command[-2:] == ["-q", "tests"], "argv must be forwarded unchanged"
 
 
 def test_the_script_exists_and_is_executable() -> None:

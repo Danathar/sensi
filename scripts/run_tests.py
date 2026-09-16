@@ -9,9 +9,11 @@ approves `pytest` with any path after it - including a path outside this
 repository, which leaves nothing in the diff for a reviewer to see.
 
 This wrapper forwards to pytest unchanged except for one rule: every target it
-is given must resolve inside `tests/`. Running agent-written code is still
-possible, because that is what a test suite is. The point is that the code has
-to be a file in the tree, where `git status` shows it and review reaches it.
+is given must resolve inside `tests/`, and conftest discovery is pinned to the
+repository so nothing above it is imported either. Running agent-written code
+is still possible, because that is what a test suite is. The point is that the
+code has to be a file in the tree, where `git status` shows it and review
+reaches it.
 """
 
 from pathlib import Path
@@ -25,13 +27,23 @@ TESTS = ROOT / "tests"
 # Options that load code, or load the settings that load code. `-p` imports a
 # plugin module before collection, `--pyargs` reinterprets targets as dotted
 # module names so checking them as paths stops meaning anything, `-c` chooses
-# the ini file whose `addopts` pytest then applies, and `-o` sets that ini
-# option inline. None of them names a path the target check below would see.
+# the ini file whose `addopts` pytest then applies, `-o` sets that ini option
+# inline, and `--confcutdir` widens the directories pytest imports `conftest.py`
+# from - `--confcutdir=/` reaches a conftest in any ancestor of the repository.
+# None of them names a path the target check below would see.
 #
 # Keep this list short and keep the reason with each entry. An option that
 # reaches code and is not here is a bug in the list, not in the target check.
-REFUSED_LONG = frozenset({"--pyargs", "--config-file", "--override-ini"})
+REFUSED_LONG = frozenset(
+    {"--pyargs", "--config-file", "--override-ini", "--confcutdir"}
+)
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
+
+# pytest defaults `confcutdir` to the directory holding the ini file, which is
+# ROOT here - but that is a default, and the wrapper's guarantee should not rest
+# on one. Pinning it means a conftest.py above the repository is never imported
+# on the wrapper's account, whatever pytest.ini says or stops saying.
+PINNED = (f"--confcutdir={ROOT}",)
 
 
 def _refused_option(arg: str) -> bool:
@@ -89,7 +101,8 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    return subprocess.run([sys.executable, "-m", "pytest", *argv], cwd=ROOT).returncode
+    command = [sys.executable, "-m", "pytest", *PINNED, *argv]
+    return subprocess.run(command, cwd=ROOT).returncode
 
 
 if __name__ == "__main__":
