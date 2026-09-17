@@ -14,9 +14,13 @@ Python version. Treat it as a deliberate change with its own commit.
    `Record resolved versions` step that prints it.
 
 3. **Check the Python floor.** If the new Home Assistant raises its minimum
-   Python, `python-version` in `ci.yml`, `coverage-gate.yml` and
-   `validate.yml`, and `target-version` in `ruff.toml`, all have to move
-   together. The matrix comment in `ci.yml` explains why a second, older
+   Python, `python-version` in `ci.yml`, `coverage-gate.yml`, `nightly.yml`
+   and `validate.yml`, and `target-version` in `ruff.toml`, all have to move
+   together — every workflow that installs `requirements_test.txt` runs on an
+   interpreter Home Assistant decides. `nightly.yml` is the one that gets
+   missed: its latest-Home-Assistant leg deliberately resolves a newer release
+   than the pin, so it hits a raised floor before anything else does.
+   The matrix comment in `ci.yml` explains why a second, older
    interpreter is not tested — do not add one to "be safe"; pip will silently
    resolve an older Home Assistant and the job will report on a release nobody
    runs.
