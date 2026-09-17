@@ -49,15 +49,25 @@ PINNED = (f"--confcutdir={ROOT}",)
 def _refused_option(arg: str) -> bool:
     """Whether `arg` reaches code by a route the target check cannot see.
 
-    Both spellings of each short option: `-p name` and `-pname`, `-c file` and
-    `-cfile`. The long forms take their value with `=`.
+    argparse expands a bundled short group, so `-xp evil` is `-x -p evil` and
+    `-xpevil` is `-x -p evil` again. A check that reads only the first two
+    characters sees the `-x` and forwards the rest, which is how `-c` and `-p`
+    got through. Every letter in a group is an option until one of them takes
+    a value and swallows the remainder, and which letters do that is pytest's
+    table rather than anything this wrapper can know - so a refused letter
+    anywhere in the group refuses the whole argument.
+
+    The cost of that is a value written attached to its own option: `-kcov` is
+    refused because of the `c`. Write it as two arguments, `-k cov`, which
+    this check reads as an option and a value it does not inspect. The long
+    forms take their value with `=`.
     """
 
     if arg.split("=", 1)[0] in REFUSED_LONG:
         return True
     if arg.startswith("--"):
         return False
-    return arg[:2] in REFUSED_SHORT
+    return any(f"-{letter}" in REFUSED_SHORT for letter in arg[1:])
 
 
 def refusals(argv: list[str]) -> list[str]:

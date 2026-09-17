@@ -90,6 +90,10 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         ["--config-file=/tmp/evil.ini"],
         ["--confcutdir=/"],
         ["--confcutdir", "/"],
+        ["-xp", "evil"],
+        ["-xpevil"],
+        ["-xc", "/tmp/evil.ini"],
+        ["-sxo", "addopts=-p evil"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
@@ -99,6 +103,10 @@ def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
     to import `conftest.py` from every ancestor of the target, so a file in
     `/` or in the directory above the checkout runs before collection with
     nothing in the tree to show for it.
+
+    The bundled spellings are here because argparse expands `-xc file` to
+    `-x -c file`, so a refusal that reads only the first letter of the
+    argument sees the `-x` and forwards the rest.
     """
 
     assert run_tests.refusals(argv), (
