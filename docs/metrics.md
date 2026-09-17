@@ -53,8 +53,9 @@ the person merging them.
 
 **Zero reviews is a real signal, not a clean bill of health.** It means the
 automated gates — `pytest`, the 93% coverage gate, `ruff`, hassfest, HACS
-validation — are the only reviewer. That is a deliberate trade-off for a
-single-maintainer fork, and it is why those gates are not optional.
+validation, and the `manifest.json`/`requirements_component.txt` sync check —
+are the only reviewer. That is a deliberate trade-off for a single-maintainer
+fork, and it is why those gates are not optional.
 
 **Time to merge on a solo repository measures nothing but attention.** Do not
 optimise it.
