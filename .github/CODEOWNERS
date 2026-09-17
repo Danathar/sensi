@@ -35,12 +35,19 @@
 # rewriting a hook script is the same capability as rewriting the settings
 # file that names it. The test wrapper is here for the same reason again: the
 # allow list runs it without a prompt, and it is what keeps that command
-# from being pointed at a file outside tests/ (#185).
+# from being pointed at a file outside tests/ (#185). The commands directory
+# is here for the same reason a third time: a file in it is the older format
+# for a skill, so its frontmatter is read as permission rather than as prose -
+# `allowed-tools` grants tools for the turn that invokes it and a `hooks`
+# block runs for the rest of the session, neither of which the slash-command
+# picker shows. A command file is a permission change wearing a procedure's
+# clothes (#196).
 /docs/SECURITY-AI.md                    @Danathar
 /docs/branch-protection.md              @Danathar
 /AGENTS.md                              @Danathar
 /.claude/settings.json                  @Danathar
 /.claude/hooks/                         @Danathar
+/.claude/commands/                      @Danathar
 /scripts/run_tests.py                   @Danathar
 
 # Change classification feeds the labels a reviewer triages by.

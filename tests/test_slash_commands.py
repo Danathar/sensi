@@ -507,6 +507,55 @@ def test_the_shell_scan_finds_the_commands_it_checks() -> None:
     )
 
 
+# Frontmatter that is capability rather than description. A file in
+# `.claude/commands/` is the older format for a skill and takes the same
+# frontmatter, so one of these keys pre-approves tools for the turn that
+# invokes the command, registers a hook that keeps running for the rest of
+# the session, or chooses the model the turn runs on. None of that is what
+# these four files are for, and none of it appears in the slash-command
+# picker, so the reviewer of a diff that adds one sees a procedure change.
+_CAPABILITY_KEYS = ("allowed-tools", "disallowed-tools", "hooks", "model", "shell")
+
+# `!` at the start of a line or after whitespace, followed by a backticked
+# command, is dynamic context injection: Claude Code runs the command and
+# substitutes its output before the prompt is assembled. A fenced ```! block
+# does the same for several commands. `KEY=!`cmd`` is literal text and is
+# deliberately not matched, which is also Claude Code's own rule.
+_SHELL_INJECTION = re.compile(r"(?:\A|\s)!`|^```!\s*$", re.MULTILINE)
+
+
+@pytest.mark.parametrize("command", _COMMAND_FILES, ids=_rel)
+def test_a_command_grants_no_capability_in_its_frontmatter(command: Path) -> None:
+    """A procedure says what to do. These keys say what the session may do.
+
+    Tool permissions belong in `.claude/settings.json`, where the deny list,
+    `tests/test_agent_format_hook.py` and `.github/CODEOWNERS` all reach them.
+    A grant written here is subject to none of those.
+    """
+
+    meta, _body = _frontmatter(command)
+    granted = sorted(key for key in _CAPABILITY_KEYS if key in meta)
+    assert not granted, (
+        f"{_rel(command)} declares {granted} in its frontmatter, which changes "
+        "what the session may do rather than what it is told to do"
+    )
+
+
+@pytest.mark.parametrize("command", _COMMAND_FILES, ids=_rel)
+def test_a_command_runs_no_shell_of_its_own(command: Path) -> None:
+    """An injected command runs while the file renders, with nothing to approve.
+
+    The commands these files name - `ruff`, `python3 scripts/run_tests.py` -
+    are for an agent to run as tool calls, which the permission rules see.
+    """
+
+    _meta, body = _frontmatter(command)
+    assert not _SHELL_INJECTION.search(body), (
+        f"{_rel(command)} injects a shell command with `!`; Claude Code runs "
+        "it before the prompt is assembled and no permission prompt appears"
+    )
+
+
 # --------------------------------------------------------------------------
 # check.md: "every check CI runs"
 # --------------------------------------------------------------------------
