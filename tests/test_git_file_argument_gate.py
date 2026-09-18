@@ -87,6 +87,8 @@ def test_the_hook_is_executable_with_a_python_shebang() -> None:
         'git commit -m "diff"',
         "git diff secrets.yaml",
         "git diff HEAD~1..HEAD",
+        "git diff HEAD~1 HEAD",
+        "git diff master feature",
         "git diff --cached",
     ],
 )
