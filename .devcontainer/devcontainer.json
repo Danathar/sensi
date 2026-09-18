@@ -12,6 +12,7 @@
   "customizations": {
     "vscode": {
       "extensions": [
+        "editorconfig.editorconfig",
         "charliermarsh.ruff",
         "ms-python.pylint",
         "ms-python.vscode-pylance"
