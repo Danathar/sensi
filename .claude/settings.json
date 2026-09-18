@@ -44,6 +44,7 @@
       "Bash(git clean -fdx:*)",
       "Edit(./pyproject.toml)",
       "Edit(.claude/hooks/**)",
+      "Edit(.claude/commands/**)",
       "Edit(.claude/settings.json)",
       "Edit(docs/SECURITY-AI.md)",
       "Edit(.github/workflows/**)",

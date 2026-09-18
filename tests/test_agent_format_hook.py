@@ -927,6 +927,7 @@ _DENIED_ABSENT = (
 # Pinning the operation here is what makes an Edit→Read downgrade fail.
 _DENIED_BOUNDARY = (
     ("Edit", ".claude/hooks"),
+    ("Edit", ".claude/commands"),
     ("Edit", ".claude/settings.json"),
     ("Edit", "docs/SECURITY-AI.md"),
     ("Edit", ".github/workflows"),

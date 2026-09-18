@@ -46,14 +46,17 @@ supply-chain concern.
   to a required job are all the same action. If a gate is wrong, that is a
   separate change with its own justification.
 - **Disable or edit the security boundary itself.** `.github/workflows/`,
-  `.claude/settings.json`, `.claude/hooks/`, `scripts/run_tests.py`, and this
-  file are outside what an automated fix may touch. An agent that can rewrite
-  its own constraints does not have any. `.claude/hooks/` and
-  `scripts/run_tests.py` are on the list for the same reason
-  `.claude/settings.json` is, and not as an extension of it: Claude Code runs
-  the hook script after every `Edit` and `Write` without a permission prompt,
-  and runs the test wrapper without one because the allow list says so, so
-  editing either is the same capability as editing the settings file.
+  `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`,
+  `scripts/run_tests.py`, and this file are outside what an automated fix may
+  touch. An agent that can rewrite its own constraints does not have any.
+  `.claude/hooks/`, `.claude/commands/` and `scripts/run_tests.py` are on the
+  list for the same reason `.claude/settings.json` is, and not as an
+  extension of it: Claude Code runs the hook script after every `Edit` and
+  `Write` without a permission prompt, runs the test wrapper without one
+  because the allow list says so, and reads a command file's frontmatter as
+  permission — `allowed-tools` there grants tools for the turn that invokes
+  it, and a `hooks` block there runs for the rest of the session. Editing any
+  of them is the same capability as editing the settings file.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.
