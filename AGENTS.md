@@ -170,11 +170,12 @@ sections are the ones reviewers act on.
 
 A person who was not in your head will read what you write. Write for them.
 
-- **Start with a plain summary**: two or three short sentences saying what
+- **Start with a plain summary**: one or two short sentences saying what
   changed (or what is wrong), why it matters, and what the reader should look
   at or do. Someone who reads only that should still get the point. In a PR,
   that is the *What changed* section of the template.
-- Then the detail under the template's remaining headings.
+- Put the rest under the template's remaining headings. Work unrelated to the
+  change goes in its own PR, not in a section of this one.
 - Short sentences. One idea per bullet. No nested dash-clauses.
 - Use this project's own words. If you coin a term, define it the first time
   you use it.
