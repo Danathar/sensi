@@ -166,6 +166,26 @@ Mislabelling them puts maintenance work in front of users as a new feature.
 Fill in `.github/pull_request_template.md`. The *How it was verified* and *Risk*
 sections are the ones reviewers act on.
 
+### Writing issues, PRs and comments
+
+A person who was not in your head will read what you write. Write for them.
+
+- **Start with a plain summary**: one or two short sentences saying what
+  changed (or what is wrong), why it matters, and what the reader should look
+  at or do. Someone who reads only that should still get the point. In a PR,
+  that is the *What changed* section of the template.
+- Put the rest under the template's remaining headings.
+- Short sentences. One idea per bullet. No nested dash-clauses.
+- Use this project's own words. If you coin a term, define it the first time
+  you use it.
+- Tell the reader what they can check themselves: the command to run, the file
+  to open, the number to compare.
+- Keep the body under about 300 words. Long evidence (full test output, logs,
+  sample payloads) goes in a collapsed `<details>` block.
+- Issues: state the problem as a user would see it, then the evidence, then the
+  proposed fix. The title says what is wrong, not what kind of finding it is;
+  keep any prefix the tooling requires.
+
 ## Reference
 
 | Document | What it is for |
