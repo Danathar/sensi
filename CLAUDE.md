@@ -45,7 +45,8 @@ Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
   `manifest.json` — asks first. Writing `pyproject.toml` and reading
   `secrets.yaml` / `.env` / `config/` are denied outright, as is editing the
   boundary itself — `.github/workflows/`, `.claude/hooks/`,
-  `.claude/settings.json`, `scripts/run_tests.py` and `docs/SECURITY-AI.md`.
+  `.claude/commands/`, `.claude/settings.json`, `scripts/run_tests.py` and
+  `docs/SECURITY-AI.md`.
 - **A PostToolUse hook** (`.claude/hooks/format-edited-python.sh`) that sorts
   imports and runs `ruff format` on any `.py` file after an edit, so a change
   never reaches CI failing `ruff format --check` for a reason nobody thought
