@@ -85,6 +85,9 @@ def test_the_hook_is_executable_with_a_python_shebang() -> None:
         # The wide "any word after git" subcommand test must not turn a commit
         # message into a refusal: git commit takes none of the gated options.
         'git commit -m "diff"',
+        "git diff secrets.yaml",
+        "git diff HEAD~1..HEAD",
+        "git diff --cached",
     ],
 )
 def test_ordinary_commands_pass(command: str) -> None:
@@ -140,6 +143,15 @@ def test_stdin_that_is_not_json_passes() -> None:
         ("git diff --o=/tmp/x", "--o"),
         # git -c key=value diff: the subcommand is not the first non-option.
         ("git -c core.pager=cat diff --no-index a b", "--no-index"),
+        # Git enters --no-index mode implicitly when a path points outside the
+        # working tree, even when the option is omitted.
+        ("git diff secrets.yaml /dev/null", "/dev/null"),
+        ("git diff /dev/null secrets.yaml", "/dev/null"),
+        ("git diff -- secrets.yaml /dev/null", "/dev/null"),
+        ("git diff secrets.yaml ..", ".."),
+        ("git diff ../secrets.yaml /dev/null", "../secrets.yaml"),
+        ("git diff ~/secrets.yaml secrets.yaml", "~/secrets.yaml"),
+        ("git diff /tmp/a /tmp/b", "/tmp/a"),
     ],
 )
 def test_file_arguments_are_refused(command: str, fragment: str) -> None:

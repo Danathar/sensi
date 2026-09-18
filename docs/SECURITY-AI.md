@@ -61,7 +61,8 @@ supply-chain concern.
   `.claude/hooks/gate-git-file-arguments.py`, a `PreToolUse` hook on `Bash`:
   the deny rules bind the `Read` and `Edit` tools only, so an allow-listed
   shell command that reads or writes the same paths (`git diff --no-index`,
-  `--output`, `-O`) is the failure mode the hook exists to refuse.
+  implicit `--no-index` via external paths, `--output`, `-O`) is the failure
+  mode the hook exists to refuse.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.

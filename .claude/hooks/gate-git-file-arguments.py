@@ -8,7 +8,9 @@ three of their arguments do file I/O that has nothing to do with the repository:
 * `--no-index PATH PATH` diffs two paths on disk, inside the repository or not,
   and prints both files' contents. It reads `secrets.yaml`, `.env` and
   `config/**` straight past the `Read` deny rules, which bind the `Read` tool
-  and not a shell command.
+  and not a shell command. Git also enters `--no-index` mode implicitly when
+  `git diff` names at least one path outside the working tree, even when the
+  option is omitted, so any path pointing outside the repository is refused too.
 * `--output PATH` (and `--output=PATH`) creates or truncates any path before it
   writes the diff into it, which reaches every `Edit` deny rule the same way -
   `.claude/settings.json`, `.claude/hooks/**`, `scripts/run_tests.py`,
@@ -26,8 +28,11 @@ unparseable payload look like an attack.
 """
 
 import json
+from pathlib import Path
 import shlex
 import sys
+
+_REPO = Path(__file__).resolve().parents[2]
 
 # The allow-listed read-only subcommands. `git commit`, `git add` and the rest
 # take none of the options below, and denying a brace or a glob inside a commit
@@ -54,6 +59,29 @@ _REFUSED_SHORT = "O"
 _UNEXPANDED = "{}*?[]$`"
 
 
+def _is_outside_repo(word: str) -> bool:
+    """Whether `word` is a path pointing outside the repository.
+
+    `git diff` enters `--no-index` mode implicitly when at least one path points
+    outside the working tree, even when the option is omitted. Refusing paths
+    outside the repository closes that loophole.
+    """
+
+    if word.startswith("-"):
+        return False
+
+    base = Path.cwd()
+    if not base.is_relative_to(_REPO):
+        base = _REPO
+
+    try:
+        path = Path(word).expanduser()
+        resolved = (base / path).resolve()
+        return not resolved.is_relative_to(_REPO)
+    except ValueError, RuntimeError:
+        return True
+
+
 def _refusal(word: str) -> str | None:
     """Return why `word` is refused, or None if it is not."""
 
@@ -65,6 +93,9 @@ def _refusal(word: str) -> str | None:
 
     if word.startswith("-") and _REFUSED_SHORT in word[1:]:
         return f"{word} carries -O, which makes git read an arbitrary path"
+
+    if word != "git" and not word.endswith("/git") and _is_outside_repo(word):
+        return f"{word} points outside the repository (implicit --no-index)"
 
     return None
 
