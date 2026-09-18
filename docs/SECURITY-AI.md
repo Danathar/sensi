@@ -57,6 +57,11 @@ supply-chain concern.
   permission — `allowed-tools` there grants tools for the turn that invokes
   it, and a `hooks` block there runs for the rest of the session. Editing any
   of them is the same capability as editing the settings file.
+  The boundary is enforced by the tool rules and by
+  `.claude/hooks/gate-git-file-arguments.py`, a `PreToolUse` hook on `Bash`:
+  the deny rules bind the `Read` and `Edit` tools only, so an allow-listed
+  shell command that reads or writes the same paths (`git diff --no-index`,
+  `--output`, `-O`) is the failure mode the hook exists to refuse.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.

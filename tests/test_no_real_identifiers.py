@@ -354,6 +354,7 @@ def test_the_scan_reads_files_an_extension_allowlist_would_miss() -> None:
     assert {
         "Dockerfile",
         ".claude/hooks/format-edited-python.sh",
+        ".claude/hooks/gate-git-file-arguments.py",
         ".cursor/rules/sensi.mdc",
         "pytest.ini",
         "ruff.toml",
