@@ -13,8 +13,8 @@ python3 scripts/run_tests.py --cov=custom_components.sensi --cov-report=term-mis
 
 Then:
 
-- If `ruff format --check` fails, run `ruff format .` and show the diff rather
-  than describing it.
+- If `ruff format --check` fails, run `ruff format .` (it asks first, because
+  it rewrites files) and show the diff rather than describing it.
 - If `ruff check` fails, prefer `ruff check --fix` for the mechanical rules
   (import sorting, redundant annotations) and fix the rest by hand. Do not add
   `# noqa` to silence a rule without saying why in the same line comment.

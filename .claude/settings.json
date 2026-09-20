@@ -3,7 +3,6 @@
   "permissions": {
     "allow": [
       "Bash(ruff check .)",
-      "Bash(ruff format .)",
       "Bash(ruff format --check .)",
       "Bash(python3 scripts/check_requirements_sync.py)",
       "Bash(python3 scripts/run_tests.py:*)",

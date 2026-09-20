@@ -273,6 +273,13 @@ def test_ruff_is_allowed_only_as_the_exact_documented_commands() -> None:
     prefix rule can cover ruff: `--output-file` and `--fix` may sit anywhere
     in the argument list. So the allow list names whole commands, exactly the
     ones AGENTS.md documents, and anything else asks.
+
+    `ruff format .` is not one of them, even though it takes no argument.
+    It rewrites every Python file `ruff.toml` reaches, and `ruff.toml` is an
+    ordinary editable file: set `line-length = 50` there and the formatter
+    rewrites `.claude/hooks/gate-git-file-arguments.py` and
+    `scripts/run_tests.py`, both on the `Edit` deny list. Only the check
+    forms may run without a prompt.
     """
 
     settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
@@ -286,8 +293,8 @@ def test_ruff_is_allowed_only_as_the_exact_documented_commands() -> None:
         assert not rule.endswith(":*)"), (
             f"{rule} is a prefix rule; it lets ruff write any path (#210)"
         )
-    assert set(ruff_rules) == {
-        "Bash(ruff check .)",
-        "Bash(ruff format --check .)",
-        "Bash(ruff format .)",
-    }
+    assert set(ruff_rules) == {"Bash(ruff check .)", "Bash(ruff format --check .)"}
+    assert "Bash(ruff format .)" not in allowed, (
+        "ruff format . rewrites the protected hook and wrapper once ruff.toml "
+        "changes, so it must ask"
+    )
