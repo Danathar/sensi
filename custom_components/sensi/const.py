@@ -18,7 +18,16 @@ SENSI_FAN_CIRCULATE: Final = "Circulate"
 # Only offered when the thermostat advertises fan_mode_settings.smart. The
 # string is FanMode.SMART, which is what the thermostat reports and accepts.
 SENSI_FAN_SMART: Final = "smart"
-FAN_CIRCULATE_DEFAULT_DUTY_CYCLE = 10
+
+# Bounds for the circulating fan duty cycle. These are what the Sensi app
+# enforces, and what a thermostat reports under
+# capabilities.circulating_fan; they stand in when it omits a field, because
+# the backend rejects a duty cycle below its minimum and the rounding in
+# SensiClient.async_set_circulating_fan_mode divides by the step.
+FAN_CIRCULATE_DUTY_CYCLE_MINIMUM: Final = 10
+FAN_CIRCULATE_DUTY_CYCLE_MAXIMUM: Final = 100
+FAN_CIRCULATE_DUTY_CYCLE_DEFAULT: Final = 10
+FAN_CIRCULATE_DUTY_CYCLE_STEP: Final = 5
 
 
 STORAGE_VERSION: Final = 1

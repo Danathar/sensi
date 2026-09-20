@@ -72,7 +72,7 @@ Data refreshes every 30 seconds.
 | --- | --- |
 | **Operating modes** | `Auto`, `Heat`, `Cool`, `Off` — which of these appear depends on the thermostat's own configuration |
 | **Setpoints** | `Heat` and `Cool` use a single target temperature; `Auto` uses separate heat and cool setpoints |
-| **Fan modes** | `Auto`, `On`, `Circulate` (10% duty cycle). Circulate depends on the thermostat |
+| **Fan modes** | `Auto`, `On`, `Circulate` (runs at the duty cycle set on the thermostat, 10% if none is set). Circulate depends on the thermostat |
 | **Humidity** | Target humidity, when the thermostat has humidification enabled |
 
 ### Sensors and controls

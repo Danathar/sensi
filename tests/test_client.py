@@ -664,9 +664,6 @@ class TestSetters:
     ) -> None:
         """Test async_set_circulating_fan_mode."""
 
-        enabled = True
-        duty_cycle = 30
-
         with patch.object(
             mock_coordinator.client, "_async_invoke_setter"
         ) as mock_async_invoke_setter:
@@ -689,6 +686,54 @@ class TestSetters:
 
             assert mock_device.state.circulating_fan.enabled == enabled
             assert mock_device.state.circulating_fan.duty_cycle == duty_cycle
+
+    @pytest.mark.parametrize(
+        ("duty_cycle", "expected"),
+        [
+            (33, 35),  # rounded to the nearest step of 5
+            (32, 30),
+            (3, 10),  # below min_duty_cycle: the backend rejects it
+            (120, 100),  # above max_duty_cycle
+            (0, 10),  # 0 is what State reports when nothing was ever set
+        ],
+    )
+    async def test_set_circulating_fan_mode_clamps_to_capabilities(
+        self, mock_device, mock_coordinator, duty_cycle, expected
+    ) -> None:
+        """The duty cycle on the wire fits the thermostat's min, max and step."""
+
+        # sample.json: max_duty_cycle 100, min_duty_cycle 10, step 5
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, "")
+
+            await mock_coordinator.client.async_set_circulating_fan_mode(
+                mock_device, True, duty_cycle
+            )
+
+            request = mock_async_invoke_setter.call_args.args[1]
+            assert request["value"]["duty_cycle"] == expected
+            assert mock_device.state.circulating_fan.duty_cycle == expected
+
+    async def test_set_circulating_fan_mode_with_step_0_only_clamps(
+        self, mock_device, mock_coordinator
+    ) -> None:
+        """A thermostat reporting step 0 must not divide by it."""
+
+        mock_device.capabilities.circulating_fan.step = 0
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, "")
+
+            await mock_coordinator.client.async_set_circulating_fan_mode(
+                mock_device, True, 33
+            )
+
+            request = mock_async_invoke_setter.call_args.args[1]
+            assert request["value"]["duty_cycle"] == 33
 
     async def test_set_fan_mode(self, mock_device, mock_coordinator) -> None:
         """Test async_set_fan_mode."""

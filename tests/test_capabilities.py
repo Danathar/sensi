@@ -71,13 +71,17 @@ class TestCirculatingFanCapabilities:
         assert fan.step == 5
 
     def test_circulating_fan_capabilities_with_empty_data(self):
-        """Test CirculatingFanCapabilities with empty data."""
+        """Missing bounds fall back to the app's limits, never to 0.
+
+        The backend rejects a duty cycle below its minimum, and the client
+        rounds to the step, so 0 would either be refused or divide by zero.
+        """
         data = {}
         fan = CirculatingFanCapabilities(data)
         assert fan.capable is False
-        assert fan.max_duty_cycle == 0
-        assert fan.min_duty_cycle == 0
-        assert fan.step == 0
+        assert fan.max_duty_cycle == 100
+        assert fan.min_duty_cycle == 10
+        assert fan.step == 5
 
 
 class TestFanModes:
@@ -269,7 +273,7 @@ class TestNullContainers:
         capabilities = Capabilities(mock_json_with_nulls["capabilities"])
 
         assert capabilities.circulating_fan.capable is False
-        assert capabilities.circulating_fan.max_duty_cycle == 0
+        assert capabilities.circulating_fan.max_duty_cycle == 100
         assert capabilities.fan_mode_settings.auto is False
         assert capabilities.fan_mode_settings.on is False
         assert capabilities.fan_mode_settings.smart is False

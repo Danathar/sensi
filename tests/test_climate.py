@@ -15,7 +15,7 @@ from custom_components.sensi.const import (
     ATTR_HEAT_STAGE,
     ATTR_POWER_STATUS,
     CONFIG_FAN_SUPPORT,
-    FAN_CIRCULATE_DEFAULT_DUTY_CYCLE,
+    FAN_CIRCULATE_DUTY_CYCLE_DEFAULT,
     SENSI_FAN_AUTO,
     SENSI_FAN_CIRCULATE,
     SENSI_FAN_ON,
@@ -100,18 +100,20 @@ async def test_set_fan_mode_auto(
         mock_set_circulating_fan_mode.return_value = ActionResponse(None, "")
         mock_set_fan_mode.return_value = ActionResponse(None, "")
 
+        # Leaving Circulate sends the thermostat's own duty cycle back, so
+        # the value the user set in the app survives the switch.
+        mock_device.state.circulating_fan.duty_cycle = 30
+
         await mock_thermostat.async_set_fan_mode(SENSI_FAN_AUTO)
 
-        mock_set_circulating_fan_mode.assert_called_once_with(
-            mock_device, False, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
-        )
+        mock_set_circulating_fan_mode.assert_called_once_with(mock_device, False, 30)
         mock_set_fan_mode.assert_called_once_with(mock_device, SENSI_FAN_AUTO)
 
 
 async def test_set_fan_mode_circulate(
     hass: HomeAssistant, mock_device, mock_thermostat
 ) -> None:
-    """Test async_set_fan_mode circulate."""
+    """Circulate keeps the duty cycle set on the thermostat (#221)."""
 
     with (
         patch.object(mock_thermostat, "async_write_ha_state"),
@@ -125,11 +127,37 @@ async def test_set_fan_mode_circulate(
         mock_set_circulating_fan_mode.return_value = ActionResponse(None, "")
         mock_set_fan_mode.return_value = ActionResponse(None, "")
 
+        mock_device.state.circulating_fan.duty_cycle = 30
+
         await mock_thermostat.async_set_fan_mode(SENSI_FAN_CIRCULATE)
 
         mock_set_fan_mode.assert_called_once_with(mock_device, SENSI_FAN_AUTO)
+        mock_set_circulating_fan_mode.assert_called_once_with(mock_device, True, 30)
+
+
+async def test_set_fan_mode_circulate_without_a_duty_cycle_uses_the_default(
+    hass: HomeAssistant, mock_device, mock_thermostat
+) -> None:
+    """A thermostat that reports no duty cycle gets the default, never 0."""
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_circulating_fan_mode"
+        ) as mock_set_circulating_fan_mode,
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_fan_mode"
+        ) as mock_set_fan_mode,
+    ):
+        mock_set_circulating_fan_mode.return_value = ActionResponse(None, "")
+        mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+        mock_device.state.circulating_fan.duty_cycle = 0
+
+        await mock_thermostat.async_set_fan_mode(SENSI_FAN_CIRCULATE)
+
         mock_set_circulating_fan_mode.assert_called_once_with(
-            mock_device, True, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
+            mock_device, True, FAN_CIRCULATE_DUTY_CYCLE_DEFAULT
         )
 
 
@@ -322,7 +350,7 @@ async def test_set_fan_mode_smart(
         await mock_thermostat.async_set_fan_mode(SENSI_FAN_SMART)
 
         mock_set_circulating_fan_mode.assert_called_once_with(
-            mock_device, False, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
+            mock_device, False, mock_device.state.circulating_fan.duty_cycle
         )
         mock_set_fan_mode.assert_called_once_with(mock_device, SENSI_FAN_SMART)
 
