@@ -81,6 +81,98 @@ class TestContextManager:
                 raise ValueError("boom")
 
 
+class TestAsyncDisconnect:
+    """`_async_disconnect` tears down what shutdown() can reach, and no more.
+
+    socketio.AsyncClient sets `connected` only at the very end of connect(),
+    and its shutdown() does nothing for a client that is neither connected
+    nor reconnecting. A socket taken mid-handshake is therefore left as it
+    was, and wait() on it blocks on the live engine.io transport until the
+    DISCONNECT_TIMEOUT expires - ten seconds added to whatever took the
+    socket, for nothing.
+    """
+
+    @staticmethod
+    def _socket(connected: bool) -> MagicMock:
+        """Return a socket whose wait() never returns on its own."""
+
+        async def block_forever() -> None:
+            await asyncio.Event().wait()
+
+        sio = MagicMock()
+        sio.connected = connected
+        sio.shutdown = AsyncMock()
+        sio.wait = AsyncMock(side_effect=block_forever)
+        return sio
+
+    async def test_a_connected_socket_is_shut_down_and_drained(
+        self, client: SensiClient, monkeypatch
+    ) -> None:
+        """The established case is unchanged: shutdown(), then wait()."""
+        monkeypatch.setattr("custom_components.sensi.client.DISCONNECT_TIMEOUT", 0.01)
+        sio = self._socket(connected=True)
+        client._sio = sio
+
+        await client._async_disconnect()
+
+        assert client._sio is None
+        sio.shutdown.assert_awaited_once()
+        sio.wait.assert_awaited_once()
+
+    async def test_a_socket_that_never_connected_is_not_waited_on(
+        self, client: SensiClient, monkeypatch
+    ) -> None:
+        """A socket shutdown() could not tear down is not drained either.
+
+        With the real library that wait() is DISCONNECT_TIMEOUT of dead time
+        on the caller - a coordinator refresh or a setter's recovery. The
+        socket here would block for that long if wait() were called; the
+        timeout is lowered so a regression fails the test rather than
+        stalling it, and the assertion is on the call, not the clock.
+        """
+        monkeypatch.setattr("custom_components.sensi.client.DISCONNECT_TIMEOUT", 0.01)
+        sio = self._socket(connected=False)
+        client._sio = sio
+
+        await client._async_disconnect()
+
+        assert client._sio is None
+        sio.shutdown.assert_awaited_once()
+        sio.wait.assert_not_awaited()
+
+    async def test_the_decision_is_made_before_shutdown_clears_the_flag(
+        self, client: SensiClient, monkeypatch
+    ) -> None:
+        """A socket that shutdown() disconnects is still drained afterwards.
+
+        shutdown() on a connected socket clears `connected` as it goes, so a
+        check made after it would skip wait() for every socket, including the
+        ones it exists for.
+        """
+        monkeypatch.setattr("custom_components.sensi.client.DISCONNECT_TIMEOUT", 0.01)
+        sio = self._socket(connected=True)
+
+        async def shutdown() -> None:
+            sio.connected = False
+
+        sio.shutdown = AsyncMock(side_effect=shutdown)
+        client._sio = sio
+
+        await client._async_disconnect()
+
+        sio.wait.assert_awaited_once()
+
+    async def test_without_a_socket_there_is_nothing_to_do(
+        self, client: SensiClient
+    ) -> None:
+        """A client that never connected, or was already stopped, is a no-op."""
+        client._sio = None
+
+        await client._async_disconnect()
+
+        assert client._sio is None
+
+
 class TestEventFutures:
     """Test cases for the (event, icd_id) future registry."""
 

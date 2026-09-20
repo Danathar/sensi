@@ -104,14 +104,22 @@ class SensiClient:
         self._connect_error_data = None
         self._devices: dict[str, SensiDevice] = {}
 
-        # Serializes the refresh/disconnect/connect sequence a refused setter
-        # runs, and counts completed recoveries. Sensi rotates the refresh
-        # token on every exchange, so two refusals recovering concurrently
-        # would present the same refresh token twice - the second exchange is
-        # rejected and a healthy credential is misread as revoked - while
-        # their disconnect/connect pairs tear down each other's fresh socket.
-        # See _async_invoke_setter.
-        self._recovery_lock = asyncio.Lock()
+        # Serializes every disconnect/connect pair on this client: the
+        # coordinator's 30-second refresh, a refused setter's recovery, setup
+        # and stop. Two of them interleaving replace the socket under each
+        # other - one takes the reference to a socket the other is still
+        # connecting, finds nothing to shut down because the library sets
+        # `connected` only at the end of connect(), and the handshake then
+        # completes into a socket nothing references: still connected, still
+        # feeding state events into this instance, never torn down. See
+        # _async_disconnect and _async_invoke_setter.
+        #
+        # _recovery_epoch counts completed recoveries. Sensi rotates the
+        # refresh token on every exchange, so two refusals recovering
+        # concurrently would present the same refresh token twice - the
+        # second exchange is rejected and a healthy credential is misread as
+        # revoked. See _async_invoke_setter.
+        self._reconnect_lock = asyncio.Lock()
         self._recovery_epoch = 0
 
     async def __aenter__(self) -> Self:
@@ -125,7 +133,8 @@ class SensiClient:
         exc_tb: TracebackType | None,
     ) -> bool:
         """Leave context manager and disconnect the client."""
-        await self._async_disconnect()
+        async with self._reconnect_lock:
+            await self._async_disconnect()
         return False
 
     def get_devices(self) -> list[SensiDevice]:
@@ -188,7 +197,8 @@ class SensiClient:
         # promptly would be reported as one that never answered.
         state_future = await self._create_event_future("state", None)
         try:
-            await self._connect()
+            async with self._reconnect_lock:
+                await self._connect()
             await self._wait_for_event(
                 "state", None, PREPARE_DEVICES_TIMEOUT, future=state_future
             )
@@ -248,7 +258,11 @@ class SensiClient:
 
     async def stop(self) -> None:
         """Disconnect and stop the client."""
-        await self._async_disconnect()
+        # Under the lock so that an unload landing mid-refresh waits for the
+        # refresh's connect to finish and then tears that socket down, rather
+        # than taking a mid-handshake socket that shutdown() cannot reach.
+        async with self._reconnect_lock:
+            await self._async_disconnect()
 
         if self._emit_loop_task:
             self._emit_loop_task.cancel()
@@ -268,6 +282,9 @@ class SensiClient:
 
         Bounded so a wedged socket.io teardown can never hang a coordinator
         update; the timeout is defense in depth.
+
+        Callers hold _reconnect_lock, so the socket taken here is never one
+        that another caller is still connecting.
         """
         sio = self._sio
         if not sio:
@@ -279,11 +296,23 @@ class SensiClient:
 
         LOGGER.info("Disconnecting")
 
+        # Read before shutdown(), which clears it. `connected` is set only at
+        # the end of connect(), and shutdown() does nothing for a socket that
+        # is neither connected nor reconnecting - so a socket taken
+        # mid-handshake is left exactly as it was, and wait() on it blocks on
+        # its live engine.io transport for the whole DISCONNECT_TIMEOUT.
+        # There is nothing for wait() to drain that shutdown() did not tear
+        # down itself, so skip it for a socket that was not connected. The
+        # reconnecting case is covered: shutdown() aborts and awaits the
+        # reconnect task before returning.
+        was_connected = sio.connected
+
         # `shutdown()` awaits an in-flight reconnect task, so it is bounded too.
         with contextlib.suppress(Exception):
             await asyncio.wait_for(sio.shutdown(), DISCONNECT_TIMEOUT)
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(sio.wait(), DISCONNECT_TIMEOUT)
+        if was_connected:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(sio.wait(), DISCONNECT_TIMEOUT)
 
     async def async_update_devices(self) -> None:
         """Update the thermostat devices.
@@ -292,9 +321,14 @@ class SensiClient:
         """
 
         # Disconnect and reconnect. There doesn't seem to be event for force state refresh.
+        #
+        # Under _reconnect_lock: a refused setter's recovery runs this same
+        # pair, and a tick landing in the middle of one left the recovery
+        # taking the tick's half-connected socket. See _async_invoke_setter.
         LOGGER.info("Updating devices - reconnecting and updating")
-        await self._async_disconnect()
-        await self._connect()
+        async with self._reconnect_lock:
+            await self._async_disconnect()
+            await self._connect()
 
         # Refresh does no create new devices so let us just wait for device states. We don't
         # care the order in which state event is received. It can come before or after connected.
@@ -601,7 +635,7 @@ class SensiClient:
         "try again", and burning more attempts inside a service call only
         delays the error the caller needs to see.
 
-        Recovery is serialized behind _recovery_lock and counted by
+        Recovery is serialized behind _reconnect_lock and counted by
         _recovery_epoch. Sensi rotates the refresh token on every exchange, so
         two refusals recovering concurrently would present the same refresh
         token twice; the second exchange is rejected and a healthy credential
@@ -610,6 +644,25 @@ class SensiClient:
         first emit: a caller that finds it advanced by the time it holds the
         lock was refused on the connection someone else has since replaced, so
         it retries on the fresh one instead of rotating the token again.
+
+        The lock is the one async_update_devices holds for the coordinator's
+        30-second reconnect, not one private to recoveries. The refresh here
+        takes a second or two, and a tick landing inside it used to replace
+        the socket while this coroutine was suspended: the disconnect below
+        then took a socket the tick was still connecting, shutdown() found
+        nothing to tear down, and the tick's handshake completed into a
+        socket nothing referenced - connected, pushing state events into
+        this instance, and never shut down until Home Assistant restarted.
+
+        The retry is emitted under the same lock. A tick that arrived during
+        the recovery is next in line for it, and it would otherwise run its
+        disconnect the moment the recovery let go - before the emit loop has
+        picked the retry up, or after it was sent but before its ack came
+        back. Either way the retry is lost: the socket it was bound for is
+        gone, its SET_EVENT_TIMEOUT keeps running through the tick's
+        reconnect, and the emit loop discards a timed-out command rather than
+        replay it. Holding the lock until the ack is in means the tick waits
+        for the retry, which is bounded by that same timeout.
         """
 
         epoch = self._recovery_epoch
@@ -618,44 +671,44 @@ class SensiClient:
         if response.error not in RETRYABLE_SETTER_ERRORS:
             return response
 
-        try:
-            async with self._recovery_lock:
+        async with self._reconnect_lock:
+            try:
                 if self._recovery_epoch == epoch:
                     await self.try_refresh_access_token()
                     await self._async_disconnect()
                     await self._connect()
                     self._recovery_epoch += 1
-        except AuthenticationError as err:
-            # A refresh token the backend has rejected outright is not this
-            # transient case. No coordinator is on a service call's path to
-            # translate this into ConfigEntryAuthFailed - its handler only
-            # wraps async_update_devices - so start the reauth flow here,
-            # where the failure is known, and fail the service call with the
-            # error type the entity layer is built to surface. Left alone, a
-            # bare AuthenticationError is an unhandled traceback for the user
-            # and the reauth prompt waits until the access token dies of old
-            # age, up to 4 hours later.
-            if self._config_entry is not None:
-                self._config_entry.async_start_reauth(self._hass)
-            raise HomeAssistantError(
-                f"Setter {event} was refused with '{response.error}' and the "
-                "stored credential could not be refreshed; Sensi needs to be "
-                "re-authenticated with a new refresh token"
-            ) from err
-        except SensiConnectionError:
-            # The recovery itself failed. Report the refusal the caller was
-            # already going to get rather than replacing it with a connection
-            # error about machinery they did not ask for - the setter still
-            # did not happen, and that is what the message should say.
-            LOGGER.warning(
-                "Setter %s was refused with '%s'; could not reconnect to retry",
-                event,
-                response.error,
-                exc_info=True,
-            )
-            return response
+            except AuthenticationError as err:
+                # A refresh token the backend has rejected outright is not this
+                # transient case. No coordinator is on a service call's path to
+                # translate this into ConfigEntryAuthFailed - its handler only
+                # wraps async_update_devices - so start the reauth flow here,
+                # where the failure is known, and fail the service call with the
+                # error type the entity layer is built to surface. Left alone, a
+                # bare AuthenticationError is an unhandled traceback for the user
+                # and the reauth prompt waits until the access token dies of old
+                # age, up to 4 hours later.
+                if self._config_entry is not None:
+                    self._config_entry.async_start_reauth(self._hass)
+                raise HomeAssistantError(
+                    f"Setter {event} was refused with '{response.error}' and the "
+                    "stored credential could not be refreshed; Sensi needs to be "
+                    "re-authenticated with a new refresh token"
+                ) from err
+            except SensiConnectionError:
+                # The recovery itself failed. Report the refusal the caller was
+                # already going to get rather than replacing it with a connection
+                # error about machinery they did not ask for - the setter still
+                # did not happen, and that is what the message should say.
+                LOGGER.warning(
+                    "Setter %s was refused with '%s'; could not reconnect to retry",
+                    event,
+                    response.error,
+                    exc_info=True,
+                )
+                return response
 
-        retry_response = await self._async_emit_setter(event, request_data)
+            retry_response = await self._async_emit_setter(event, request_data)
 
         # One WARNING carrying both attempts. A recurrence has to be visible
         # in a default-configured log: the first attempt failing is the whole

@@ -9,7 +9,12 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import ActionResponse, round_humidity
-from custom_components.sensi.data import FanMode, OperatingMode, State
+from custom_components.sensi.data import (
+    AuthenticationConfig,
+    FanMode,
+    OperatingMode,
+    State,
+)
 from custom_components.sensi.event import (
     SetCirculatingFanEvent,
     SetCirculatingFanEventValue,
@@ -22,6 +27,59 @@ from custom_components.sensi.event import (
 )
 from custom_components.sensi.utils import redact_identifier
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from tests.e2e.conftest import FakeSensiBackend, FakeSensiSocket
+
+
+class GatedSocket(FakeSensiSocket):
+    """The e2e fake socket with the library's two connection-state quirks.
+
+    ``socketio.AsyncClient`` sets ``connected`` only at the very end of
+    ``connect()``, its ``shutdown()`` does nothing for a client that is neither
+    connected nor reconnecting, and ``wait()`` on such a client blocks on the
+    live engine.io transport. The e2e fake connects in one step and
+    disconnects unconditionally, which hides the window between those two
+    facts - the window a second caller replacing the socket falls into.
+
+    ``gate``, when set, holds ``connect()`` mid-handshake until it is released.
+    """
+
+    def __init__(self, backend: FakeSensiBackend, gate: asyncio.Event | None) -> None:
+        """Bind to the backend; hold connect() at the gate when one is given."""
+        super().__init__(backend)
+        self._gate = gate
+        self.handshaking = False
+        # True once someone called wait() on this socket mid-handshake - the
+        # DISCONNECT_TIMEOUT stall the real library would have cost them.
+        self.stalled = False
+        # Event names emitted through this socket in particular; the backend
+        # records emits without saying which socket carried them.
+        self.emitted: list[str] = []
+
+    async def emit(self, name: str, *args, **kwargs) -> None:
+        """Record the emit against this socket, then hand it to the backend."""
+        self.emitted.append(name)
+        await super().emit(name, *args, **kwargs)
+
+    async def connect(self, url: str, **kwargs) -> None:
+        """Connect once the gate, if any, is released."""
+        self.handshaking = True
+        try:
+            if self._gate is not None:
+                await self._gate.wait()
+            await super().connect(url, **kwargs)
+        finally:
+            self.handshaking = False
+
+    async def shutdown(self) -> None:
+        """Disconnect only an established connection, as the library does."""
+        if self.connected:
+            await self.disconnect()
+
+    async def wait(self) -> None:
+        """Block for as long as a handshake nothing can abort is in flight."""
+        if self.handshaking:
+            self.stalled = True
+            await asyncio.Event().wait()
 
 
 class TestRoundHumidity:
@@ -1373,3 +1431,195 @@ class TestSetterRetryOnForbidden:
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
         assert "could not reconnect to retry" in warnings[0].message
+
+    async def test_a_refresh_tick_during_recovery_does_not_leak_a_socket(
+        self, hass, mock_coordinator, mock_device, mock_json, monkeypatch
+    ) -> None:
+        """The coordinator's reconnect waits for a recovery, and vice versa.
+
+        Both run disconnect-then-connect on the same client. Before this was
+        serialized, a 30-second tick landing while a recovery was suspended in
+        its token refresh replaced the socket underneath it: the recovery then
+        took a socket the tick was still connecting, shutdown() found nothing
+        to tear down - the library sets `connected` only at the end of
+        connect() - and the tick's handshake completed into a socket nothing
+        referenced. It stayed connected, kept pushing state events into the
+        client, and was never shut down until Home Assistant restarted. The
+        recovery also sat in wait() on that socket for DISCONNECT_TIMEOUT.
+
+        This runs the real machinery - the emit loop, the fake backend's acks,
+        the client's own connect - and stubs only the token exchange, which
+        is held open so the tick has a window to land in. The tick's connect
+        is gated as well, so the interleaving is forced rather than left to
+        scheduling; with the lock in place the gate simply holds whichever
+        connect owns the lock at the time.
+        """
+
+        # The library-faithful wait() blocks forever on a mid-handshake
+        # socket; keep a regression from stalling the test for ten seconds.
+        monkeypatch.setattr("custom_components.sensi.client.DISCONNECT_TIMEOUT", 0.05)
+
+        backend = FakeSensiBackend([mock_json])
+        gate: asyncio.Event | None = None
+
+        def factory(*_args, **_kwargs) -> GatedSocket:
+            socket = GatedSocket(backend, gate)
+            backend.sockets.append(socket)
+            return socket
+
+        client = mock_coordinator.client
+        client._devices = {mock_device.identifier: mock_device}
+        client._config = AuthenticationConfig(
+            refresh_token="r", user_id="u", access_token="a", expires_at=9e9
+        )
+
+        refresh_started = asyncio.Event()
+        refresh_release = asyncio.Event()
+
+        async def slow_refresh() -> None:
+            refresh_started.set()
+            await refresh_release.wait()
+
+        # First attempt refused, retry accepted; everything else is a getter.
+        acks = iter([({"error": {"description": "Forbidden"}},), (None,)])
+        backend.ack_for = lambda name, _data: (
+            next(acks) if name == "set_fan_mode" else (None,)
+        )
+
+        with (
+            patch("custom_components.sensi.client.socketio.AsyncClient", factory),
+            patch.object(client, "try_refresh_access_token", new=slow_refresh),
+        ):
+            # Socket A, connected the way setup does it.
+            await client._connect()
+
+            setter = hass.async_create_task(
+                client.async_set_fan_mode(mock_device, "on")
+            )
+            await asyncio.wait_for(refresh_started.wait(), 3)
+
+            # The tick lands while the recovery is suspended in its refresh.
+            gate = asyncio.Event()
+            tick = hass.async_create_task(client.async_update_devices())
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            # The recovery resumes and runs its own disconnect/connect pair.
+            refresh_release.set()
+            await asyncio.sleep(0.2)
+
+            # Whichever connect the gate is holding now completes.
+            gate.set()
+            gate = None
+
+            await asyncio.wait_for(tick, 3)
+            await asyncio.wait_for(setter, 3)
+            await hass.async_block_till_done()
+
+            live = [s for s in backend.sockets if s.connected]
+            installed = client._sio
+
+            await client.stop()
+            await backend.shutdown()
+
+        # The retry went through: the caller sees success, not the refusal.
+        assert setter.result().error is None
+
+        # Three sockets in all - setup, then one per disconnect/connect pair -
+        # and exactly one of them was connected at the end, the one the client
+        # holds. Before the lock this was two: the client's, and the tick's
+        # orphan.
+        assert len(backend.sockets) == 3
+        assert len(live) == 1
+        assert installed is live[0]
+
+        # Nothing was taken mid-handshake, so no caller sat in wait() on a
+        # transport shutdown() could not reach.
+        assert not any(s.stalled for s in backend.sockets)
+
+    async def test_a_queued_refresh_tick_waits_for_the_retry(
+        self, hass, mock_coordinator, mock_device, mock_json, monkeypatch
+    ) -> None:
+        """A tick that lands during a recovery does not run until the retry is acked.
+
+        The tick is next in line for _reconnect_lock. If the recovery let go of
+        the lock before emitting its retry, the tick's disconnect ran first:
+        the retry either sat queued through the tick's reconnect - with
+        SET_EVENT_TIMEOUT running the whole time, and the emit loop discarding
+        it once it timed out - or went out on a socket the tick was already
+        tearing down, so its ack never came. A slow second connection was
+        enough to turn a refusal the recovery had fixed into "Future not
+        done".
+
+        Same machinery as the socket-leak test above, with the gate on the
+        tick's connect only - the third socket - and held longer than
+        SET_EVENT_TIMEOUT. The retry has to be acked on the recovery's own
+        socket, before that connect is allowed to complete.
+        """
+
+        monkeypatch.setattr("custom_components.sensi.client.DISCONNECT_TIMEOUT", 0.05)
+        # Long enough for one EMIT_LOOP_DELAY (0.5 s) to pass before the emit
+        # loop picks the retry up; short enough that a regression fails fast.
+        monkeypatch.setattr("custom_components.sensi.client.SET_EVENT_TIMEOUT", 1)
+
+        backend = FakeSensiBackend([mock_json])
+        gate = asyncio.Event()
+
+        def factory(*_args, **_kwargs) -> GatedSocket:
+            # Setup's socket and the recovery's connect straight through; the
+            # tick's connect waits at the gate.
+            socket = GatedSocket(backend, gate if len(backend.sockets) == 2 else None)
+            backend.sockets.append(socket)
+            return socket
+
+        client = mock_coordinator.client
+        client._devices = {mock_device.identifier: mock_device}
+        client._config = AuthenticationConfig(
+            refresh_token="r", user_id="u", access_token="a", expires_at=9e9
+        )
+
+        refresh_started = asyncio.Event()
+        refresh_release = asyncio.Event()
+
+        async def slow_refresh() -> None:
+            refresh_started.set()
+            await refresh_release.wait()
+
+        acks = iter([({"error": {"description": "Forbidden"}},), (None,)])
+        backend.ack_for = lambda name, _data: (
+            next(acks) if name == "set_fan_mode" else (None,)
+        )
+
+        with (
+            patch("custom_components.sensi.client.socketio.AsyncClient", factory),
+            patch.object(client, "try_refresh_access_token", new=slow_refresh),
+        ):
+            await client._connect()
+
+            setter = hass.async_create_task(
+                client.async_set_fan_mode(mock_device, "on")
+            )
+            await asyncio.wait_for(refresh_started.wait(), 3)
+
+            tick = hass.async_create_task(client.async_update_devices())
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            # The recovery reconnects and retries; the gate is still closed,
+            # so the tick cannot finish its own reconnect while this runs.
+            refresh_release.set()
+            await asyncio.wait_for(setter, 3)
+            assert not tick.done()
+
+            gate.set()
+            await asyncio.wait_for(tick, 3)
+            await hass.async_block_till_done()
+
+            await client.stop()
+            await backend.shutdown()
+
+        # The retry went out on the recovery's socket and was acked there.
+        assert setter.result().error is None
+        assert len(backend.sockets) == 3
+        assert backend.sockets[1].emitted == ["set_fan_mode"]
+        assert backend.sockets[2].emitted == []
