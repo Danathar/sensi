@@ -101,6 +101,11 @@ _EXPANDING_BRACE = re.compile(r"\{.*(?:,|\.\.).*\}", re.DOTALL)
 # the process substitutions above. See `_writing_redirection`.
 _REDIRECTION = re.compile(r"^[<>&|]*[<>][<>&|]*$")
 
+# The descriptor bash reads off the front of a redirection: the digits of
+# `2>err`, or the `{name}` of `{fd}>file`, which allocates a descriptor into a
+# variable. Named so the refusal can quote the spelling as typed.
+_DESCRIPTOR = re.compile(r"^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$")
+
 # The tokens that end one simple command and begin the next, so that a
 # redirection is charged to the command it is written in: `echo x >out; git
 # diff HEAD` is echo's redirection, `git diff HEAD | jq . >out` is jq's. A
@@ -143,12 +148,67 @@ def _brace_would_expand(word: str) -> bool:
     return "${" in word or _EXPANDING_BRACE.search(word) is not None
 
 
-def _segments(words: list[str]) -> list[list[str]]:
-    """Split the words into simple commands at the shell's separators."""
+def _mask_quotes(command: str) -> str:
+    """Return the command with every quoted or escaped character replaced by `Q`.
+
+    shlex removes the quotes as it splits, so the `;` of `git diff ';' >out`
+    arrives as the same word as the `;` of `git diff; >out`, and a split that
+    read it as a separator put the redirection in a segment with no git in it
+    while bash handed git a literal `;` and truncated the file (review on
+    #239). The masked copy keeps every quoted region the same length and free
+    of shell syntax, so lexing it the same way gives one word per real word,
+    and a word that is a separator in the masked copy is one bash would
+    honour; a quoted one is not.
+    """
+
+    masked: list[str] = []
+    quote = ""
+    escaped = False
+    for char in command:
+        if escaped:
+            escaped = False
+            masked.append("Q")
+        elif quote:
+            if char == quote:
+                quote = ""
+            elif quote == '"' and char == "\\":
+                escaped = True
+            masked.append("Q")
+        elif char == "\\":
+            escaped = True
+            masked.append("Q")
+        elif char in "'\"":
+            quote = char
+            masked.append("Q")
+        else:
+            masked.append(char)
+    return "".join(masked)
+
+
+def _lex(command: str) -> list[str]:
+    """Split a command into bash's words, with operators as words of their own."""
+
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    # The default `#` comment character is why this is not `shlex.split`: bash
+    # starts a comment only at the start of a word, shlex starts one mid-word,
+    # so `--no-index a#b` would be read as `--no-index a` and the rest of the
+    # command - the part doing the reading - would never be seen.
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
+    """Split the words into simple commands at the separators bash honours.
+
+    `masked` is the same list lexed from `_mask_quotes`; a word is a separator
+    only when its masked twin is, so a quoted `;` or `|` stays a word of its
+    command.
+    """
 
     found: list[list[str]] = [[]]
-    for word in words:
-        if word in _SEPARATORS or (word and set(word) <= set(";&|")):
+    for word, twin in zip(words, masked, strict=True):
+        if twin in _SEPARATORS or (twin and set(twin) <= set(";&|")):
             found.append([])
             continue
         found[-1].append(word)
@@ -174,7 +234,9 @@ def _writing_redirection(segment: list[str]) -> str | None:
         if word.endswith("&") and (target.isdigit() or target == "-"):
             continue
         descriptor = (
-            segment[index - 1] if index and segment[index - 1].isdigit() else ""
+            segment[index - 1]
+            if index and _DESCRIPTOR.match(segment[index - 1])
+            else ""
         )
         return f"{descriptor}{word}{target}"
     return None
@@ -266,15 +328,9 @@ def main() -> int:
     if not isinstance(command, str):
         return 0
 
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    # The default `#` comment character is why this is not `shlex.split`: bash
-    # starts a comment only at the start of a word, shlex starts one mid-word,
-    # so `--no-index a#b` would be read as `--no-index a` and the rest of the
-    # command - the part doing the reading - would never be seen.
-    lexer.commenters = ""
     try:
-        words = list(lexer)
+        words = _lex(command)
+        masked = _lex(_mask_quotes(command))
     except ValueError:
         # Unbalanced quoting. What bash would run is not what this saw, and the
         # command is malformed for bash too, so refusing costs nothing.
@@ -285,10 +341,20 @@ def main() -> int:
         )
         return 2
 
+    if len(words) != len(masked):
+        # The masked copy split differently, so which words are separators
+        # cannot be told. Refused rather than guessed at.
+        print(
+            "Blocked: the command's quoting could not be matched to its words. "
+            "Rewrite it and try again.",
+            file=sys.stderr,
+        )
+        return 2
+
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
     # and truncates the file as surely as `git diff` would.
-    for segment in _segments(words):
+    for segment in _segments(words, masked):
         if not _runs_git(segment):
             continue
         redirection = _writing_redirection(segment)
