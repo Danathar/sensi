@@ -17,6 +17,10 @@ three of their arguments do file I/O that has nothing to do with the repository:
   `docs/SECURITY-AI.md` and `.github/workflows/**`.
 * `--orderfile PATH` / `-O PATH` makes git open a path to read sort patterns
   out of it.
+* `<(true)` beside a path is `--no-index` again: bash substitutes a /dev/fd
+  path, which is outside the repository, and git prints the other operand
+  whole. The word reaches this script as a bare `<(`, so it is refused by
+  that prefix along with `>(`.
 
 No permission rule can close this. `deny` matching is by command prefix, and
 every one of these is an option that can be written anywhere in the argument
@@ -60,6 +64,15 @@ _REFUSED_SHORT = "O"
 # the one character here that bash sometimes leaves alone, so it is judged by
 # `_brace_would_expand` below rather than by its presence.
 _UNEXPANDED = "*?[]$`"
+
+# Process substitution. bash replaces `<(command)` and `>(command)` with a
+# /dev/fd path before git runs, so `git diff <(true) secrets.yaml` names a
+# path outside the repository without spelling one, and git diff implies
+# --no-index and prints secrets.yaml whole. shlex breaks the word at the `(`
+# and hands back `<(` on its own, which carries none of `_UNEXPANDED` and
+# resolves to a path inside the repository, so a word opening either way is
+# refused by its prefix instead.
+_PROCESS_SUBSTITUTION = ("<(", ">(")
 
 # A `{`, then a `,` or a `..` somewhere after it, then a `}` somewhere after
 # that. See `_brace_would_expand`.
@@ -197,7 +210,11 @@ def main() -> int:
         return 0
 
     for word in words:
-        if any(char in word for char in _UNEXPANDED) or _brace_would_expand(word):
+        if (
+            any(char in word for char in _UNEXPANDED)
+            or _brace_would_expand(word)
+            or word.startswith(_PROCESS_SUBSTITUTION)
+        ):
             print(
                 f"Blocked: {word!r} is expanded by the shell, so the argument "
                 "git receives is not the one written here. Spell the arguments "
