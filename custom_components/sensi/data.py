@@ -72,6 +72,21 @@ def get_hvac_mode_from_operating_mode(mode: OperatingMode) -> HVACMode:
     return None
 
 
+def get_setpoint_mode(mode: OperatingMode) -> OperatingMode:
+    """Return the mode whose setpoint ``mode`` runs against.
+
+    AUX is forced heating: the thermostat holds the heat setpoint while it
+    is in AUX, and get_hvac_mode_from_operating_mode already shows it as
+    HEAT. The setpoint paths have to follow that same mapping, otherwise
+    set_temperature goes out with mode "aux" - not one of the setpoint
+    modes this code has seen the backend take (heat, cool) - and an
+    accepted ack is recorded against nothing.
+    """
+    if mode == OperatingMode.AUX:
+        return OperatingMode.HEAT
+    return mode
+
+
 def get_operating_mode_from_hvac_mode(mode: HVACMode) -> OperatingMode | None:
     """Convert HVACMode to OperatingMode."""
     if mode == HVACMode.HEAT:

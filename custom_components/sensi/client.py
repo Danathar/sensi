@@ -17,7 +17,14 @@ from homeassistant.util.enum import try_parse_enum
 
 from .auth import AuthenticationError, SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
-from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice, State
+from .data import (
+    AuthenticationConfig,
+    FanMode,
+    OperatingMode,
+    SensiDevice,
+    State,
+    get_setpoint_mode,
+)
 from .event import (
     BoolEventData,
     NumberEventData,
@@ -334,6 +341,10 @@ class SensiClient:
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
+        # AUX runs the heat setpoint, so an ack for it lands there too; the
+        # climate entity already sends HEAT, this keeps any other caller
+        # from recording an accepted setpoint against nothing.
+        mode = get_setpoint_mode(mode)
         if mode == OperatingMode.HEAT:
             state.current_heat_temp = target_temp
         if mode == OperatingMode.COOL:

@@ -45,6 +45,7 @@ from .data import (
     SensiDevice,
     get_hvac_mode_from_operating_mode,
     get_operating_mode_from_hvac_mode,
+    get_setpoint_mode,
 )
 from .entity import SensiEntity
 
@@ -360,9 +361,12 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         cool_target = state.current_cool_temp
         heat_target = state.current_heat_temp
 
-        if state.operating_mode == OperatingMode.HEAT:
+        # AUX is forced heating, so it reports the heat setpoint like HEAT
+        # does rather than following the last demand below.
+        setpoint_mode = get_setpoint_mode(state.operating_mode)
+        if setpoint_mode == OperatingMode.HEAT:
             return heat_target
-        if state.operating_mode == OperatingMode.COOL:
+        if setpoint_mode == OperatingMode.COOL:
             return cool_target
 
         # For other modes use the last demand_status
@@ -398,7 +402,8 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         """Return the maximum temperature for single mode. This gets used as the upper bounds in UI."""
 
         # Use the thermostat defined maximum temperature if not cooling. This is in temperature_unit.
-        if self._state.operating_mode == OperatingMode.HEAT:
+        # AUX adjusts the heat setpoint, so it takes the heat bound as well.
+        if get_setpoint_mode(self._state.operating_mode) == OperatingMode.HEAT:
             return self._state.heat_max_temp
 
         return TemperatureConverter.convert(
@@ -471,8 +476,10 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             raise_if_error(response, "Cool setpoint", temperature_high)
         else:
             temperature = kwargs.get(ATTR_TEMPERATURE)
+            # In AUX the thermostat runs the heat setpoint, so that is the
+            # one to send; "aux" is not a setpoint the backend knows.
             response = await self.coordinator.client.async_set_temperature(
-                self._device, state.operating_mode, temperature
+                self._device, get_setpoint_mode(state.operating_mode), temperature
             )
 
             raise_if_error(response, "temperature", temperature)

@@ -22,6 +22,7 @@ from custom_components.sensi.data import (
     ThermostatInfo,
     get_hvac_mode_from_operating_mode,
     get_operating_mode_from_hvac_mode,
+    get_setpoint_mode,
 )
 from custom_components.sensi.utils import redact_identifier
 from homeassistant.components.climate import HVACMode
@@ -74,6 +75,22 @@ def test_hvac_mode_from_operating_mode(operating_mode, expected_hvac) -> None:
 def test_hvac_mode_heat_to_operating(hvac, expected_operating_mode) -> None:
     """Test converting HVACMode.HEAT to OperatingMode."""
     assert get_operating_mode_from_hvac_mode(hvac) == expected_operating_mode
+
+
+@pytest.mark.parametrize(
+    ("operating_mode", "expected_setpoint_mode"),
+    [
+        (OperatingMode.AUX, OperatingMode.HEAT),
+        (OperatingMode.HEAT, OperatingMode.HEAT),
+        (OperatingMode.COOL, OperatingMode.COOL),
+        (OperatingMode.AUTO, OperatingMode.AUTO),
+        (OperatingMode.OFF, OperatingMode.OFF),
+        (OperatingMode.UNKNOWN, OperatingMode.UNKNOWN),
+    ],
+)
+def test_setpoint_mode(operating_mode, expected_setpoint_mode) -> None:
+    """AUX runs the heat setpoint; every other mode is its own."""
+    assert get_setpoint_mode(operating_mode) == expected_setpoint_mode
 
 
 class TestCirculatingFan:
