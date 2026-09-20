@@ -6,11 +6,13 @@ proves what is actually being enforced. `.github/rulesets/master.json` says what
 was agreed; this says whether GitHub agrees, and names the difference when it
 does not.
 
-It is deliberately asymmetric. Extra rules are fine -- somebody tightening the
-branch is not drift worth failing on. What it fails on is *weakening*: a bypass
-actor that was not agreed, enforcement switched off, a rule removed, or a
-required check dropped. Those are the changes that quietly return the branch to
-the state issue #109 was opened about, and none of them shows up in a diff.
+It is deliberately asymmetric. Extra rules are fine, and so is a parameter set
+stricter than agreed -- somebody tightening the branch is not drift worth
+failing on. What it fails on is *weakening*: a bypass actor that was not
+agreed, enforcement switched off, a rule removed, a required check dropped, or
+a parameter relaxed below what was agreed. Those are the changes that quietly
+return the branch to the state issue #109 was opened about, and none of them
+shows up in a diff.
 
 Two modes:
 
@@ -42,6 +44,55 @@ DEFAULT_REPO = "Danathar/sensi"
 REQUIRED_RULE_TYPES = frozenset(
     {"deletion", "non_fast_forward", "pull_request", "required_status_checks"}
 )
+
+
+def _is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _no_fewer_than(actual: object, agreed: object) -> bool:
+    """Accept any count at least as large as the agreed one."""
+    if _is_count(actual) and _is_count(agreed):
+        return actual >= agreed
+    return actual == agreed
+
+
+def _not_switched_off(actual: object, agreed: object) -> bool:
+    """Accept a protection that is on, whether or not it was agreed on."""
+    return actual is True or actual == agreed
+
+
+def _not_switched_on(actual: object, agreed: object) -> bool:
+    """Accept an exemption that is off, whether or not it was agreed off."""
+    return actual is False or actual == agreed
+
+
+# Which live value honours an agreed parameter. A parameter's stronger
+# direction is not always "on": `do_not_enforce_on_create` switched on skips
+# the checks on a fresh branch, so for it the stricter value is False. A
+# parameter not listed here is compared exactly, because its stronger direction
+# is not obvious -- `allowed_merge_methods`, for instance, is a workflow choice
+# rather than a protection, and a list that differs either way is a change to
+# the agreement rather than a tightening of it.
+PARAMETER_HONOURED_BY = {
+    # pull_request
+    "required_approving_review_count": _no_fewer_than,
+    "require_code_owner_review": _not_switched_off,
+    "dismiss_stale_reviews_on_push": _not_switched_off,
+    "require_last_push_approval": _not_switched_off,
+    "required_review_thread_resolution": _not_switched_off,
+    # required_status_checks
+    "strict_required_status_checks_policy": _not_switched_off,
+    "do_not_enforce_on_create": _not_switched_on,
+}
+
+
+def _honours(key: str, actual: object, agreed: object) -> bool:
+    """Whether the live value of `key` is at least as strict as the agreed one."""
+    honoured_by = PARAMETER_HONOURED_BY.get(key)
+    if honoured_by is None:
+        return actual == agreed
+    return honoured_by(actual, agreed)
 
 
 class DefinitionError(RuntimeError):
@@ -163,11 +214,13 @@ def compare(definition: dict, live: dict) -> list[str]:
             continue
         # Only the parameters that were agreed. GitHub fills in defaults for
         # the rest, and failing on those would make this cry drift forever.
+        # A live value stricter than the agreed one is not drift either; see
+        # PARAMETER_HONOURED_BY for which direction is stricter.
         for key, agreed in (rule.get("parameters") or {}).items():
             if key == "required_status_checks":
                 continue
             actual = (live_rule.get("parameters") or {}).get(key)
-            if actual != agreed:
+            if not _honours(key, actual, agreed):
                 problems.append(
                     f"{rule_type}.{key}: agreed {agreed!r}, live {actual!r}"
                 )

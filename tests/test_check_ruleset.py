@@ -149,6 +149,91 @@ def test_extra_rules_are_not_drift(agreed: dict) -> None:
     assert check_ruleset.compare(agreed, live) == []
 
 
+def _set_parameter(document: dict, rule_type: str, key: str, value) -> None:
+    for rule in document["rules"]:
+        if rule["type"] == rule_type:
+            rule["parameters"][key] = value
+
+
+def test_a_tightened_rule_parameter_is_not_drift(agreed: dict) -> None:
+    """The same promise as extra rules, one level down.
+
+    A maintainer who raises the branch above the baseline -- a review now
+    required, code owners now consulted -- has not weakened anything. Reporting
+    it as "weaker than agreed" is the cry-wolf case the docstring warns about.
+    """
+    live = _live(agreed)
+    _set_parameter(live, "pull_request", "required_approving_review_count", 1)
+    _set_parameter(live, "pull_request", "require_code_owner_review", True)
+    _set_parameter(live, "pull_request", "require_last_push_approval", True)
+    _set_parameter(live, "pull_request", "required_review_thread_resolution", True)
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_a_tightened_status_check_policy_is_not_drift(agreed: dict) -> None:
+    """Requiring the branch to be up to date before merge is stricter, not drift."""
+    live = _live(agreed)
+    _set_parameter(
+        live, "required_status_checks", "strict_required_status_checks_policy", True
+    )
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_skipping_checks_on_branch_creation_is_drift(agreed: dict) -> None:
+    """Not every boolean is stricter when on.
+
+    `do_not_enforce_on_create` switched on is an exemption: the required checks
+    no longer apply when the branch is created. Treating "on" as tightening
+    across the board would wave that through.
+    """
+    live = _live(agreed)
+    _set_parameter(live, "required_status_checks", "do_not_enforce_on_create", True)
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert any("do_not_enforce_on_create" in p for p in problems)
+
+
+def test_a_lowered_review_count_is_drift(agreed: dict) -> None:
+    """The count only has a direction if going below it is still caught.
+
+    The shipped definition agrees 0, which nothing can go below, so the agreed
+    side is raised here to give the live side somewhere to fall to. A missing
+    value is caught too: `None` is not "at least 2".
+    """
+    _set_parameter(agreed, "pull_request", "required_approving_review_count", 2)
+
+    lowered = _live(agreed)
+    _set_parameter(lowered, "pull_request", "required_approving_review_count", 1)
+    missing = _live(agreed)
+    for rule in missing["rules"]:
+        if rule["type"] == "pull_request":
+            del rule["parameters"]["required_approving_review_count"]
+
+    for live in (lowered, missing):
+        problems = check_ruleset.compare(agreed, live)
+        assert any("required_approving_review_count" in p for p in problems)
+
+
+def test_a_parameter_with_no_obvious_direction_is_compared_exactly(
+    agreed: dict,
+) -> None:
+    """`allowed_merge_methods` has no "stricter" side, so any change is reported.
+
+    Fewer merge methods is a workflow decision, not a protection. It changes
+    what the agreement says rather than tightening it, so it is named either
+    way and a person decides.
+    """
+    live = _live(agreed)
+    _set_parameter(live, "pull_request", "allowed_merge_methods", ["squash"])
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert any("allowed_merge_methods" in p for p in problems)
+
+
 def test_a_bypass_actor_added_out_of_band_is_drift(agreed: dict) -> None:
     """The failure this exists for.
 
