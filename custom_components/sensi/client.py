@@ -17,7 +17,13 @@ from homeassistant.util.enum import try_parse_enum
 
 from .auth import AuthenticationError, SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
-from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice, State
+from .data import (
+    AuthenticationConfig,
+    FanMode,
+    OperatingMode,
+    SensiDevice,
+    get_setpoint_mode,
+)
 from .event import (
     BoolEventData,
     NumberEventData,
@@ -54,6 +60,12 @@ DISCONNECT_TIMEOUT = 10
 # it is safe. Everything else is a real rejection and must stay fail-fast:
 # retrying an out-of-range temperature would just fail twice, more slowly.
 RETRYABLE_SETTER_ERRORS = frozenset({"Forbidden"})
+
+# What a refused setter reports when the ack carries an error we cannot read a
+# message out of. The protocol is undocumented, so the error's shape is not
+# ours to rely on; what we can rely on is that the backend put an error in the
+# ack at all, and that must never be reported as an accepted write.
+UNKNOWN_SETTER_ERROR = "Unknown error"
 
 
 @dataclass
@@ -138,9 +150,6 @@ class SensiClient:
         async def _wait_for_device_info() -> None:
             """Wait for info and capabilities getter events."""
 
-            if not self._devices:
-                return
-
             tasks = []
             task_icd_ids: dict[asyncio.Future, str] = {}
             for icd_id in self._devices:
@@ -176,17 +185,59 @@ class SensiClient:
                     f"No devices responded within {PREPARE_DEVICES_TIMEOUT} seconds"
                 )
 
-        async def _wait_for_state_and_device_info() -> None:
-            """Wait for the initial `state` event so that we can iterate and issue info and capabilities getter events."""
-
-            await self._wait_for_event("state", None, PREPARE_DEVICES_TIMEOUT)
-            LOGGER.info(f"{len(self._devices)} devices found")
-            await _wait_for_device_info()
-
+        # The initial `state` event is what lists the account's thermostats;
+        # until it arrives there is no device to ask for info or capabilities.
+        #
+        # The waiter is registered before connecting. socketio dispatches
+        # events from its read loop, and connect() returns only after that
+        # loop has woken it through an Event - so a `state` packet right
+        # behind the namespace handshake reaches _update_state before this
+        # coroutine gets control back. A future created after connect()
+        # returned would then only ever time out, and a backend that answered
+        # promptly would be reported as one that never answered.
+        state_future = await self._create_event_future("state", None)
         try:
             async with self._reconnect_lock:
                 await self._connect()
-            await _wait_for_state_and_device_info()
+            await self._wait_for_event(
+                "state", None, PREPARE_DEVICES_TIMEOUT, future=state_future
+            )
+        except SensiConnectionError as err:
+            raise ConfigEntryNotReady from err
+        except TimeoutError as err:
+            # Not the "retrying" branch below: that retry re-sends the getters
+            # for the devices already known, and with no `state` event there
+            # are none. Carrying on from here used to finish setup with an
+            # empty device list - the entry showed as loaded with no entities,
+            # and Home Assistant never retried because nothing was raised.
+            # ConfigEntryNotReady makes it retry with backoff on a fresh
+            # connection instead.
+            raise ConfigEntryNotReady(
+                f"No state event within {PREPARE_DEVICES_TIMEOUT} seconds"
+            ) from err
+        finally:
+            # Already done when the event arrived, already cancelled by
+            # wait_for on a timeout; this is for a connect that raised, so
+            # the waiter is not left pending for the next state event.
+            state_future.cancel()
+
+        if not self._devices:
+            # The backend answered, and the answer is that there is nothing
+            # here. That is a fact about the account rather than a failure, so
+            # setup completes - but a WARNING is what a default-configured log
+            # shows, and "my thermostats did not appear" is the report this
+            # line has to explain.
+            LOGGER.warning(
+                "Connected to Sensi but the account lists no thermostats; no "
+                "entities will be created. Reload the integration once a "
+                "thermostat is registered to the account"
+            )
+            return
+
+        LOGGER.info(f"{len(self._devices)} devices found")
+
+        try:
+            await _wait_for_device_info()
         except SensiConnectionError as err:
             raise ConfigEntryNotReady from err
         except TimeoutError:
@@ -297,6 +348,14 @@ class SensiClient:
     ) -> ActionResponse:
         """Set the target temperature. This updates the device on success."""
 
+        # This State is only good for building the request. update_state
+        # replaces device.state with a new object on every state event, and a
+        # state event lands during the await below whenever the setter's
+        # Forbidden recovery reconnects (every connect delivers one) or the
+        # coordinator's refresh happens to run - so once the ack is in, the
+        # accepted value must go to whatever device.state is by then, not to
+        # this object, or the entity keeps showing the old setpoint until the
+        # next state event happens to carry the new one.
         state = device.state
 
         if state.operating_mode == OperatingMode.OFF:
@@ -335,7 +394,7 @@ class SensiClient:
         # We can receive a string instead of JSON
         if isinstance(response, str):
             if response == "accepted":
-                self._apply_target_temperature(state, mode, value)
+                self._apply_target_temperature(device, mode, value)
                 return ActionResponse(None, None)
 
             # Treat anything else other than "accepted" as error
@@ -346,7 +405,7 @@ class SensiClient:
             # and it is a success there. The requested value is the only figure
             # available; display_temp is left alone because the thermostat did
             # not report one and the next state event carries it.
-            self._apply_target_temperature(state, mode, value)
+            self._apply_target_temperature(device, mode, value)
             return ActionResponse(None, None)
 
         # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
@@ -355,19 +414,31 @@ class SensiClient:
         except ValueError, TypeError:
             return ActionResponse(f"Failed to parse `{response}`", None)
 
-        state.display_temp = parsed_response.current_temp
-        self._apply_target_temperature(state, mode, parsed_response.target_temp)
+        device.state.display_temp = parsed_response.current_temp
+        self._apply_target_temperature(device, mode, parsed_response.target_temp)
 
         return ActionResponse(None, parsed_response)
 
     @staticmethod
     def _apply_target_temperature(
-        state: State, mode: OperatingMode, target_temp: int
+        device: SensiDevice, mode: OperatingMode, target_temp: int
     ) -> None:
-        """Record an accepted setpoint against the mode it was set for."""
+        """Record an accepted setpoint against the mode it was set for.
+
+        Takes the device rather than a State so the write lands on the State
+        the device holds now; a state event may have replaced the one that
+        was current when the setter was sent.
+        """
+
+        state = device.state
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
+        # AUX runs the heat setpoint, so an ack for it lands there too. The
+        # request itself still carries "aux" - the wire mode is left as it
+        # always was - so this is the one place the mapping has to happen,
+        # or an accepted AUX setpoint is recorded against nothing.
+        mode = get_setpoint_mode(mode)
         if mode == OperatingMode.HEAT:
             state.current_heat_temp = target_temp
         if mode == OperatingMode.COOL:
@@ -708,18 +779,40 @@ class SensiClient:
         (response_error, response_data) = future.result()
 
         if response_error:
+            # A truthy error is a refusal whatever its shape. The description
+            # getter already falls back to UNKNOWN_SETTER_ERROR, but the two
+            # are kept from drifting apart here: an empty description must not
+            # turn a refusal into an accepted write.
             return ActionResponse(
-                get_error_description_from_event_callback(response_error), None
+                get_error_description_from_event_callback(response_error)
+                or UNKNOWN_SETTER_ERROR,
+                None,
             )
 
         return ActionResponse(None, response_data or {})
 
     async def _wait_for_event(
-        self, event: str, icd_id: str | None, timeout: int = 5
-    ) -> None:
-        """Wait for an event response."""
+        self,
+        event: str,
+        icd_id: str | None,
+        timeout: int = 5,
+        future: asyncio.Future | None = None,
+    ) -> any:
+        """Wait for an event response and return its payload.
 
-        future = await self._create_event_future(event, icd_id)
+        Raises TimeoutError if the event does not arrive in time. It used to
+        return None instead, but None is also what the initial `state` future
+        resolves to, so a caller could not tell "arrived" from "never came" -
+        and wait_for_devices did not try, which is how a backend that never
+        sent `state` produced a loaded entry with no devices.
+
+        `future` is a waiter the caller registered earlier with
+        _create_event_future, for an event that may already be in flight by
+        the time this is called; when it is not given one is created here.
+        """
+
+        if future is None:
+            future = await self._create_event_future(event, icd_id)
 
         try:
             return await asyncio.wait_for(future, timeout)
@@ -731,6 +824,7 @@ class SensiClient:
                 f"Timed out waiting for event '{event}' on device "
                 f"{redact_identifier(icd_id)}"
             )
+            raise
 
     async def _create_event_future(
         self, event: str, icd_id: str | None
@@ -1049,7 +1143,13 @@ class SensiClient:
 
     def _update_state(self, data):
         """Handle state event from socketio."""
-        if not data or len(data) == 0:
+        if not data:
+            # An empty `state` event is still the backend's answer: this
+            # account has no thermostats. Resolve the initial-state waiter so
+            # that account finishes setup at once, rather than waiting out
+            # PREPARE_DEVICES_TIMEOUT and then looking exactly like a backend
+            # that never answered at all.
+            self._resolve_futures("state", None, None)
             return
 
         futures_to_resolve = []
@@ -1118,15 +1218,40 @@ class SensiClient:
                 self._resolve_futures("capabilities", icd_id, data)
 
 
-def get_error_description_from_event_callback(error: dict) -> str:
-    """Get error description from the event response error."""
+def get_error_description_from_event_callback(error: dict | str | None) -> str:
+    """Get error description from the event response error.
+
+    Returns "" only when there is no error. A truthy error whose message
+    cannot be read yields UNKNOWN_SETTER_ERROR, never "": the caller treats a
+    falsy description as an accepted write, and the shapes below are the
+    only ones observed, not the only ones the backend can send.
+    """
     if not error:
         return ""
+
+    # A two-argument socket.io ack can carry the error as a bare string.
+    if isinstance(error, str):
+        return error
+
+    if not isinstance(error, dict):
+        return UNKNOWN_SETTER_ERROR
 
     # {'error': {'description': 'InvalidScale'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
     # {'error': {'description': 'Bad Request'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
     # {'error': {'description': 'Forbidden'}}
-    return error.get("error", {}).get("description", "")
+    details = error.get("error")
+    if isinstance(details, str):
+        return details or UNKNOWN_SETTER_ERROR
+
+    if isinstance(details, dict):
+        for key in ("description", "message"):
+            description = details.get(key)
+            if isinstance(description, str) and description:
+                return description
+
+    # Not str(error): the payload can carry the thermostat's icd_id, and this
+    # string ends up in the HomeAssistantError shown to the user and logged.
+    return UNKNOWN_SETTER_ERROR
 
 
 def is_token_expired(error_details):

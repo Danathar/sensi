@@ -9,7 +9,12 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import ActionResponse, round_humidity
-from custom_components.sensi.data import AuthenticationConfig, FanMode, OperatingMode
+from custom_components.sensi.data import (
+    AuthenticationConfig,
+    FanMode,
+    OperatingMode,
+    State,
+)
 from custom_components.sensi.event import (
     SetCirculatingFanEvent,
     SetCirculatingFanEventValue,
@@ -376,6 +381,37 @@ class TestSetTemperature:
 
     @pytest.mark.parametrize(
         "ack",
+        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 71}],
+        ids=["empty_dict", "accepted_string", "three_key_dict"],
+    )
+    async def test_an_aux_setpoint_is_recorded_as_the_heat_setpoint(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """A setpoint accepted while in AUX lands on current_heat_temp.
+
+        AUX is forced heating. The climate entity passes AUX through to the
+        wire unchanged, and that used to match neither branch of
+        `_apply_target_temperature`, so an accepted ack updated nothing.
+        """
+        mock_device.state.operating_mode = OperatingMode.AUX
+        previous_cool_temp = mock_device.state.current_cool_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.AUX, 71
+            )
+
+        assert response.error is None
+        assert mock_device.state.current_heat_temp == 71
+        assert mock_device.state.current_cool_temp == previous_cool_temp
+        assert mock_device.state.operating_mode == OperatingMode.AUX
+
+    @pytest.mark.parametrize(
+        "ack",
         [
             {"current_temp": 70, "mode": "heat"},
             {"current_temp": 70, "mode": "heat", "target_temp": 75, "extra": 1},
@@ -408,6 +444,61 @@ class TestSetTemperature:
         # Nothing was applied, because nothing was understood.
         assert mock_device.state.current_heat_temp == previous_heat_temp
 
+    @pytest.mark.parametrize(
+        ("ack_args", "expected_error"),
+        [
+            (({"error": {}},), "Unknown error"),
+            (({"error": {"code": 403}},), "Unknown error"),
+            (("Forbidden", None), "Forbidden"),
+            (({"error": "Forbidden"},), "Forbidden"),
+            (([{"error": "Forbidden"}], None), "Unknown error"),
+        ],
+        ids=[
+            "empty_error_object",
+            "error_object_without_description",
+            "string_error_two_arg_ack",
+            "string_error_object",
+            "list_error_two_arg_ack",
+        ],
+    )
+    async def test_an_unreadable_error_ack_is_an_error_not_a_write(
+        self, mock_device, mock_coordinator, ack_args, expected_error
+    ) -> None:
+        """An error ack we cannot read a message out of is still a refusal.
+
+        The ack parser used to read exactly one error shape,
+        `{"error": {"description": ...}}`. An error object with no
+        description came back as an empty-string error, which every setter
+        reads as "accepted" and writes the requested value into the local
+        state; a string error raised AttributeError out of the service call
+        instead of the "Unable to set ..." HomeAssistantError (#216).
+
+        This drives the real `_async_emit_setter` callback with `_send_event`
+        faked, so the ack shapes reach the parser as the socket would deliver
+        them. The recovery steps are stubbed because a `Forbidden` refusal is
+        retried once on a fresh socket.
+        """
+        client = mock_coordinator.client
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        async def fake_send_event(name, data, callback=None, future=None):
+            callback(*ack_args)
+
+        with (
+            patch.object(client, "_send_event", new=fake_send_event),
+            patch.object(client, "try_refresh_access_token"),
+            patch.object(client, "_async_disconnect"),
+            patch.object(client, "_connect"),
+        ):
+            response = await client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, previous_heat_temp + 4
+            )
+
+        assert response.error == expected_error
+        assert response.data is None
+        # The refusal reached the caller, so nothing was applied.
+        assert mock_device.state.current_heat_temp == previous_heat_temp
+
     async def test_a_cool_setpoint_is_applied_on_a_detail_free_ack(
         self, mock_device, mock_coordinator
     ) -> None:
@@ -425,6 +516,47 @@ class TestSetTemperature:
 
         assert mock_device.state.current_cool_temp == 79
         assert mock_device.state.current_heat_temp == previous_heat_temp
+
+    @pytest.mark.parametrize(
+        "ack",
+        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 72}],
+        ids=["empty_dict", "accepted_string", "detailed"],
+    )
+    async def test_setpoint_survives_a_state_refresh_during_the_setter(
+        self, mock_device, mock_coordinator, mock_json, ack
+    ) -> None:
+        """The accepted setpoint lands on the State the device holds now.
+
+        update_state replaces device.state with a new State on every state
+        event, and one arrives during the setter's await whenever its
+        Forbidden recovery reconnects (every connect delivers a state event)
+        or the coordinator's refresh runs. Writing the accepted value into
+        the State captured before the await put it on an object nothing
+        referenced any more: the entity kept showing the old setpoint until
+        a later state event happened to carry the new one.
+        """
+        before = mock_device.state.current_heat_temp
+        stale_state = mock_device.state
+
+        async def invoke_with_state_refresh(event, request_data):
+            # What a reconnect's state event does to the device mid-setter.
+            mock_device.state = State(mock_json["state"])
+            return ActionResponse(None, ack)
+
+        with patch.object(
+            mock_coordinator.client,
+            "_async_invoke_setter",
+            new=invoke_with_state_refresh,
+        ):
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, before + 4
+            )
+
+        assert response.error is None
+        assert mock_device.state is not stale_state
+        assert mock_device.state.current_heat_temp == before + 4
+        if isinstance(ack, dict) and ack:
+            assert mock_device.state.display_temp == ack["current_temp"]
 
     async def test_set_temperature_OFF_state(
         self, mock_device, mock_coordinator
@@ -776,6 +908,139 @@ class TestWaitForDevices:
         assert "Timed out waiting for info/capabilities" in caplog.text
         assert mock_device.identifier not in caplog.text
         assert redact_identifier(mock_device.identifier) in caplog.text
+
+    async def test_connection_lost_while_asking_for_device_info_is_not_ready(
+        self, mock_coordinator, mock_device
+    ):
+        """Losing the socket on the first getter is ConfigEntryNotReady, not a retry.
+
+        Distinct from the e2e case where the connection goes during the
+        retry: here the first attempt is the one that fails, and it must not
+        be mistaken for a timeout worth retrying on the same dead socket.
+        """
+        client = mock_coordinator.client
+        client._devices = {mock_device.identifier: mock_device}  # noqa: SLF001
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _raise(*a, **k):
+            raise SensiConnectionError("socket gone")
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_wait_for_event", new=_nop),
+            patch.object(client, "_send_event", new=_raise),
+            pytest.raises(ConfigEntryNotReady),
+        ):
+            await client.wait_for_devices()
+
+    async def test_initial_state_timeout_raises_not_ready(
+        self, mock_coordinator, monkeypatch, caplog
+    ):
+        """No initial `state` event is ConfigEntryNotReady, not a loaded entry.
+
+        The socket is up but the backend never lists the thermostats. This
+        used to return normally: the timeout was swallowed, the device dict
+        was empty, so there was nothing to retry the getters for, and setup
+        finished with no devices and nothing raised - which is why Home
+        Assistant never retried it either.
+        """
+        monkeypatch.setattr(
+            "custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.01
+        )
+
+        client = mock_coordinator.client
+        sent: list[str] = []
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _record_send(name, data, *a, **k):
+            sent.append(name)
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_send_event", new=_record_send),
+            pytest.raises(ConfigEntryNotReady, match="No state event within"),
+        ):
+            await client.wait_for_devices()
+
+        # Nothing to ask for info about, so nothing went out on the wire and
+        # the "retrying" branch - which is for a known device that stays
+        # silent - was not taken.
+        assert sent == []
+        assert client.get_devices() == []
+        assert "retrying" not in caplog.text
+
+    async def test_a_state_event_delivered_inside_connect_is_not_a_timeout(
+        self, mock_coordinator, mock_json, monkeypatch, caplog
+    ):
+        """The initial `state` may arrive before _connect returns; it still counts.
+
+        socketio dispatches events from its read loop while connect() is
+        waiting to be woken, so the first `state` can reach _update_state
+        before wait_for_devices gets control back. The waiter has to be
+        registered before connecting, or a backend that answered at once is
+        reported as one that never answered.
+        """
+        monkeypatch.setattr(
+            "custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.01
+        )
+
+        client = mock_coordinator.client
+        loop = client._hass.loop  # noqa: SLF001
+
+        async def _connect_and_deliver_state():
+            client._on_event("state", [mock_json])  # noqa: SLF001
+
+        async def _answer_getters(name, data, *a, **k):
+            # The getter futures are created after the send, so answer on the
+            # next loop iteration the way the emit loop would.
+            event = {"get_info": "info", "get_capabilities": "capabilities"}[name]
+            loop.call_soon(client._on_event, event, {"icd_id": data["icd_id"]})  # noqa: SLF001
+
+        with (
+            patch.object(client, "_connect", new=_connect_and_deliver_state),
+            patch.object(client, "_send_event", new=_answer_getters),
+        ):
+            await client.wait_for_devices()
+
+        assert [d.identifier for d in client.get_devices()] == [mock_json["icd_id"]]
+        assert "Timed out waiting for event 'state'" not in caplog.text
+
+    async def test_a_state_event_with_no_devices_completes_with_a_warning(
+        self, mock_coordinator, caplog
+    ):
+        """A backend that lists no thermostats completes setup and says so.
+
+        That is an answer, not a failure, so there is nothing to retry - but
+        the WARNING is what a default-configured log shows, and it is the
+        line that explains "my thermostats did not appear".
+        """
+        client = mock_coordinator.client
+        sent: list[str] = []
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _record_send(name, data, *a, **k):
+            sent.append(name)
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_wait_for_event", new=_nop),
+            patch.object(client, "_send_event", new=_record_send),
+        ):
+            await client.wait_for_devices()
+
+        assert sent == []
+        assert client.get_devices() == []
+        assert [
+            record.levelname
+            for record in caplog.records
+            if "account lists no thermostats" in record.getMessage()
+        ] == ["WARNING"]
 
 
 class TestSetterErrorsLeaveStateAlone:

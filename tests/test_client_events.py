@@ -22,6 +22,7 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import (
+    UNKNOWN_SETTER_ERROR,
     EventInfo,
     SensiClient,
     SensiDevice,
@@ -285,7 +286,8 @@ class TestEventFutures:
         sitting in the list when the next event for that key arrives. The
         fresh waiter behind it used to time out too.
         """
-        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+        with pytest.raises(TimeoutError):
+            await client._wait_for_event("info", "icd-1", timeout=0)
 
         async def resolve_soon() -> None:
             # Let the second _wait_for_event register its future first.
@@ -363,9 +365,17 @@ class TestEventFutures:
 
         assert results[0] == {"payload": 2}
 
-    async def test_wait_for_event_times_out(self, client) -> None:
-        """A timed out wait logs and returns None instead of raising."""
-        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+    async def test_wait_for_event_times_out(self, client, caplog) -> None:
+        """A timed out wait logs and raises.
+
+        It used to return None, which is also what a resolved initial `state`
+        future yields - so wait_for_devices could not tell a backend that
+        answered from one that never did, and finished setup with no devices.
+        """
+        with pytest.raises(TimeoutError):
+            await client._wait_for_event("info", "icd-1", timeout=0)
+
+        assert "Timed out waiting for event 'info'" in caplog.text
 
 
 class TestOnEvent:
@@ -415,16 +425,28 @@ class TestUpdateState:
     """Test cases for the _update_state handler."""
 
     @pytest.mark.parametrize("data", [None, []])
-    async def test_empty_payload_is_ignored(self, client, data) -> None:
-        """An empty state event neither creates devices nor resolves futures."""
-        future = await client._create_event_future("state", None)
+    async def test_empty_payload_answers_the_initial_wait_only(
+        self, client, data
+    ) -> None:
+        """An empty state event creates no device but is still the answer.
+
+        The initial-state waiter resolves, so an account with no thermostats
+        finishes setup at once instead of waiting out PREPARE_DEVICES_TIMEOUT
+        and then looking exactly like a backend that never sent `state`. The
+        per-device waiters a refresh creates stay pending: nothing in the
+        payload updated them.
+        """
+        initial = await client._create_event_future("state", None)
+        per_device = await client._create_event_future("state", ICD_ID)
 
         client._update_state(data)
 
         assert client.get_devices() == []
-        assert not future.done()
+        assert initial.done()
+        assert await initial is None
+        assert not per_device.done()
 
-        future.cancel()
+        per_device.cancel()
 
     async def test_creates_device_and_resolves_futures(self, client, mock_json) -> None:
         """A first state event creates the device and resolves both futures."""
@@ -1116,13 +1138,68 @@ class TestGetErrorDescriptionFromEventCallback:
             == "Forbidden"
         )
 
-    def test_error_object_without_description(self):
-        """An error object with no description yields an empty string."""
-        assert get_error_description_from_event_callback({"error": {}}) == ""
+    @pytest.mark.parametrize(
+        "error",
+        [
+            {"error": {}},
+            {"error": {"code": 403}},
+            {"error": {"description": ""}},
+            {"error": {"description": None}},
+            {"error": {"description": 403}},
+            {"error": ""},
+            {"error": None},
+            {"error": 403},
+            {"icd_id": "abc"},
+            ["Forbidden"],
+            403,
+        ],
+        ids=[
+            "empty_error_object",
+            "code_only",
+            "empty_description",
+            "none_description",
+            "non_string_description",
+            "empty_string_error",
+            "none_error",
+            "int_error",
+            "no_error_key",
+            "list_payload",
+            "int_payload",
+        ],
+    )
+    def test_a_truthy_error_without_a_readable_message_is_still_an_error(self, error):
+        """An error we cannot read a message out of is never the empty string.
 
-    def test_payload_without_error_key(self):
-        """A payload with no error key yields an empty string."""
-        assert get_error_description_from_event_callback({"icd_id": "abc"}) == ""
+        The setter path treats a falsy description as an accepted write, so
+        "" here would turn a refusal into a success (#216).
+        """
+        assert get_error_description_from_event_callback(error) == UNKNOWN_SETTER_ERROR
+
+    def test_string_error(self):
+        """A two-argument ack can carry the error as a bare string."""
+        assert get_error_description_from_event_callback("Forbidden") == "Forbidden"
+
+    def test_string_error_object(self):
+        """The nested error can itself be a bare string."""
+        assert (
+            get_error_description_from_event_callback({"error": "Forbidden"})
+            == "Forbidden"
+        )
+
+    def test_message_is_read_when_description_is_absent(self):
+        """A `message` field stands in for a missing `description`."""
+        assert (
+            get_error_description_from_event_callback(
+                {"error": {"message": "jwt expired"}}
+            )
+            == "jwt expired"
+        )
+
+    def test_unknown_error_does_not_echo_the_payload(self):
+        """The fallback is fixed text, not repr(payload), which can carry an icd_id."""
+        assert "aa-bb-cc" not in get_error_description_from_event_callback(
+            {"error": {"code": 403}, "icd_id": "aa-bb-cc-dd-ee-ff-00-02"}
+        )
 
 
 class TestIsTokenExpired:
