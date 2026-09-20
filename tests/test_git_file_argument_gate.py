@@ -253,6 +253,75 @@ def test_the_brace_test_is_what_bash_would_expand_not_the_spelling(
     assert "expanded by the shell" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # bash replaces `<(...)` and `>(...)` with a /dev/fd path before git
+        # runs, and a path under /dev is outside the repository, so `git diff
+        # <(true) secrets.yaml` implies --no-index and prints secrets.yaml
+        # whole. shlex breaks the word at the `(` and hands back `<(` on its
+        # own, which spells no option and resolves to a path inside the
+        # repository, so nothing refused it.
+        "git diff <(true) secrets.yaml",
+        "git diff <(true) ./secrets.yaml",
+        "git diff -- <(true)",
+        "git diff HEAD >(cat)",
+        "git log -p <(true)",
+        "git show HEAD:README.md <(true)",
+    ],
+)
+def test_a_process_substitution_in_a_gated_command_is_refused(command: str) -> None:
+    """A word that opens `<(` or `>(` is refused before it is resolved."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "expanded by the shell" in completed.stderr
+
+
+def test_git_really_prints_the_file_beside_a_process_substitution(
+    tmp_path: Path,
+) -> None:
+    """The reach the substitution rule exists for, run for real.
+
+    A stand-in file in a throwaway repository, never the real secrets.yaml:
+    the test is that git prints it, and the hook has to refuse the command
+    that does.
+    """
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    (tmp_path / "secrets.yaml").write_text("STAND-IN-NOT-A-SECRET\n", encoding="utf-8")
+    shown = subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", "git diff <(true) ./secrets.yaml"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "STAND-IN-NOT-A-SECRET" in shown.stdout, (
+        "git diff no longer prints the file beside a process substitution; "
+        "the substitution rule in the hook may be more than is needed"
+    )
+    completed = _run(_payload("git diff <(true) ./secrets.yaml"))
+    assert completed.returncode == 2, (
+        "the command just shown to print a file was not blocked"
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "diff <(ls a) <(ls b)",
+        "cat <(echo x)",
+    ],
+)
+def test_a_process_substitution_outside_a_gated_git_is_not_gated(command: str) -> None:
+    """The gate is about git's arguments; two other programs' output is not one."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_the_reflog_range_refusal_names_the_spelling_to_use() -> None:
     """The over-refusal has a cost; the message pays it back."""
 
