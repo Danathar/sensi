@@ -39,6 +39,24 @@ REFUSED_LONG = frozenset(
 )
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
 
+# Options that name a path pytest creates, truncates, or deletes. The target
+# check below inspects only arguments that do not start with `-`, so an option
+# carrying its own path is invisible to it, and the path does not have to be
+# inside `tests/` - or inside the repository. `--basetemp` is the sharpest of
+# them: pytest `rm_rf`s the directory before it uses it.
+#
+# Same rule as the list above - an option that writes a path and is not here is
+# a bug in the list.
+REFUSED_WRITE = frozenset(
+    {"--junitxml", "--junit-xml", "--log-file", "--debug", "--basetemp", "--report-log"}
+)
+
+# `--cov-report` is the one of these that has a legitimate spelling: AGENTS.md
+# documents `--cov-report=term-missing`. Only the destination forms write a
+# path, and they are the ones carrying a `:` - `xml:out.xml`, `html:dir`,
+# `lcov:out.info`, `annotate:dir`.
+VALUED_WRITE = frozenset({"--cov-report"})
+
 # pytest defaults `confcutdir` to the directory holding the ini file, which is
 # ROOT here - but that is a default, and the wrapper's guarantee should not rest
 # on one. Pinning it means a conftest.py above the repository is never imported
@@ -63,7 +81,8 @@ def _refused_option(arg: str) -> bool:
     forms take their value with `=`.
     """
 
-    if arg.split("=", 1)[0] in REFUSED_LONG:
+    name = arg.split("=", 1)[0]
+    if name in REFUSED_LONG or name in REFUSED_WRITE:
         return True
     if arg.startswith("--"):
         return False
@@ -82,12 +101,25 @@ def refusals(argv: list[str]) -> list[str]:
     """
 
     problems = []
+    pending = ""
     for arg in argv:
+        # A `--cov-report` destination arrives either attached with `=` or as
+        # the next argument, and only the destination forms carry a `:`.
+        name, _, attached = arg.partition("=")
+        value = attached if name in VALUED_WRITE else (arg if pending else "")
+        pending = name if name in VALUED_WRITE and not attached else ""
+        if value and ":" in value:
+            problems.append(f"{arg}: writes a report to a path of its own")
+            continue
+
         if arg.startswith("-"):
             if _refused_option(arg):
-                problems.append(
-                    f"{arg}: reaches code by a route the target check cannot see"
+                why = (
+                    "creates, truncates or deletes a path of its own"
+                    if arg.partition("=")[0] in REFUSED_WRITE
+                    else "reaches code by a route the target check cannot see"
                 )
+                problems.append(f"{arg}: {why}")
             continue
         target = Path(arg.split("::", 1)[0])
         resolved = (target if target.is_absolute() else ROOT / target).resolve()

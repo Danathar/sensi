@@ -35,6 +35,9 @@ _spec.loader.exec_module(run_tests)
         ["-q", "--cov=custom_components/sensi"],
         ["--pdb"],
         ["-k", "redact"],
+        ["--cov=custom_components.sensi", "--cov-report=term-missing"],
+        ["--cov-report", "term"],
+        ["-x", "tests"],
     ],
     ids=[
         "bare",
@@ -45,6 +48,9 @@ _spec.loader.exec_module(run_tests)
         "options with no target",
         "an option that starts with -p only as --",
         "a keyword filter",
+        "the documented coverage command",
+        "a terminal coverage report given as two arguments",
+        "stop on first failure",
     ],
 )
 def test_an_argument_inside_the_suite_is_forwarded(argv: list[str]) -> None:
@@ -111,6 +117,43 @@ def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
 
     assert run_tests.refusals(argv), (
         f"{argv} reaches an importable module or the ini that names one"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--junitxml=.claude/settings.json"],
+        ["--junit-xml", "/tmp/pwned.xml"],
+        ["--log-file=scripts/run_tests.py"],
+        ["--debug=/tmp/pwned.log"],
+        ["--report-log=/tmp/pwned.jsonl"],
+        ["--basetemp=.claude/hooks"],
+        ["--basetemp", "/tmp/victim"],
+        ["--cov-report=xml:/tmp/pwned.xml"],
+        ["--cov-report", "html:/tmp/pwned"],
+        ["--cov-report=lcov:docs/SECURITY-AI.md"],
+        ["--cov-report=annotate:.github/workflows"],
+    ],
+)
+def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
+    """These create, truncate or delete a path the target check never sees.
+
+    The target check reads only arguments that do not start with `-`, so an
+    option carrying its own path is invisible to it, and nothing requires the
+    path to be inside `tests/` or inside the repository. `--junitxml` is
+    written even when collection fails, so no test has to run; `--basetemp`
+    deletes the directory recursively before pytest uses it. Every one of
+    them reaches the `Edit` deny list in `.claude/settings.json` from a
+    command that list allows without a prompt.
+
+    `--cov-report` keeps its documented spelling, `term-missing`; only the
+    destination forms carry a `:` and a path, and those are refused whether
+    the value is attached with `=` or given as the next argument.
+    """
+
+    assert run_tests.refusals(argv), (
+        f"{argv} writes or deletes a path of its own choosing"
     )
 
 
