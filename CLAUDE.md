@@ -39,8 +39,10 @@ Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
 - **Permissions.** Read-only inspection, `ruff` and
   `python3 scripts/run_tests.py` run without asking. Bare `pytest` asks,
   because it runs whatever file it is handed; the wrapper in
-  `scripts/run_tests.py` is pytest with one rule — every target must be inside
-  `tests/`. Anything that leaves the machine or changes shared state —
+  `scripts/run_tests.py` is pytest with three rules — every target must be
+  inside `tests/`, and the options that load code or that write a path of
+  their own are refused (AGENTS.md has the list). Anything that leaves the
+  machine or changes shared state —
   `git push`, `gh pr create`, `gh pr merge`, `gh release`, editing
   `manifest.json` — asks first. Writing `pyproject.toml` and reading
   `secrets.yaml` / `.env` / `config/` are denied outright, as is editing the

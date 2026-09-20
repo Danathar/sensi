@@ -36,9 +36,15 @@ python3 scripts/check_requirements_sync.py
 
 Run the test wrapper and both `ruff` commands before proposing a change. CI
 runs exactly these, plus Home Assistant's `hassfest` and HACS validation. The
-wrapper is plain `pytest` with one rule, that every target must be inside
-`tests/`, because `.claude/settings.json` runs it without a permission prompt.
-Bare `pytest` still works and asks first.
+wrapper is `pytest` with three rules, because `.claude/settings.json` runs it
+without a permission prompt: every target must be inside `tests/`; the options
+that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are refused; and
+so are the options that write or delete a path of their own (`--junitxml`,
+`--log-file`, `--basetemp`, `--cov-config`, and `--cov-report` with a
+destination such as `xml:DEST`). `--cov-report=term-missing`, with or without
+`:skip-covered`, and a bare `--cov-report=xml` are forwarded; the report then
+lands where `.coveragerc` says. Bare `pytest` still takes everything and asks
+first.
 
 ## Rules
 

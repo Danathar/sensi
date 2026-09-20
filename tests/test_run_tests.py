@@ -37,6 +37,9 @@ _spec.loader.exec_module(run_tests)
         ["-k", "redact"],
         ["--cov=custom_components.sensi", "--cov-report=term-missing"],
         ["--cov-report", "term"],
+        ["--cov-report=term-missing:skip-covered"],
+        ["--cov-report", "term:skip-covered"],
+        ["--cov-report=xml"],
         ["-x", "tests"],
     ],
     ids=[
@@ -50,6 +53,9 @@ _spec.loader.exec_module(run_tests)
         "a keyword filter",
         "the documented coverage command",
         "a terminal coverage report given as two arguments",
+        "a terminal report with the skip-covered modifier",
+        "the skip-covered modifier given as two arguments",
+        "an xml report written where .coveragerc says",
         "stop on first failure",
     ],
 )
@@ -134,6 +140,10 @@ def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
         ["--cov-report", "html:/tmp/pwned"],
         ["--cov-report=lcov:docs/SECURITY-AI.md"],
         ["--cov-report=annotate:.github/workflows"],
+        ["--cov-report=json:/tmp/pwned.json"],
+        ["--cov-report=markdown:.claude/settings.json"],
+        ["--cov-config=/tmp/coverage.ini", "--cov-report=xml"],
+        ["--cov-config", "tests/coverage.ini"],
     ],
 )
 def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
@@ -147,9 +157,17 @@ def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
     them reaches the `Edit` deny list in `.claude/settings.json` from a
     command that list allows without a prompt.
 
-    `--cov-report` keeps its documented spelling, `term-missing`; only the
-    destination forms carry a `:` and a path, and those are refused whether
-    the value is attached with `=` or given as the next argument.
+    `--cov-report` keeps its documented spelling, `term-missing`, and the
+    `:skip-covered` modifier a terminal type can carry. A `:` after a file
+    type is a destination, and those are refused whether the value is
+    attached with `=` or given as the next argument.
+
+    `--cov-config` is refused in both spellings because the file it names is
+    where a report's destination is decided: `.coveragerc` sets `[xml]
+    output`, so a config of the caller's own can send `--cov-report=xml`
+    anywhere without a `:` appearing on the command line. The two-argument
+    case names a path inside `tests/` on purpose - the target check would
+    forward that path, so the option itself has to be the refusal.
     """
 
     assert run_tests.refusals(argv), (

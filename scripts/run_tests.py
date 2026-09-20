@@ -8,12 +8,17 @@ command line names no target, so an allow rule spelled `Bash(pytest:*)` also
 approves `pytest` with any path after it - including a path outside this
 repository, which leaves nothing in the diff for a reviewer to see.
 
-This wrapper forwards to pytest unchanged except for one rule: every target it
-is given must resolve inside `tests/`, and conftest discovery is pinned to the
-repository so nothing above it is imported either. Running agent-written code
-is still possible, because that is what a test suite is. The point is that the
-code has to be a file in the tree, where `git status` shows it and review
-reaches it.
+This wrapper forwards to pytest with three rules. Every target it is given
+must resolve inside `tests/`, and conftest discovery is pinned to the repository
+so nothing above it is imported either. The options that load code by a route
+the target check cannot see (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are
+refused. And the options that create, truncate or delete a path of their own
+(`--junitxml`, `--log-file`, `--basetemp` and the rest of `REFUSED_WRITE`,
+`--cov-config`, and the `--cov-report` destination forms such as `xml:DEST`)
+are refused too, because an option's path is not a target and does not have
+to be inside the repository. Running agent-written code is still possible,
+because that is what a test suite is. The point is that the code has to be a
+file in the tree, where `git status` shows it and review reaches it.
 """
 
 from pathlib import Path
@@ -51,11 +56,24 @@ REFUSED_WRITE = frozenset(
     {"--junitxml", "--junit-xml", "--log-file", "--debug", "--basetemp", "--report-log"}
 )
 
+# `--cov-config` names the coverage configuration file, and that file chooses
+# where every report is written - `.coveragerc` sets `[xml] output` here - so a
+# config outside the tree can point `--cov-report=xml` at any path without a
+# `:` ever appearing on the command line. It also lists `[run] plugins`, which
+# coverage imports. Refusing the option leaves the repository's own
+# `.coveragerc` in force, which is what pytest-cov reads when nothing else is
+# named.
+REFUSED_CONFIG = frozenset({"--cov-config"})
+
 # `--cov-report` is the one of these that has a legitimate spelling: AGENTS.md
-# documents `--cov-report=term-missing`. Only the destination forms write a
-# path, and they are the ones carrying a `:` - `xml:out.xml`, `html:dir`,
-# `lcov:out.info`, `annotate:dir`.
+# documents `--cov-report=term-missing`. Its value is `TYPE[:SUFFIX]`, and what
+# the suffix means depends on the type: after a terminal type it is a display
+# modifier (`term-missing:skip-covered`), after a file type it is the
+# destination (`xml:out.xml`, `html:dir`, `lcov:out.info`, `annotate:dir`,
+# `json:out.json`, `markdown:out.md`). Only the second kind writes a path, so
+# only a suffix on a type outside TERMINAL_REPORTS is refused.
 VALUED_WRITE = frozenset({"--cov-report"})
+TERMINAL_REPORTS = frozenset({"term", "term-missing"})
 
 # pytest defaults `confcutdir` to the directory holding the ini file, which is
 # ROOT here - but that is a default, and the wrapper's guarantee should not rest
@@ -82,7 +100,7 @@ def _refused_option(arg: str) -> bool:
     """
 
     name = arg.split("=", 1)[0]
-    if name in REFUSED_LONG or name in REFUSED_WRITE:
+    if name in REFUSED_LONG or name in REFUSED_WRITE or name in REFUSED_CONFIG:
         return True
     if arg.startswith("--"):
         return False
@@ -103,22 +121,25 @@ def refusals(argv: list[str]) -> list[str]:
     problems = []
     pending = ""
     for arg in argv:
-        # A `--cov-report` destination arrives either attached with `=` or as
-        # the next argument, and only the destination forms carry a `:`.
+        # A `--cov-report` value arrives either attached with `=` or as the
+        # next argument. A `:` after a file type is a destination; after a
+        # terminal type it is a display modifier and writes nothing.
         name, _, attached = arg.partition("=")
         value = attached if name in VALUED_WRITE else (arg if pending else "")
         pending = name if name in VALUED_WRITE and not attached else ""
-        if value and ":" in value:
+        kind, _, suffix = value.partition(":")
+        if suffix and kind not in TERMINAL_REPORTS:
             problems.append(f"{arg}: writes a report to a path of its own")
             continue
 
         if arg.startswith("-"):
             if _refused_option(arg):
-                why = (
-                    "creates, truncates or deletes a path of its own"
-                    if arg.partition("=")[0] in REFUSED_WRITE
-                    else "reaches code by a route the target check cannot see"
-                )
+                if name in REFUSED_WRITE:
+                    why = "creates, truncates or deletes a path of its own"
+                elif name in REFUSED_CONFIG:
+                    why = "chooses the config that names where reports are written"
+                else:
+                    why = "reaches code by a route the target check cannot see"
                 problems.append(f"{arg}: {why}")
             continue
         target = Path(arg.split("::", 1)[0])
