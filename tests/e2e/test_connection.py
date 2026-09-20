@@ -9,6 +9,7 @@ Everything here drives ``SensiClient`` through the same scripted backend the
 rest of ``tests/e2e/`` uses, rather than reaching into its private state.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -170,6 +171,58 @@ async def test_a_state_event_with_no_devices_completes_setup(
 
     assert client.get_devices() == []
     assert sensi_backend.emitted_names() == []
+
+    await sensi_backend.shutdown()
+
+
+async def test_an_empty_state_event_completes_setup_at_once(
+    client: SensiClient, sensi_backend: FakeSensiBackend, caplog
+) -> None:
+    """An account with no thermostats is an answer, and a fast one.
+
+    The backend sends `state` with an empty list. That used to be dropped
+    before the initial-state waiter was resolved, so setup sat out the full
+    PREPARE_DEVICES_TIMEOUT and then looked exactly like a backend that never
+    answered. Now it completes immediately, with a WARNING saying why there
+    are no entities.
+    """
+    sensi_backend.state_override = []
+
+    # PREPARE_DEVICES_TIMEOUT is left at its real value on purpose: the bound
+    # here is far below it, so a wait that still runs to the timeout fails
+    # the test instead of passing slowly.
+    await asyncio.wait_for(client.wait_for_devices(), timeout=2)
+
+    assert client.get_devices() == []
+    assert sensi_backend.emitted_names() == []
+    assert "account lists no thermostats" in caplog.text
+
+    await sensi_backend.shutdown()
+
+
+async def test_no_state_event_at_all_is_not_ready(
+    client: SensiClient, sensi_backend: FakeSensiBackend, caplog
+) -> None:
+    """A backend that connects and never lists the thermostats is retried.
+
+    Nothing arrives after the handshake. `wait_for_devices` used to return
+    normally here with an empty device list, so the entry loaded with no
+    entities and Home Assistant had no reason to try again. It has to raise
+    ConfigEntryNotReady so the retry-with-backoff path runs instead.
+    """
+    sensi_backend.withhold_state = True
+
+    with (
+        patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05),
+        pytest.raises(ConfigEntryNotReady, match="No state event within"),
+    ):
+        await client.wait_for_devices()
+
+    # The socket was up, so this is the failure the getters would have gone
+    # out on - and none did, because there was no device to ask about.
+    assert len(sensi_backend.connections) == 1
+    assert sensi_backend.emitted_names() == []
+    assert "Timed out waiting for event 'state'" in caplog.text
 
     await sensi_backend.shutdown()
 

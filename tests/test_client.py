@@ -755,6 +755,103 @@ class TestWaitForDevices:
         assert mock_device.identifier not in caplog.text
         assert redact_identifier(mock_device.identifier) in caplog.text
 
+    async def test_connection_lost_while_asking_for_device_info_is_not_ready(
+        self, mock_coordinator, mock_device
+    ):
+        """Losing the socket on the first getter is ConfigEntryNotReady, not a retry.
+
+        Distinct from the e2e case where the connection goes during the
+        retry: here the first attempt is the one that fails, and it must not
+        be mistaken for a timeout worth retrying on the same dead socket.
+        """
+        client = mock_coordinator.client
+        client._devices = {mock_device.identifier: mock_device}  # noqa: SLF001
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _raise(*a, **k):
+            raise SensiConnectionError("socket gone")
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_wait_for_event", new=_nop),
+            patch.object(client, "_send_event", new=_raise),
+            pytest.raises(ConfigEntryNotReady),
+        ):
+            await client.wait_for_devices()
+
+    async def test_initial_state_timeout_raises_not_ready(
+        self, mock_coordinator, monkeypatch, caplog
+    ):
+        """No initial `state` event is ConfigEntryNotReady, not a loaded entry.
+
+        The socket is up but the backend never lists the thermostats. This
+        used to return normally: the timeout was swallowed, the device dict
+        was empty, so there was nothing to retry the getters for, and setup
+        finished with no devices and nothing raised - which is why Home
+        Assistant never retried it either.
+        """
+        monkeypatch.setattr(
+            "custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.01
+        )
+
+        client = mock_coordinator.client
+        sent: list[str] = []
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _record_send(name, data, *a, **k):
+            sent.append(name)
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_send_event", new=_record_send),
+            pytest.raises(ConfigEntryNotReady, match="No state event within"),
+        ):
+            await client.wait_for_devices()
+
+        # Nothing to ask for info about, so nothing went out on the wire and
+        # the "retrying" branch - which is for a known device that stays
+        # silent - was not taken.
+        assert sent == []
+        assert client.get_devices() == []
+        assert "retrying" not in caplog.text
+
+    async def test_a_state_event_with_no_devices_completes_with_a_warning(
+        self, mock_coordinator, caplog
+    ):
+        """A backend that lists no thermostats completes setup and says so.
+
+        That is an answer, not a failure, so there is nothing to retry - but
+        the WARNING is what a default-configured log shows, and it is the
+        line that explains "my thermostats did not appear".
+        """
+        client = mock_coordinator.client
+        sent: list[str] = []
+
+        async def _nop(*a, **k):
+            return None
+
+        async def _record_send(name, data, *a, **k):
+            sent.append(name)
+
+        with (
+            patch.object(client, "_connect", new=_nop),
+            patch.object(client, "_wait_for_event", new=_nop),
+            patch.object(client, "_send_event", new=_record_send),
+        ):
+            await client.wait_for_devices()
+
+        assert sent == []
+        assert client.get_devices() == []
+        assert [
+            record.levelname
+            for record in caplog.records
+            if "account lists no thermostats" in record.getMessage()
+        ] == ["WARNING"]
+
 
 class TestSetterErrorsLeaveStateAlone:
     """A rejected setter must not update the cached device state.

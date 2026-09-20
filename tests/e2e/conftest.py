@@ -104,6 +104,9 @@ class FakeSensiSocket:
         if connect_handler:
             await connect_handler()
 
+        if self._backend.withhold_state:
+            return
+
         self._backend.schedule(self.deliver("state", self._backend.state_payload()))
 
     async def fire_disconnect(self, reason: str) -> None:
@@ -200,6 +203,12 @@ class FakeSensiBackend:
         # then never describes itself - the case wait_for_devices retries and
         # finally gives up on, from a state where the socket is already up.
         self.silent_getters = False
+
+        # Never send the initial `state` event. The connection succeeds and
+        # then nothing lists the account's thermostats - the backend that
+        # answers the handshake and no more. Distinct from `state_override`
+        # set to `[]`, which is the backend answering "no thermostats".
+        self.withhold_state = False
 
         self._tasks: set[asyncio.Task] = set()
 

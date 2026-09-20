@@ -193,7 +193,8 @@ class TestEventFutures:
         sitting in the list when the next event for that key arrives. The
         fresh waiter behind it used to time out too.
         """
-        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+        with pytest.raises(TimeoutError):
+            await client._wait_for_event("info", "icd-1", timeout=0)
 
         async def resolve_soon() -> None:
             # Let the second _wait_for_event register its future first.
@@ -271,9 +272,17 @@ class TestEventFutures:
 
         assert results[0] == {"payload": 2}
 
-    async def test_wait_for_event_times_out(self, client) -> None:
-        """A timed out wait logs and returns None instead of raising."""
-        assert await client._wait_for_event("info", "icd-1", timeout=0) is None
+    async def test_wait_for_event_times_out(self, client, caplog) -> None:
+        """A timed out wait logs and raises.
+
+        It used to return None, which is also what a resolved initial `state`
+        future yields - so wait_for_devices could not tell a backend that
+        answered from one that never did, and finished setup with no devices.
+        """
+        with pytest.raises(TimeoutError):
+            await client._wait_for_event("info", "icd-1", timeout=0)
+
+        assert "Timed out waiting for event 'info'" in caplog.text
 
 
 class TestOnEvent:
@@ -323,16 +332,28 @@ class TestUpdateState:
     """Test cases for the _update_state handler."""
 
     @pytest.mark.parametrize("data", [None, []])
-    async def test_empty_payload_is_ignored(self, client, data) -> None:
-        """An empty state event neither creates devices nor resolves futures."""
-        future = await client._create_event_future("state", None)
+    async def test_empty_payload_answers_the_initial_wait_only(
+        self, client, data
+    ) -> None:
+        """An empty state event creates no device but is still the answer.
+
+        The initial-state waiter resolves, so an account with no thermostats
+        finishes setup at once instead of waiting out PREPARE_DEVICES_TIMEOUT
+        and then looking exactly like a backend that never sent `state`. The
+        per-device waiters a refresh creates stay pending: nothing in the
+        payload updated them.
+        """
+        initial = await client._create_event_future("state", None)
+        per_device = await client._create_event_future("state", ICD_ID)
 
         client._update_state(data)
 
         assert client.get_devices() == []
-        assert not future.done()
+        assert initial.done()
+        assert await initial is None
+        assert not per_device.done()
 
-        future.cancel()
+        per_device.cancel()
 
     async def test_creates_device_and_resolves_futures(self, client, mock_json) -> None:
         """A first state event creates the device and resolves both futures."""
