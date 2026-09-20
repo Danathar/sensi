@@ -36,8 +36,12 @@ Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
 
 `.claude/settings.json` is checked in. It does two things:
 
-- **Permissions.** Read-only inspection, `ruff` and
-  `python3 scripts/run_tests.py` run without asking. Bare `pytest` asks,
+- **Permissions.** Read-only inspection, `ruff check .`,
+  `ruff format --check .` and `python3 scripts/run_tests.py` run without
+  asking. `ruff format .` asks, because it rewrites every file `ruff.toml`
+  reaches - the protected hook and wrapper included - and `ruff.toml` is not
+  protected; the PostToolUse hook below formats what you edit anyway. Bare
+  `pytest` asks,
   because it runs whatever file it is handed; the wrapper in
   `scripts/run_tests.py` is pytest with three rules — every target must be
   inside `tests/`, and the options that load code or that write a path of

@@ -29,13 +29,18 @@ python3 scripts/run_tests.py tests/e2e # end-to-end only
 python3 scripts/run_tests.py --cov=custom_components.sensi --cov-report=term-missing
 
 ruff check .                           # lint  (config: ruff.toml)
-ruff format .                          # format
+ruff format --check .                  # format (ruff format . rewrites, and asks)
 
 python3 scripts/check_requirements_sync.py
 ```
 
 Run the test wrapper and both `ruff` commands before proposing a change. CI
-runs exactly these, plus Home Assistant's `hassfest` and HACS validation. The
+runs exactly these, plus Home Assistant's `hassfest` and HACS validation. Only
+the check forms run without a prompt. `ruff format .` rewrites every Python
+file `ruff.toml` reaches, including the hook and the test wrapper the deny
+rules protect, and `ruff.toml` itself is an ordinary editable file - so the
+write form asks first. You should rarely need it: the PostToolUse hook formats
+each `.py` file as you edit it. The
 wrapper is `pytest` with three rules, because `.claude/settings.json` runs it
 without a permission prompt: every target must be inside `tests/`; the options
 that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are refused; and

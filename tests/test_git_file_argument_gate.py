@@ -262,3 +262,39 @@ def test_the_allow_list_still_carries_the_commands_the_gate_covers() -> None:
     allowed = set(settings["permissions"]["allow"])
     for rule in ("Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)"):
         assert rule in allowed, f"{rule} left the allow list; is the gate still needed?"
+
+
+def test_ruff_is_allowed_only_as_the_exact_documented_commands() -> None:
+    """No `ruff` allow rule may take arguments (#210).
+
+    `ruff check --output-file=PATH` creates or truncates PATH, `ruff format
+    PATH` and `ruff check --fix PATH` rewrite it in place, and the deny rules
+    bind `Edit`, not a shell command. The gate above covers git only, and no
+    prefix rule can cover ruff: `--output-file` and `--fix` may sit anywhere
+    in the argument list. So the allow list names whole commands, exactly the
+    ones AGENTS.md documents, and anything else asks.
+
+    `ruff format .` is not one of them, even though it takes no argument.
+    It rewrites every Python file `ruff.toml` reaches, and `ruff.toml` is an
+    ordinary editable file: set `line-length = 50` there and the formatter
+    rewrites `.claude/hooks/gate-git-file-arguments.py` and
+    `scripts/run_tests.py`, both on the `Edit` deny list. Only the check
+    forms may run without a prompt.
+    """
+
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    allowed = settings["permissions"]["allow"]
+    ruff_rules = [rule for rule in allowed if rule.startswith("Bash(ruff")]
+
+    assert ruff_rules, (
+        "ruff left the allow list; AGENTS.md says it runs without a prompt"
+    )
+    for rule in ruff_rules:
+        assert not rule.endswith(":*)"), (
+            f"{rule} is a prefix rule; it lets ruff write any path (#210)"
+        )
+    assert set(ruff_rules) == {"Bash(ruff check .)", "Bash(ruff format --check .)"}
+    assert "Bash(ruff format .)" not in allowed, (
+        "ruff format . rewrites the protected hook and wrapper once ruff.toml "
+        "changes, so it must ask"
+    )
