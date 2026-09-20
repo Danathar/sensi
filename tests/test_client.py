@@ -323,6 +323,37 @@ class TestSetTemperature:
 
     @pytest.mark.parametrize(
         "ack",
+        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 71}],
+        ids=["empty_dict", "accepted_string", "three_key_dict"],
+    )
+    async def test_an_aux_setpoint_is_recorded_as_the_heat_setpoint(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """A setpoint accepted while in AUX lands on current_heat_temp.
+
+        AUX is forced heating. The climate entity passes AUX through to the
+        wire unchanged, and that used to match neither branch of
+        `_apply_target_temperature`, so an accepted ack updated nothing.
+        """
+        mock_device.state.operating_mode = OperatingMode.AUX
+        previous_cool_temp = mock_device.state.current_cool_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.AUX, 71
+            )
+
+        assert response.error is None
+        assert mock_device.state.current_heat_temp == 71
+        assert mock_device.state.current_cool_temp == previous_cool_temp
+        assert mock_device.state.operating_mode == OperatingMode.AUX
+
+    @pytest.mark.parametrize(
+        "ack",
         [
             {"current_temp": 70, "mode": "heat"},
             {"current_temp": 70, "mode": "heat", "target_temp": 75, "extra": 1},
@@ -353,6 +384,61 @@ class TestSetTemperature:
         assert response.error is not None
         assert "Failed to parse" in response.error
         # Nothing was applied, because nothing was understood.
+        assert mock_device.state.current_heat_temp == previous_heat_temp
+
+    @pytest.mark.parametrize(
+        ("ack_args", "expected_error"),
+        [
+            (({"error": {}},), "Unknown error"),
+            (({"error": {"code": 403}},), "Unknown error"),
+            (("Forbidden", None), "Forbidden"),
+            (({"error": "Forbidden"},), "Forbidden"),
+            (([{"error": "Forbidden"}], None), "Unknown error"),
+        ],
+        ids=[
+            "empty_error_object",
+            "error_object_without_description",
+            "string_error_two_arg_ack",
+            "string_error_object",
+            "list_error_two_arg_ack",
+        ],
+    )
+    async def test_an_unreadable_error_ack_is_an_error_not_a_write(
+        self, mock_device, mock_coordinator, ack_args, expected_error
+    ) -> None:
+        """An error ack we cannot read a message out of is still a refusal.
+
+        The ack parser used to read exactly one error shape,
+        `{"error": {"description": ...}}`. An error object with no
+        description came back as an empty-string error, which every setter
+        reads as "accepted" and writes the requested value into the local
+        state; a string error raised AttributeError out of the service call
+        instead of the "Unable to set ..." HomeAssistantError (#216).
+
+        This drives the real `_async_emit_setter` callback with `_send_event`
+        faked, so the ack shapes reach the parser as the socket would deliver
+        them. The recovery steps are stubbed because a `Forbidden` refusal is
+        retried once on a fresh socket.
+        """
+        client = mock_coordinator.client
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        async def fake_send_event(name, data, callback=None, future=None):
+            callback(*ack_args)
+
+        with (
+            patch.object(client, "_send_event", new=fake_send_event),
+            patch.object(client, "try_refresh_access_token"),
+            patch.object(client, "_async_disconnect"),
+            patch.object(client, "_connect"),
+        ):
+            response = await client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, previous_heat_temp + 4
+            )
+
+        assert response.error == expected_error
+        assert response.data is None
+        # The refusal reached the caller, so nothing was applied.
         assert mock_device.state.current_heat_temp == previous_heat_temp
 
     async def test_a_cool_setpoint_is_applied_on_a_detail_free_ack(

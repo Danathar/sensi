@@ -17,7 +17,13 @@ from homeassistant.util.enum import try_parse_enum
 
 from .auth import AuthenticationError, SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
-from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice
+from .data import (
+    AuthenticationConfig,
+    FanMode,
+    OperatingMode,
+    SensiDevice,
+    get_setpoint_mode,
+)
 from .event import (
     BoolEventData,
     NumberEventData,
@@ -54,6 +60,12 @@ DISCONNECT_TIMEOUT = 10
 # it is safe. Everything else is a real rejection and must stay fail-fast:
 # retrying an out-of-range temperature would just fail twice, more slowly.
 RETRYABLE_SETTER_ERRORS = frozenset({"Forbidden"})
+
+# What a refused setter reports when the ack carries an error we cannot read a
+# message out of. The protocol is undocumented, so the error's shape is not
+# ours to rely on; what we can rely on is that the backend put an error in the
+# ack at all, and that must never be reported as an accepted write.
+UNKNOWN_SETTER_ERROR = "Unknown error"
 
 
 @dataclass
@@ -349,6 +361,11 @@ class SensiClient:
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
+        # AUX runs the heat setpoint, so an ack for it lands there too. The
+        # request itself still carries "aux" - the wire mode is left as it
+        # always was - so this is the one place the mapping has to happen,
+        # or an accepted AUX setpoint is recorded against nothing.
+        mode = get_setpoint_mode(mode)
         if mode == OperatingMode.HEAT:
             state.current_heat_temp = target_temp
         if mode == OperatingMode.COOL:
@@ -670,8 +687,14 @@ class SensiClient:
         (response_error, response_data) = future.result()
 
         if response_error:
+            # A truthy error is a refusal whatever its shape. The description
+            # getter already falls back to UNKNOWN_SETTER_ERROR, but the two
+            # are kept from drifting apart here: an empty description must not
+            # turn a refusal into an accepted write.
             return ActionResponse(
-                get_error_description_from_event_callback(response_error), None
+                get_error_description_from_event_callback(response_error)
+                or UNKNOWN_SETTER_ERROR,
+                None,
             )
 
         return ActionResponse(None, response_data or {})
@@ -1080,15 +1103,40 @@ class SensiClient:
                 self._resolve_futures("capabilities", icd_id, data)
 
 
-def get_error_description_from_event_callback(error: dict) -> str:
-    """Get error description from the event response error."""
+def get_error_description_from_event_callback(error: dict | str | None) -> str:
+    """Get error description from the event response error.
+
+    Returns "" only when there is no error. A truthy error whose message
+    cannot be read yields UNKNOWN_SETTER_ERROR, never "": the caller treats a
+    falsy description as an accepted write, and the shapes below are the
+    only ones observed, not the only ones the backend can send.
+    """
     if not error:
         return ""
+
+    # A two-argument socket.io ack can carry the error as a bare string.
+    if isinstance(error, str):
+        return error
+
+    if not isinstance(error, dict):
+        return UNKNOWN_SETTER_ERROR
 
     # {'error': {'description': 'InvalidScale'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
     # {'error': {'description': 'Bad Request'}, 'icd_id': 'aa-bb-cc-dd-ee-ff-00-02'}
     # {'error': {'description': 'Forbidden'}}
-    return error.get("error", {}).get("description", "")
+    details = error.get("error")
+    if isinstance(details, str):
+        return details or UNKNOWN_SETTER_ERROR
+
+    if isinstance(details, dict):
+        for key in ("description", "message"):
+            description = details.get(key)
+            if isinstance(description, str) and description:
+                return description
+
+    # Not str(error): the payload can carry the thermostat's icd_id, and this
+    # string ends up in the HomeAssistantError shown to the user and logged.
+    return UNKNOWN_SETTER_ERROR
 
 
 def is_token_expired(error_details):
