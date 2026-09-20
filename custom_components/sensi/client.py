@@ -582,6 +582,16 @@ class SensiClient:
         nothing to tear down, and the tick's handshake completed into a
         socket nothing referenced - connected, pushing state events into
         this instance, and never shut down until Home Assistant restarted.
+
+        The retry is emitted under the same lock. A tick that arrived during
+        the recovery is next in line for it, and it would otherwise run its
+        disconnect the moment the recovery let go - before the emit loop has
+        picked the retry up, or after it was sent but before its ack came
+        back. Either way the retry is lost: the socket it was bound for is
+        gone, its SET_EVENT_TIMEOUT keeps running through the tick's
+        reconnect, and the emit loop discards a timed-out command rather than
+        replay it. Holding the lock until the ack is in means the tick waits
+        for the retry, which is bounded by that same timeout.
         """
 
         epoch = self._recovery_epoch
@@ -590,44 +600,44 @@ class SensiClient:
         if response.error not in RETRYABLE_SETTER_ERRORS:
             return response
 
-        try:
-            async with self._reconnect_lock:
+        async with self._reconnect_lock:
+            try:
                 if self._recovery_epoch == epoch:
                     await self.try_refresh_access_token()
                     await self._async_disconnect()
                     await self._connect()
                     self._recovery_epoch += 1
-        except AuthenticationError as err:
-            # A refresh token the backend has rejected outright is not this
-            # transient case. No coordinator is on a service call's path to
-            # translate this into ConfigEntryAuthFailed - its handler only
-            # wraps async_update_devices - so start the reauth flow here,
-            # where the failure is known, and fail the service call with the
-            # error type the entity layer is built to surface. Left alone, a
-            # bare AuthenticationError is an unhandled traceback for the user
-            # and the reauth prompt waits until the access token dies of old
-            # age, up to 4 hours later.
-            if self._config_entry is not None:
-                self._config_entry.async_start_reauth(self._hass)
-            raise HomeAssistantError(
-                f"Setter {event} was refused with '{response.error}' and the "
-                "stored credential could not be refreshed; Sensi needs to be "
-                "re-authenticated with a new refresh token"
-            ) from err
-        except SensiConnectionError:
-            # The recovery itself failed. Report the refusal the caller was
-            # already going to get rather than replacing it with a connection
-            # error about machinery they did not ask for - the setter still
-            # did not happen, and that is what the message should say.
-            LOGGER.warning(
-                "Setter %s was refused with '%s'; could not reconnect to retry",
-                event,
-                response.error,
-                exc_info=True,
-            )
-            return response
+            except AuthenticationError as err:
+                # A refresh token the backend has rejected outright is not this
+                # transient case. No coordinator is on a service call's path to
+                # translate this into ConfigEntryAuthFailed - its handler only
+                # wraps async_update_devices - so start the reauth flow here,
+                # where the failure is known, and fail the service call with the
+                # error type the entity layer is built to surface. Left alone, a
+                # bare AuthenticationError is an unhandled traceback for the user
+                # and the reauth prompt waits until the access token dies of old
+                # age, up to 4 hours later.
+                if self._config_entry is not None:
+                    self._config_entry.async_start_reauth(self._hass)
+                raise HomeAssistantError(
+                    f"Setter {event} was refused with '{response.error}' and the "
+                    "stored credential could not be refreshed; Sensi needs to be "
+                    "re-authenticated with a new refresh token"
+                ) from err
+            except SensiConnectionError:
+                # The recovery itself failed. Report the refusal the caller was
+                # already going to get rather than replacing it with a connection
+                # error about machinery they did not ask for - the setter still
+                # did not happen, and that is what the message should say.
+                LOGGER.warning(
+                    "Setter %s was refused with '%s'; could not reconnect to retry",
+                    event,
+                    response.error,
+                    exc_info=True,
+                )
+                return response
 
-        retry_response = await self._async_emit_setter(event, request_data)
+            retry_response = await self._async_emit_setter(event, request_data)
 
         # One WARNING carrying both attempts. A recurrence has to be visible
         # in a default-configured log: the first attempt failing is the whole
