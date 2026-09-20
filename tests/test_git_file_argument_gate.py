@@ -110,6 +110,10 @@ def test_the_hook_is_executable_with_a_python_shebang() -> None:
         ">out cat f | git diff --stat",
         "git status 2>&1; git diff HEAD",
         'git commit -m "x > y"',
+        'git commit -m "a; b" | cat',
+        "git diff -- 'a;b'",
+        'echo "x)" ; git diff HEAD',
+        "{fd}>out echo x; git diff HEAD",
         "2>&1 git diff HEAD",
         ">&2 git diff HEAD",
         # A tilde that does not lead the word, or that bash leaves alone.
@@ -376,6 +380,16 @@ def test_git_really_prints_the_file_beside_a_process_substitution(
         ("git status >.claude/settings.json", ">.claude/settings.json"),
         ("git branch > out", ">out"),
         ("git add -n . 2>err", "2>err"),
+        # A quoted or escaped separator is a word of the git command, not
+        # the end of it: bash hands git the literal `;` and opens the target
+        # first (review on #239).
+        ("git diff ';' >.claude/settings.json", ">.claude/settings.json"),
+        ("git diff '|' >out", ">out"),
+        (r"git diff \; >out", ">out"),
+        ('git diff "a;b" >out', ">out"),
+        # Bash's `{name}>` allocates a descriptor into a variable.
+        ("git status; {fd}>out git diff HEAD", "{fd}>out"),
+        ("git diff HEAD {fd}>out", "{fd}>out"),
     ],
 )
 def test_an_output_redirection_on_a_gated_git_is_refused(
@@ -477,6 +491,35 @@ def test_git_really_reads_a_home_file_named_with_a_tilde(tmp_path: Path) -> None
         assert completed.returncode == 2, (
             f"the command just shown to read a home file was not blocked with HOME={env_home}"
         )
+
+
+def test_bash_really_truncates_behind_a_quoted_separator(tmp_path: Path) -> None:
+    """The reach the quote-aware split exists for, run for real.
+
+    `git diff ';' >victim` hands git a literal `;` and fails, but bash has
+    opened `victim` for writing first; a split that read the `;` as a
+    separator put the redirection in a segment with no git in it.
+    """
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    victim = tmp_path / "victim"
+    victim.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", "git diff ';' >victim"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "ORIGINAL-CONTENT" not in victim.read_text(encoding="utf-8"), (
+        "bash no longer truncates the target of a redirection on a command "
+        "carrying a quoted separator; re-derive why the split masks quotes"
+    )
+    completed = _run(_payload("git diff ';' >victim"))
+    assert completed.returncode == 2, (
+        "the command just shown to truncate was not blocked"
+    )
 
 
 @pytest.mark.parametrize(
