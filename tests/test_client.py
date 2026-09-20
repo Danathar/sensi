@@ -331,9 +331,9 @@ class TestSetTemperature:
     ) -> None:
         """A setpoint accepted while in AUX lands on current_heat_temp.
 
-        AUX is forced heating. The climate entity already sends HEAT for it,
-        but a caller passing AUX straight through used to match neither
-        branch of `_apply_target_temperature`, so the ack updated nothing.
+        AUX is forced heating. The climate entity passes AUX through to the
+        wire unchanged, and that used to match neither branch of
+        `_apply_target_temperature`, so an accepted ack updated nothing.
         """
         mock_device.state.operating_mode = OperatingMode.AUX
         previous_cool_temp = mock_device.state.current_cool_temp

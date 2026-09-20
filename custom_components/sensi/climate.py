@@ -476,10 +476,16 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             raise_if_error(response, "Cool setpoint", temperature_high)
         else:
             temperature = kwargs.get(ATTR_TEMPERATURE)
-            # In AUX the thermostat runs the heat setpoint, so that is the
-            # one to send; "aux" is not a setpoint the backend knows.
+            # The operating mode goes out as-is, AUX included. That is what
+            # this integration has always sent, and the AUX symptom was a
+            # setpoint that snapped back until the next refresh - the shape
+            # of an ack the backend accepted and this side failed to record,
+            # not of a request it refused. Without a capture from a
+            # thermostat that has AUX there is no ground to change the
+            # payload on; the client maps the accepted AUX setpoint onto the
+            # heat setpoint locally.
             response = await self.coordinator.client.async_set_temperature(
-                self._device, get_setpoint_mode(state.operating_mode), temperature
+                self._device, state.operating_mode, temperature
             )
 
             raise_if_error(response, "temperature", temperature)

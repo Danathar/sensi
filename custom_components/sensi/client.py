@@ -341,9 +341,10 @@ class SensiClient:
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
-        # AUX runs the heat setpoint, so an ack for it lands there too; the
-        # climate entity already sends HEAT, this keeps any other caller
-        # from recording an accepted setpoint against nothing.
+        # AUX runs the heat setpoint, so an ack for it lands there too. The
+        # request itself still carries "aux" - the wire mode is left as it
+        # always was - so this is the one place the mapping has to happen,
+        # or an accepted AUX setpoint is recorded against nothing.
         mode = get_setpoint_mode(mode)
         if mode == OperatingMode.HEAT:
             state.current_heat_temp = target_temp
