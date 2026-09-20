@@ -83,11 +83,14 @@ class FakeSensiSocket:
     # -- connection ------------------------------------------------------
 
     async def connect(self, url: str, **kwargs: Any) -> None:
-        """Accept the connection and queue the initial ``state`` event.
+        """Accept the connection and deliver the initial ``state`` event.
 
-        The initial state is delivered as a task rather than inline because
-        ``SensiClient`` only creates the future it waits on *after*
-        ``connect()`` returns.
+        By default the initial state is queued as a task, so it lands after
+        ``connect()`` has returned. The real library can also deliver it
+        before: its read loop dispatches events while ``connect()`` is still
+        waiting to be woken, so a ``state`` packet right behind the namespace
+        handshake reaches the integration first. ``state_before_connect_returns``
+        on the backend scripts that ordering.
         """
         failure = self._backend.next_connect_failure()
         if failure is not None:
@@ -103,6 +106,13 @@ class FakeSensiSocket:
         connect_handler = self._handlers.get("connect")
         if connect_handler:
             await connect_handler()
+
+        if self._backend.withhold_state:
+            return
+
+        if self._backend.state_before_connect_returns:
+            await self.deliver("state", self._backend.state_payload())
+            return
 
         self._backend.schedule(self.deliver("state", self._backend.state_payload()))
 
@@ -200,6 +210,18 @@ class FakeSensiBackend:
         # then never describes itself - the case wait_for_devices retries and
         # finally gives up on, from a state where the socket is already up.
         self.silent_getters = False
+
+        # Never send the initial `state` event. The connection succeeds and
+        # then nothing lists the account's thermostats - the backend that
+        # answers the handshake and no more. Distinct from `state_override`
+        # set to `[]`, which is the backend answering "no thermostats".
+        self.withhold_state = False
+
+        # Deliver the initial `state` event inside `connect()`, before it
+        # returns, as the real library can when the packet is right behind
+        # the namespace handshake. The integration must have its waiter
+        # registered by then.
+        self.state_before_connect_returns = False
 
         self._tasks: set[asyncio.Task] = set()
 

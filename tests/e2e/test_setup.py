@@ -202,6 +202,91 @@ async def test_setup_retries_when_the_backend_is_unreachable(
     await sensi_backend.shutdown()
 
 
+async def test_a_missing_initial_state_event_retries_instead_of_loading_empty(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """A socket that connects but never lists the thermostats must retry.
+
+    This used to end in ``ConfigEntryState.LOADED`` with no devices and no
+    entities: the initial-state timeout was swallowed, the platforms were set
+    up over an empty device list, and nothing was raised - so Home Assistant
+    saw a healthy entry and never tried again. The user had to notice the
+    thermostats were missing and reload by hand.
+
+    The socket was up when setup failed, so the teardown that a failed setup
+    owes is checked here too.
+    """
+    sensi_backend.withhold_state = True
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entities = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    assert entry.state is ConfigEntryState.SETUP_RETRY, (
+        f"{entry.state} with {len(entities)} entities"
+    )
+    assert entities == []
+    assert "No state event within" in str(entry.reason)
+
+    assert len(sensi_backend.sockets) == 1
+    assert not sensi_backend.sockets[0].connected
+
+    await sensi_backend.shutdown()
+
+
+async def test_a_state_event_delivered_before_connect_returns_still_loads(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """A ``state`` event that lands inside ``connect()`` is not a missing one.
+
+    The real library dispatches events from its read loop while ``connect()``
+    is still waiting to be woken, so the first ``state`` can reach the client
+    before ``connect()`` returns. With the waiter created only afterwards,
+    that event resolved nothing, the wait timed out, and setup reported "No
+    state event" for a backend that had answered at once - the retry-with-
+    backoff that a silent backend deserves, taken on a healthy one. The
+    waiter is registered before connecting now; the entry loads with its
+    entities, without waiting out the timeout.
+    """
+    sensi_backend.state_before_connect_returns = True
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+
+    # Long enough for the emit loop to carry the getters (EMIT_LOOP_DELAY is
+    # 0.5 s); short enough that a regression - waiting out the initial
+    # state - fails in seconds rather than PREPARE_DEVICES_TIMEOUT.
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 2):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entities = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    assert entry.state is ConfigEntryState.LOADED, str(entry.reason)
+    assert entities
+
+    await sensi_backend.shutdown()
+
+
 async def test_temperature_offset_is_not_converted_on_a_metric_instance(
     hass: HomeAssistant,
     sensi_backend: FakeSensiBackend,

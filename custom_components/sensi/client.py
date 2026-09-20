@@ -141,9 +141,6 @@ class SensiClient:
         async def _wait_for_device_info() -> None:
             """Wait for info and capabilities getter events."""
 
-            if not self._devices:
-                return
-
             tasks = []
             task_icd_ids: dict[asyncio.Future, str] = {}
             for icd_id in self._devices:
@@ -179,16 +176,58 @@ class SensiClient:
                     f"No devices responded within {PREPARE_DEVICES_TIMEOUT} seconds"
                 )
 
-        async def _wait_for_state_and_device_info() -> None:
-            """Wait for the initial `state` event so that we can iterate and issue info and capabilities getter events."""
-
-            await self._wait_for_event("state", None, PREPARE_DEVICES_TIMEOUT)
-            LOGGER.info(f"{len(self._devices)} devices found")
-            await _wait_for_device_info()
-
+        # The initial `state` event is what lists the account's thermostats;
+        # until it arrives there is no device to ask for info or capabilities.
+        #
+        # The waiter is registered before connecting. socketio dispatches
+        # events from its read loop, and connect() returns only after that
+        # loop has woken it through an Event - so a `state` packet right
+        # behind the namespace handshake reaches _update_state before this
+        # coroutine gets control back. A future created after connect()
+        # returned would then only ever time out, and a backend that answered
+        # promptly would be reported as one that never answered.
+        state_future = await self._create_event_future("state", None)
         try:
             await self._connect()
-            await _wait_for_state_and_device_info()
+            await self._wait_for_event(
+                "state", None, PREPARE_DEVICES_TIMEOUT, future=state_future
+            )
+        except SensiConnectionError as err:
+            raise ConfigEntryNotReady from err
+        except TimeoutError as err:
+            # Not the "retrying" branch below: that retry re-sends the getters
+            # for the devices already known, and with no `state` event there
+            # are none. Carrying on from here used to finish setup with an
+            # empty device list - the entry showed as loaded with no entities,
+            # and Home Assistant never retried because nothing was raised.
+            # ConfigEntryNotReady makes it retry with backoff on a fresh
+            # connection instead.
+            raise ConfigEntryNotReady(
+                f"No state event within {PREPARE_DEVICES_TIMEOUT} seconds"
+            ) from err
+        finally:
+            # Already done when the event arrived, already cancelled by
+            # wait_for on a timeout; this is for a connect that raised, so
+            # the waiter is not left pending for the next state event.
+            state_future.cancel()
+
+        if not self._devices:
+            # The backend answered, and the answer is that there is nothing
+            # here. That is a fact about the account rather than a failure, so
+            # setup completes - but a WARNING is what a default-configured log
+            # shows, and "my thermostats did not appear" is the report this
+            # line has to explain.
+            LOGGER.warning(
+                "Connected to Sensi but the account lists no thermostats; no "
+                "entities will be created. Reload the integration once a "
+                "thermostat is registered to the account"
+            )
+            return
+
+        LOGGER.info(f"{len(self._devices)} devices found")
+
+        try:
+            await _wait_for_device_info()
         except SensiConnectionError as err:
             raise ConfigEntryNotReady from err
         except TimeoutError:
@@ -700,11 +739,27 @@ class SensiClient:
         return ActionResponse(None, response_data or {})
 
     async def _wait_for_event(
-        self, event: str, icd_id: str | None, timeout: int = 5
-    ) -> None:
-        """Wait for an event response."""
+        self,
+        event: str,
+        icd_id: str | None,
+        timeout: int = 5,
+        future: asyncio.Future | None = None,
+    ) -> any:
+        """Wait for an event response and return its payload.
 
-        future = await self._create_event_future(event, icd_id)
+        Raises TimeoutError if the event does not arrive in time. It used to
+        return None instead, but None is also what the initial `state` future
+        resolves to, so a caller could not tell "arrived" from "never came" -
+        and wait_for_devices did not try, which is how a backend that never
+        sent `state` produced a loaded entry with no devices.
+
+        `future` is a waiter the caller registered earlier with
+        _create_event_future, for an event that may already be in flight by
+        the time this is called; when it is not given one is created here.
+        """
+
+        if future is None:
+            future = await self._create_event_future(event, icd_id)
 
         try:
             return await asyncio.wait_for(future, timeout)
@@ -716,6 +771,7 @@ class SensiClient:
                 f"Timed out waiting for event '{event}' on device "
                 f"{redact_identifier(icd_id)}"
             )
+            raise
 
     async def _create_event_future(
         self, event: str, icd_id: str | None
@@ -1034,7 +1090,13 @@ class SensiClient:
 
     def _update_state(self, data):
         """Handle state event from socketio."""
-        if not data or len(data) == 0:
+        if not data:
+            # An empty `state` event is still the backend's answer: this
+            # account has no thermostats. Resolve the initial-state waiter so
+            # that account finishes setup at once, rather than waiting out
+            # PREPARE_DEVICES_TIMEOUT and then looking exactly like a backend
+            # that never answered at all.
+            self._resolve_futures("state", None, None)
             return
 
         futures_to_resolve = []
