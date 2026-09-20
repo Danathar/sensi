@@ -112,10 +112,12 @@ def summarise(pulls: list[dict], since: str | None) -> dict:
         merged = [p for p in group if p.get("mergedAt")]
         rejected = [p for p in group if not p.get("mergedAt")]
 
+        # `is not None`, not truthiness: a pull merged in the same second it
+        # was opened has an age of 0.0, and that zero belongs in the numbers.
         ages = [
             hours
             for p in merged
-            if (hours := hours_between(p["createdAt"], p["mergedAt"]))
+            if (hours := hours_between(p["createdAt"], p["mergedAt"])) is not None
         ]
         reviews = [len(p.get("reviews") or []) for p in merged]
         churn = [p.get("additions", 0) + p.get("deletions", 0) for p in merged]
