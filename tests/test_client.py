@@ -9,7 +9,7 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import ActionResponse, round_humidity
-from custom_components.sensi.data import FanMode, OperatingMode
+from custom_components.sensi.data import FanMode, OperatingMode, State
 from custom_components.sensi.event import (
     SetCirculatingFanEvent,
     SetCirculatingFanEventValue,
@@ -458,6 +458,47 @@ class TestSetTemperature:
 
         assert mock_device.state.current_cool_temp == 79
         assert mock_device.state.current_heat_temp == previous_heat_temp
+
+    @pytest.mark.parametrize(
+        "ack",
+        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 72}],
+        ids=["empty_dict", "accepted_string", "detailed"],
+    )
+    async def test_setpoint_survives_a_state_refresh_during_the_setter(
+        self, mock_device, mock_coordinator, mock_json, ack
+    ) -> None:
+        """The accepted setpoint lands on the State the device holds now.
+
+        update_state replaces device.state with a new State on every state
+        event, and one arrives during the setter's await whenever its
+        Forbidden recovery reconnects (every connect delivers a state event)
+        or the coordinator's refresh runs. Writing the accepted value into
+        the State captured before the await put it on an object nothing
+        referenced any more: the entity kept showing the old setpoint until
+        a later state event happened to carry the new one.
+        """
+        before = mock_device.state.current_heat_temp
+        stale_state = mock_device.state
+
+        async def invoke_with_state_refresh(event, request_data):
+            # What a reconnect's state event does to the device mid-setter.
+            mock_device.state = State(mock_json["state"])
+            return ActionResponse(None, ack)
+
+        with patch.object(
+            mock_coordinator.client,
+            "_async_invoke_setter",
+            new=invoke_with_state_refresh,
+        ):
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, before + 4
+            )
+
+        assert response.error is None
+        assert mock_device.state is not stale_state
+        assert mock_device.state.current_heat_temp == before + 4
+        if isinstance(ack, dict) and ack:
+            assert mock_device.state.display_temp == ack["current_temp"]
 
     async def test_set_temperature_OFF_state(
         self, mock_device, mock_coordinator
