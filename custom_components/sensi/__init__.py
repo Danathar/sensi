@@ -7,11 +7,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.typing import StateType
 
-from .auth import AuthenticationError, SensiConnectionError, get_stored_config
+from .auth import (
+    AuthenticationError,
+    SensiConnectionError,
+    get_stored_config,
+    is_user_id,
+)
 from .client import SensiClient
-from .const import LOGGER
+from .const import LOGGER, SENSI_DOMAIN
 from .coordinator import SensiConfigEntry, SensiUpdateCoordinator
-from .data import SensiDevice
+from .data import AuthenticationConfig, SensiDevice
 
 SUPPORTED_PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -31,8 +36,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
     try:
         # The entry's unique_id is the Sensi user_id the entry was set up
         # with. Passing it lets get_stored_config refuse a store that belongs
-        # to a different account rather than connecting as the wrong one.
+        # to a different account rather than connecting as the wrong one. An
+        # entry from an older upstream is not keyed that way yet; it is keyed
+        # here, from the store, as soon as the store has loaded.
         config = await get_stored_config(hass, entry.unique_id)
+        _adopt_stored_user_id(hass, entry, config)
         # The entry lets the client start a reauth flow itself when a setter's
         # recovery discovers the refresh token is dead - a service call has no
         # coordinator on its path to do that translation.
@@ -88,6 +96,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
                 )
 
     return True
+
+
+def _adopt_stored_user_id(
+    hass: HomeAssistant, entry: SensiConfigEntry, config: AuthenticationConfig
+) -> None:
+    """Key an entry that upstream left without a user_id by the store's.
+
+    Entries created by upstream v1.0.0 to v1.4.1 carry the login username or
+    no unique_id at all (see `is_user_id`). Every token refresh writes the
+    account's user_id into the store, so once such an entry has loaded the
+    store is the one place its user_id is known. Writing it into the entry
+    here is what lets the account guard in `get_stored_config` and the reauth
+    flow's wrong_account check apply to that entry from then on, instead of
+    refusing it forever - which is what they did before, and the only way out
+    of that was to remove the integration and add it again.
+
+    The store belongs to this entry: `single_config_entry` means there is no
+    other entry it could have been written for. The one case left is an
+    install that predates that flag and has two entries; if another entry
+    already holds this user_id, leave this one as it is and say so, rather
+    than hand Home Assistant a duplicate unique_id.
+    """
+    if is_user_id(entry.unique_id) or not config.user_id:
+        return
+
+    holder = hass.config_entries.async_entry_for_domain_unique_id(
+        SENSI_DOMAIN, config.user_id
+    )
+    if holder is not None and holder.entry_id != entry.entry_id:
+        LOGGER.warning(
+            "Not re-keying this entry by the stored Sensi user_id: another "
+            "entry already uses it"
+        )
+        return
+
+    LOGGER.info(
+        "Keying this entry by the Sensi user_id found in the stored credentials; "
+        "it was set up by a version that keyed it by login or not at all"
+    )
+    hass.config_entries.async_update_entry(entry, unique_id=config.user_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SensiConfigEntry) -> bool:
