@@ -17,7 +17,7 @@ from homeassistant.util.enum import try_parse_enum
 
 from .auth import AuthenticationError, SensiConnectionError, refresh_access_token
 from .const import LOGGER, SENSI_DOMAIN
-from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice, State
+from .data import AuthenticationConfig, FanMode, OperatingMode, SensiDevice
 from .event import (
     BoolEventData,
     NumberEventData,
@@ -263,6 +263,14 @@ class SensiClient:
     ) -> ActionResponse:
         """Set the target temperature. This updates the device on success."""
 
+        # This State is only good for building the request. update_state
+        # replaces device.state with a new object on every state event, and a
+        # state event lands during the await below whenever the setter's
+        # Forbidden recovery reconnects (every connect delivers one) or the
+        # coordinator's refresh happens to run - so once the ack is in, the
+        # accepted value must go to whatever device.state is by then, not to
+        # this object, or the entity keeps showing the old setpoint until the
+        # next state event happens to carry the new one.
         state = device.state
 
         if state.operating_mode == OperatingMode.OFF:
@@ -301,7 +309,7 @@ class SensiClient:
         # We can receive a string instead of JSON
         if isinstance(response, str):
             if response == "accepted":
-                self._apply_target_temperature(state, mode, value)
+                self._apply_target_temperature(device, mode, value)
                 return ActionResponse(None, None)
 
             # Treat anything else other than "accepted" as error
@@ -312,7 +320,7 @@ class SensiClient:
             # and it is a success there. The requested value is the only figure
             # available; display_temp is left alone because the thermostat did
             # not report one and the next state event carries it.
-            self._apply_target_temperature(state, mode, value)
+            self._apply_target_temperature(device, mode, value)
             return ActionResponse(None, None)
 
         # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
@@ -321,16 +329,23 @@ class SensiClient:
         except ValueError, TypeError:
             return ActionResponse(f"Failed to parse `{response}`", None)
 
-        state.display_temp = parsed_response.current_temp
-        self._apply_target_temperature(state, mode, parsed_response.target_temp)
+        device.state.display_temp = parsed_response.current_temp
+        self._apply_target_temperature(device, mode, parsed_response.target_temp)
 
         return ActionResponse(None, parsed_response)
 
     @staticmethod
     def _apply_target_temperature(
-        state: State, mode: OperatingMode, target_temp: int
+        device: SensiDevice, mode: OperatingMode, target_temp: int
     ) -> None:
-        """Record an accepted setpoint against the mode it was set for."""
+        """Record an accepted setpoint against the mode it was set for.
+
+        Takes the device rather than a State so the write lands on the State
+        the device holds now; a state event may have replaced the one that
+        was current when the setter was sent.
+        """
+
+        state = device.state
 
         # Changing cool/min temperature should not change the operating mode
         # In mobile app, one cannot set the temperatures if the device is OFF.
