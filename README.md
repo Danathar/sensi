@@ -81,11 +81,13 @@ Data refreshes every 30 seconds.
 
 **Disabled by default** (enable them per-entity if you want them): Active Savings Event, Battery, Min/Max setpoints, Fan speed, WiFi quality.
 
-**Configuration entities**, all of which vary by thermostat model: Auxiliary Heating, Continuous Backlight, Display Humidity, Display Time, Fan, Humidification, Keypad Lockout, and Temperature/Humidity offsets.
+**Configuration entities**, all of which vary by thermostat model: Auxiliary Heating, Circulating Fan, Circulating Fan Duty Cycle, Continuous Backlight, Display Humidity, Display Time, Fan, Humidification, Keypad Lockout, and Temperature/Humidity offsets.
 
 ### Notes on specific entities
 
 **Auxiliary heating** is a switch under device configuration, not a climate attribute. Home Assistant labels the resulting action as `Heating`.
+
+**Circulating fan** — on thermostats that support it, the `Circulating Fan` switch turns circulation on and off, and the `Circulating Fan Duty Cycle` number sets how much of each hour the fan runs, as a percentage. The number's range and step are the thermostat's own (typically 10–100% in steps of 5), and it is unavailable while the switch is off. The switch is the same setting the climate entity's `Circulate` fan mode toggles, so the two stay in step.
 
 **Humidification** is only available on thermostats where it was enabled during physical setup. Sensi works in 5% increments and values are rounded to the nearest step. When it is active the climate entity gains `min_humidity`, `max_humidity`, `humidity` (target) and `current_humidity`. The default Home Assistant card exposes the humidity level only, and **dehumidification is not supported**.
 
@@ -124,6 +126,8 @@ humidity: 5
 ```
 
 On multi-stage systems (2-stage heat pumps, multi-stage auxiliary heat), `hvac_*_stage` carries the raw demand percentage: **50** means stage 1 of a 2-stage system is active, **100** means stage 2 — or a single-stage system — is active.
+
+**Deprecated:** `circulating_fan` and `circulating_fan_duty_cycle` are the same data the `Circulating Fan` switch and `Circulating Fan Duty Cycle` number now expose. Upstream removed the two attributes in v2.2.0; this fork keeps them for now so existing automations keep working, but they will go in a later release. Read the entities instead.
 
 ## Limitations
 

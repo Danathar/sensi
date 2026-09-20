@@ -8,6 +8,7 @@ backend in ``conftest.py``.
 import asyncio
 from unittest.mock import patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from socketio.exceptions import ConnectionError as SocketIOConnectionError
 
@@ -123,7 +124,9 @@ async def test_entities_are_created_from_the_sample_payload(
         "sensor.sensi_living_room_temperature",
         "sensor.sensi_living_room_humidity",
         "switch.sensi_living_room_display_humidity",
+        "switch.sensi_living_room_circulating_fan",
         "number.sensi_living_room_temperature_offset",
+        "number.sensi_living_room_circulating_duty_cycle",
     ):
         state = hass.states.get(entity_id)
         assert state is not None, f"{entity_id} was never created"
@@ -134,6 +137,39 @@ async def test_entities_are_created_from_the_sample_payload(
     assert climate.state != STATE_UNKNOWN
     assert climate.attributes["current_temperature"] is not None
     assert climate.attributes["friendly_name"] == "Living Room"
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "friendly_name"),
+    [
+        ("switch.sensi_living_room_display_humidity", "Living Room Display Humidity"),
+        ("switch.sensi_living_room_circulating_fan", "Living Room Circulating Fan"),
+        (
+            "number.sensi_living_room_temperature_offset",
+            "Living Room Temperature Offset",
+        ),
+        (
+            "number.sensi_living_room_circulating_duty_cycle",
+            "Living Room Circulating Fan Duty Cycle",
+        ),
+    ],
+)
+async def test_entity_names_resolve_through_translations(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    entity_id: str,
+    friendly_name: str,
+) -> None:
+    """The switches and numbers are named by translation_key, not a literal.
+
+    A translation_key with no matching entry in strings.json shows up as the
+    bare device name, which the unit tests cannot see: only a loaded platform
+    resolves the string.
+    """
+    state = hass.states.get(entity_id)
+
+    assert state is not None, f"{entity_id} was never created"
+    assert state.attributes["friendly_name"] == friendly_name
 
 
 async def test_device_registry_entry_is_populated(

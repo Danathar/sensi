@@ -1,5 +1,7 @@
 """Tests for Sensi switch component."""
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -9,6 +11,7 @@ from custom_components.sensi.const import (
     CONFIG_AUX_HEATING,
     CONFIG_FAN_SUPPORT,
     DEFAULT_CONFIG_FAN_SUPPORT,
+    FAN_CIRCULATE_DUTY_CYCLE_DEFAULT,
 )
 from custom_components.sensi.data import OperatingMode
 from custom_components.sensi.event import SettingEventName
@@ -17,6 +20,7 @@ from custom_components.sensi.switch import (
     SensiAuxHeatSwitch,
     SensiCapabilityEntityDescription,
     SensiCapabilitySettingSwitch,
+    SensiCirculatingFanSwitch,
     SensiFanSupportSwitch,
     SensiHumidificationSwitch,
     _mode_to_restore,
@@ -25,6 +29,14 @@ from custom_components.sensi.switch import (
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.typing import UNDEFINED
+
+_COMPONENT = Path(__file__).parents[1] / "custom_components" / "sensi"
+STRINGS_FILES = (
+    _COMPONENT / "strings.json",
+    _COMPONENT / "translations" / "en.json",
+)
 
 
 def create_humidity_description() -> SensiCapabilityEntityDescription:
@@ -54,9 +66,9 @@ async def test_setup_platform(
 
     assert async_add_entities.called
 
-    # 6 = 4 from SWITCH_TYPES + SensiFanSupportSwitch + SensiAuxHeatSwitch
-    # 7 = 4 from SWITCH_TYPES + SensiFanSupportSwitch + SensiAuxHeatSwitch + SensiHumidificationSwitch
-    assert len(async_add_entities.call_args[0][0]) == 13
+    # 7 = 4 from SWITCH_TYPES + SensiFanSupportSwitch + SensiAuxHeatSwitch + SensiCirculatingFanSwitch
+    # 8 = 4 from SWITCH_TYPES + SensiFanSupportSwitch + SensiAuxHeatSwitch + SensiCirculatingFanSwitch + SensiHumidificationSwitch
+    assert len(async_add_entities.call_args[0][0]) == 15
 
 
 def test_capability_entity_description_creation() -> None:
@@ -98,6 +110,25 @@ class TestSwitchTypes:
         for key, expected_icon in icons_expected.items():
             switch = next(s for s in SWITCH_TYPES if s.key == key)
             assert switch.icon == expected_icon
+
+    def test_switch_types_are_named_through_translations(self) -> None:
+        """Each switch names itself by `translation_key`, never a literal name.
+
+        The key doubles as the translation key, so strings.json can be
+        checked against SWITCH_TYPES by key alone.
+        """
+        for switch in SWITCH_TYPES:
+            assert switch.translation_key == switch.key
+            assert switch.name is UNDEFINED
+
+    @pytest.mark.parametrize("path", STRINGS_FILES, ids=lambda p: p.name)
+    def test_every_switch_translation_key_has_a_name(self, path: Path) -> None:
+        """A translation_key without a string shows up as a blank entity name."""
+        names = json.loads(path.read_text(encoding="utf-8"))["entity"]["switch"]
+
+        for switch in SWITCH_TYPES:
+            assert names[switch.translation_key]["name"], switch.key
+        assert names["circulating_fan"]["name"] == "Circulating Fan"
 
 
 class TestSensiCapabilitySettingSwitch:
@@ -237,6 +268,163 @@ class TestSensiCapabilitySettingSwitch:
             await switch.async_turn_on()
             mock_async_write_ha_state.assert_called_once()
             assert switch.is_on is True
+
+    async def test_capability_setting_switch_names_the_setting_in_the_error(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """The name now comes from translations, so the error names the key."""
+
+        description = next(s for s in SWITCH_TYPES if s.key == "keypad_lockout")
+        switch = SensiCapabilitySettingSwitch(
+            hass, mock_device, description, mock_coordinator.config_entry
+        )
+
+        with patch.object(
+            mock_coordinator.client, "async_set_bool_setting"
+        ) as mock_async_set_bool_setting:
+            mock_async_set_bool_setting.return_value = ActionResponse(
+                "ThermostatOffline", None
+            )
+
+            with pytest.raises(
+                HomeAssistantError, match="Unable to set keypad lockout to True"
+            ):
+                await switch.async_turn_on()
+
+
+class TestSensiCirculatingFanSwitch:
+    """The circulating fan switch ported from upstream v2.2.0 (iprak/sensi#165)."""
+
+    def test_circulating_fan_switch_initialization(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """The key is upstream's, so a registry entry survives a move."""
+
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        assert switch._device == mock_device  # noqa: SLF001
+        assert switch.coordinator == mock_coordinator
+        assert switch.entity_description.key == "circulating_fan"
+        assert switch.entity_description.translation_key == "circulating_fan"
+        assert switch.entity_description.entity_category == EntityCategory.CONFIG
+        assert switch.entity_description.icon == "mdi:fan"
+        assert switch.entity_id == "switch.sensi_living_room_circulating_fan"
+        assert switch.unique_id == f"{mock_device.identifier}_circulating_fan"
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_circulating_fan_switch_is_on(
+        self, hass: HomeAssistant, mock_device, mock_coordinator, enabled
+    ) -> None:
+        """is_on reflects the circulating fan state."""
+
+        mock_device.state.circulating_fan.enabled = enabled
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        assert switch.is_on is enabled
+
+    @pytest.mark.parametrize("capable", [True, False])
+    def test_circulating_fan_switch_available_when_capable(
+        self, hass: HomeAssistant, mock_device, mock_coordinator, capable
+    ) -> None:
+        """A thermostat without a circulating fan shows the switch unavailable."""
+
+        mock_device.capabilities.circulating_fan.capable = capable
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        assert switch.available is capable
+
+    async def test_circulating_fan_switch_update(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """Both directions send the thermostat's own duty cycle back."""
+
+        mock_device.state.circulating_fan.duty_cycle = 30
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        with (
+            patch.object(
+                mock_coordinator.client, "async_set_circulating_fan_mode"
+            ) as mock_set_circulating_fan_mode,
+            patch.object(switch, "async_write_ha_state") as mock_async_write_ha_state,
+            patch.object(
+                mock_coordinator, "async_update_listeners"
+            ) as mock_async_update_listeners,
+        ):
+            mock_set_circulating_fan_mode.return_value = ActionResponse(None, {})
+
+            await switch.async_turn_off()
+            await switch.async_turn_on()
+
+            mock_set_circulating_fan_mode.assert_has_calls(
+                [
+                    call(mock_device, False, 30),
+                    call(mock_device, True, 30),
+                ]
+            )
+            assert mock_set_circulating_fan_mode.call_count == 2
+            assert mock_async_write_ha_state.call_count == 2
+            assert mock_async_update_listeners.call_count == 2
+
+    async def test_circulating_fan_switch_without_a_duty_cycle_uses_the_default(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """A thermostat that reports no duty cycle gets the default, never 0."""
+
+        mock_device.state.circulating_fan.duty_cycle = 0
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        with (
+            patch.object(
+                mock_coordinator.client, "async_set_circulating_fan_mode"
+            ) as mock_set_circulating_fan_mode,
+            patch.object(switch, "async_write_ha_state"),
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_circulating_fan_mode.return_value = ActionResponse(None, {})
+
+            await switch.async_turn_on()
+
+            mock_set_circulating_fan_mode.assert_called_once_with(
+                mock_device, True, FAN_CIRCULATE_DUTY_CYCLE_DEFAULT
+            )
+
+    async def test_circulating_fan_switch_error_is_raised(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """A refusal from the thermostat surfaces and leaves the state alone."""
+
+        mock_device.state.circulating_fan.enabled = False
+        switch = SensiCirculatingFanSwitch(
+            hass, mock_device, mock_coordinator.config_entry
+        )
+
+        with (
+            patch.object(
+                mock_coordinator.client, "async_set_circulating_fan_mode"
+            ) as mock_set_circulating_fan_mode,
+            patch.object(switch, "async_write_ha_state") as mock_async_write_ha_state,
+        ):
+            mock_set_circulating_fan_mode.return_value = ActionResponse(
+                "ThermostatOffline", None
+            )
+
+            with pytest.raises(
+                HomeAssistantError, match="Unable to set circulating fan to True"
+            ):
+                await switch.async_turn_on()
+
+            mock_async_write_ha_state.assert_not_called()
+            assert switch.is_on is False
 
 
 class TestSensiAuxHeatSwitch:

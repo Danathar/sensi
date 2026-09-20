@@ -43,6 +43,15 @@ class SensiNumberEntityDescription(NumberEntityDescription):
     min_fn: Callable[[SensiDevice], int]
     max_fn: Callable[[SensiDevice], int]
 
+    # The step is per device too for the circulating fan duty cycle; the
+    # offsets keep the constant `native_step` on the description.
+    step_fn: Callable[[SensiDevice], int] | None = None
+
+    # Some settings only mean something while another one is on: the duty
+    # cycle is unavailable until the circulating fan is enabled. None keeps the
+    # entity available whenever the device is.
+    available_fn: Callable[[SensiDevice], bool] | None = None
+
     # Report the thermostat's own display scale as the unit, rather than the
     # constant on the description. Set for the temperature offset, whose scale
     # is a per-device setting. This used to be inferred from
@@ -67,9 +76,9 @@ NUMBER_TYPES: Final = [
         key="temperature_offset",
         max_fn=lambda device: device.capabilities.temp_offset_upper_bound,
         min_fn=lambda device: device.capabilities.temp_offset_lower_bound,
-        name="Temperature offset",
+        native_step=STEP,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-        step=STEP,
+        translation_key="temperature_offset",
         unit_from_display_scale=True,
         update_fn=lambda client, device, value: client.async_set_temperature_offset(
             device, value
@@ -82,15 +91,37 @@ NUMBER_TYPES: Final = [
         key="humidity_offset",
         max_fn=lambda device: device.capabilities.humidity_offset_upper_bound,
         min_fn=lambda device: device.capabilities.humidity_offset_lower_bound,
-        name="Humidity offset",
+        native_step=STEP,
         native_unit_of_measurement=PERCENTAGE,
-        step=STEP,
+        translation_key="humidity_offset",
         update_fn=lambda client, device, value: client.async_set_humidity_offset(
             device, value
         ),
         value_fn=lambda device: get_state(device).humidity_offset,
     ),
 ]
+
+# Only offered when the thermostat reports the circulating fan capability.
+# The bounds and step are the ones the thermostat reports under
+# capabilities.circulating_fan, the same ones the client snaps a value to.
+# Writing a value keeps the fan's current enabled state: the number changes
+# how often the fan runs, the Circulating Fan switch decides whether it does.
+# The key is upstream's (iprak/sensi v2.2.0), so an install moving between the
+# two keeps its registry entry.
+CIRCULATING_FAN_DUTY_CYCLE: Final = SensiNumberEntityDescription(
+    available_fn=lambda device: get_state(device).circulating_fan.enabled,
+    entity_category=EntityCategory.CONFIG,
+    key="circulating_duty_cycle",
+    max_fn=lambda device: device.capabilities.circulating_fan.max_duty_cycle,
+    min_fn=lambda device: device.capabilities.circulating_fan.min_duty_cycle,
+    native_unit_of_measurement=PERCENTAGE,
+    step_fn=lambda device: device.capabilities.circulating_fan.step,
+    translation_key="circulating_duty_cycle",
+    update_fn=lambda client, device, value: client.async_set_circulating_fan_mode(
+        device, get_state(device).circulating_fan.enabled, value
+    ),
+    value_fn=lambda device: get_state(device).circulating_fan.duty_cycle,
+)
 
 
 async def async_setup_entry(
@@ -106,6 +137,12 @@ async def async_setup_entry(
         for device in coordinator.get_devices()
         for description in NUMBER_TYPES
     ]
+
+    entities.extend(
+        SensiNumberEntity(hass, device, CIRCULATING_FAN_DUTY_CYCLE, entry)
+        for device in coordinator.get_devices()
+        if device.capabilities.circulating_fan.capable
+    )
 
     async_add_entities(entities)
 
@@ -148,6 +185,27 @@ class SensiNumberEntity(SensiDescriptionEntity, NumberEntity):
         return self.entity_description.max_fn(self._device)
 
     @property
+    def native_step(self) -> float | None:
+        """Return the step reported by the thermostat, or the description's."""
+        if self.entity_description.step_fn is not None:
+            return self.entity_description.step_fn(self._device)
+
+        return super().native_step
+
+    @property
+    def available(self) -> bool:
+        """Return if the entity is available.
+
+        A description with `available_fn` is also unavailable while the
+        setting it depends on is off.
+        """
+        if not super().available:
+            return False
+
+        available_fn = self.entity_description.available_fn
+        return available_fn is None or available_fn(self._device)
+
+    @property
     def native_unit_of_measurement(self) -> str:
         """Return the unit of measurement of the entity, if any."""
         return (
@@ -161,7 +219,9 @@ class SensiNumberEntity(SensiDescriptionEntity, NumberEntity):
         response = await self.entity_description.update_fn(
             self.coordinator.client, self._device, int(value)
         )
-        raise_if_error(response, self.entity_description.name, value)
+        # The display name lives in translations now, so the key names the
+        # setting in the error: "Unable to set temperature offset to 6".
+        raise_if_error(response, self.entity_description.key.replace("_", " "), value)
         self.async_write_ha_state()
 
         # Force data update since offsets control the thermostat state
