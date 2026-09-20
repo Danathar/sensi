@@ -55,8 +55,43 @@ _REFUSED_SHORT = "O"
 # pathname expansion, no substitution. A word holding one of these characters
 # is a word whose final form this script cannot see, and every one of them can
 # rebuild a refused option out of pieces that are not refused -
-# `--no-inde{x,x}`, `--outpu[t]`, `$F`, `$(printf -- --no-index)`.
-_UNEXPANDED = "{}*?[]$`"
+# `--no-inde{x,x}`, `--outpu[t]`, `$F`, `$(printf -- --no-index)`. A brace is
+# the one character here that bash sometimes leaves alone, so it is judged by
+# `_brace_would_expand` below rather than by its presence.
+_UNEXPANDED = "*?[]$`"
+
+
+def _brace_would_expand(word: str) -> bool:
+    """Whether bash would brace-expand `word` before git sees it.
+
+    Bash's own rule, and only the half of it that matters here: a brace is
+    expanded when a comma or a `..` sequence sits inside it - `{a,b}`,
+    `{1..9}`, `a{,b}`, `{{a,b}}` - and is a literal otherwise. Git's own
+    revision syntax relies on the literal form: `HEAD@{1}`, `main@{upstream}`
+    and `@{-1}` reach git exactly as typed, and refusing them blocks the
+    ordinary diff against the previous commit for no gain.
+
+    This expands nothing; it asks whether bash would, and it errs toward yes.
+    The comma or `..` is looked for at any depth, since `{{a,b}}` is `{a} {b}`
+    to bash; a `{` that never closes counts; and `${VAR}` counts, as a
+    runtime-built argument this script cannot inspect (the `$` in
+    `_UNEXPANDED` refuses it first - this is the same answer by another
+    route). What it never does is call a word literal that bash would
+    rewrite: every expansion bash performs has a comma or `..` between a `{`
+    and a `}`. A `..` *between* two literal braces (`HEAD@{2}..HEAD@{1}`) is
+    not inside one and is left alone.
+    """
+
+    depth = 0
+    for index, char in enumerate(word):
+        pair = word[index : index + 2]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(depth - 1, 0)
+        elif (depth > 0 and (char == "," or pair == "..")) or pair == "${":
+            return True
+    return depth > 0
 
 
 def _is_outside_repo(word: str) -> bool:
@@ -156,7 +191,7 @@ def main() -> int:
         return 0
 
     for word in words:
-        if any(char in word for char in _UNEXPANDED):
+        if any(char in word for char in _UNEXPANDED) or _brace_would_expand(word):
             print(
                 f"Blocked: {word!r} is expanded by the shell, so the argument "
                 "git receives is not the one written here. Spell the arguments "

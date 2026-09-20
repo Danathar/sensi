@@ -186,6 +186,56 @@ def test_shell_expansion_in_a_gated_command_is_refused(command: str) -> None:
     assert "expanded by the shell" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Bash expands a brace only when a comma or a `..` range sits inside
+        # it; any other brace is a literal, and git's own `@{...}` revision
+        # syntax is spelled with exactly that. `git diff HEAD@{1}` is the
+        # ordinary diff against the previous commit and touches none of the
+        # gated options, so a gate that refused it was a false positive with
+        # a real cost. The last case pins that a `..` *between* two literal
+        # braces is not a range inside one.
+        "git diff HEAD@{1}",
+        "git diff HEAD@{1} -- docs/SECURITY-AI.md",
+        "git log main@{upstream} -1",
+        "git log @{2.days.ago} -1",
+        "git log HEAD@{2}..HEAD@{1}",
+        "git show @{-1}",
+    ],
+)
+def test_a_brace_bash_would_not_expand_is_left_alone(command: str) -> None:
+    """Git's literal `@{...}` revision syntax passes."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The line is drawn where bash draws it, and errs toward refusing.
+        # `@{1,2}` reads as revision syntax and is two words to bash; `{x..x}`
+        # is a one-element sequence that rebuilds the option; a comma nested
+        # one level down still expands (`{{a,b}}` is `{a} {b}`); and `${VAR}`
+        # is a runtime-built argument the hook cannot inspect.
+        "git diff HEAD@{1,2}",
+        "git diff --no-inde{x..x} README.md docs/SECURITY-AI.md",
+        "git diff {{README.md,secrets.yaml}}",
+        "git diff ${SECRET} HEAD",
+    ],
+)
+def test_the_brace_test_is_what_bash_would_expand_not_the_spelling(
+    command: str,
+) -> None:
+    """A brace bash would expand is still refused, at any depth."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "expanded by the shell" in completed.stderr
+
+
 def test_an_unbalanced_quote_is_refused() -> None:
     """What bash would run is not what the gate saw, and bash rejects it too."""
 
