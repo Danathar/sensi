@@ -18,6 +18,7 @@ from custom_components.sensi.auth import (
     SensiConnectionError,
     async_save_config,
     get_stored_config,
+    is_user_id,
     refresh_access_token,
     validate_refresh_token,
 )
@@ -480,8 +481,13 @@ class TestGetStoredConfigAccountGuard:
 
     @pytest.mark.parametrize(
         ("expected_user_id", "stored_user_id"),
-        [(None, "account_a"), ("account_a", None), (None, None)],
-        ids=["no_unique_id", "no_stored_user_id", "neither"],
+        [
+            (None, "account_a"),
+            ("account_a", None),
+            (None, None),
+            ("someone@example.com", "account_a"),
+        ],
+        ids=["no_unique_id", "no_stored_user_id", "neither", "keyed_by_login"],
     )
     async def test_an_absent_id_cannot_verify_and_does_not_refuse(
         self, hass: HomeAssistant, expected_user_id, stored_user_id
@@ -491,6 +497,12 @@ class TestGetStoredConfigAccountGuard:
         Older installations stored no user_id, and an entry created before
         unique_ids were set has none either. Refusing those would lock out a
         working install on an upgrade.
+
+        An entry upstream v1.0.0 to v1.2.8 keyed by the login username is the
+        same case wearing a value: its unique_id is not a user_id, so there is
+        nothing to compare. Refusing it locked those installs out at the
+        first token refresh after the upgrade, since that is what writes the
+        user_id the comparison then failed against (#220).
         """
         stored = {**self._STORED, KEY_USER_ID: stored_user_id}
 
@@ -500,6 +512,8 @@ class TestGetStoredConfigAccountGuard:
             config = await get_stored_config(hass, expected_user_id)
 
         assert config.refresh_token == "refresh"
+        # What the caller re-keys the entry from.
+        assert config.user_id == stored_user_id
 
     async def test_a_missing_refresh_token_still_raises(
         self, hass: HomeAssistant
@@ -522,6 +536,29 @@ class TestGetStoredConfigAccountGuard:
             await get_stored_config(hass, "account_a")
 
         assert "missing refresh_token" in str(context.value)
+
+
+class TestIsUserId:
+    """What tells a user_id-keyed entry from the two older generations.
+
+    Upstream keyed entries by the login username until v1.2.8 and by nothing
+    until v1.4.1. A Sensi login is an email address and a user_id is the
+    separate value the token endpoint returns, so the "@" is the tell.
+    """
+
+    @pytest.mark.parametrize("unique_id", ["12345", "user123", "e2e_user"])
+    def test_a_user_id(self, unique_id: str) -> None:
+        """The value this fork and upstream v1.4.2+ write."""
+        assert is_user_id(unique_id) is True
+
+    @pytest.mark.parametrize(
+        "unique_id",
+        [None, "", "someone@example.com"],
+        ids=["none", "empty", "login"],
+    )
+    def test_not_a_user_id(self, unique_id: str | None) -> None:
+        """No unique_id, or the login upstream v1.0.0 to v1.2.8 used as one."""
+        assert is_user_id(unique_id) is False
 
 
 class TestTokenPostDoesNotFollowRedirects:

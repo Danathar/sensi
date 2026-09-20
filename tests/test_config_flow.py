@@ -246,12 +246,26 @@ class TestSensiFlowHandler:
             mock_login.assert_called_once()
             mock_form.assert_called_once()
 
+    @staticmethod
+    def _reauth_handler(
+        hass: HomeAssistant, entry: MockConfigEntry
+    ) -> SensiFlowHandler:
+        """Return a handler in the context Home Assistant starts reauth with."""
+        handler = SensiFlowHandler()
+        handler.hass = hass
+        handler.context = {
+            "source": config_entries.SOURCE_REAUTH,
+            "entry_id": entry.entry_id,
+            "unique_id": entry.unique_id,
+        }
+        return handler
+
     @pytest.mark.asyncio
     async def test_async_step_reauth(self, hass: HomeAssistant):
         """Test async_step_reauth."""
         handler = SensiFlowHandler()
         handler.hass = hass
-        handler.context = {"unique_id": "user123"}
+        handler.context = {"entry_id": "test_entry", "unique_id": "user123"}
 
         with patch.object(handler, "async_step_reauth_confirm") as mock_reauth_confirm:
             mock_reauth_confirm.return_value = {
@@ -261,49 +275,38 @@ class TestSensiFlowHandler:
 
             await handler.async_step_reauth({"refresh_token": "token"})
 
-            assert handler._reauth_unique_id == "user123"  # noqa: SLF001
             mock_reauth_confirm.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_step_reauth_confirm_no_input(self, hass: HomeAssistant):
         """Test async_step_reauth_confirm with no user input."""
-        handler = SensiFlowHandler()
-        handler.hass = hass
-
-        handler.context = {"unique_id": "user123"}
-
-        with patch.object(handler, "async_step_reauth_confirm"):
-            await handler.async_step_reauth({})
-
         mock_entry = MockConfigEntry(
             domain=SENSI_DOMAIN,
             data={CONFIG_REFRESH_TOKEN: "old_token"},
             entry_id="test_entry",
             unique_id="user123",
         )
+        mock_entry.add_to_hass(hass)
+        handler = self._reauth_handler(hass, mock_entry)
 
-        with (
-            patch.object(handler, "async_set_unique_id") as mock_unique_id,
-            patch.object(handler, "async_show_form") as mock_form,
-        ):
-            mock_unique_id.return_value = mock_entry
+        with patch.object(handler, "async_show_form") as mock_form:
             mock_form.return_value = {"type": "form", "step_id": "reauth_confirm"}
 
             await handler.async_step_reauth_confirm(None)
 
-            mock_unique_id.assert_called_once_with("user123")
             mock_form.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_step_reauth_confirm_successful(self, hass: HomeAssistant):
         """Test async_step_reauth_confirm with successful reauthentication."""
-        handler = SensiFlowHandler()
-        handler.hass = hass
-
-        handler.context = {"unique_id": "user123"}
-
-        with patch.object(handler, "async_step_reauth_confirm"):
-            await handler.async_step_reauth({})
+        mock_entry = MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={CONFIG_REFRESH_TOKEN: "old_token"},
+            entry_id="test_entry",
+            unique_id="user123",
+        )
+        mock_entry.add_to_hass(hass)
+        handler = self._reauth_handler(hass, mock_entry)
 
         user_input = {CONFIG_REFRESH_TOKEN: "new_token"}
         new_config = AuthenticationConfig(
@@ -313,19 +316,10 @@ class TestSensiFlowHandler:
             user_id="user123",
         )
 
-        mock_entry = MockConfigEntry(
-            domain=SENSI_DOMAIN,
-            data={CONFIG_REFRESH_TOKEN: "old_token"},
-            entry_id="test_entry",
-            unique_id="user123",
-        )
-
         with (
-            patch.object(handler, "async_set_unique_id") as mock_unique_id,
             patch.object(handler, "_try_login") as mock_login,
             patch.object(handler, "async_abort") as mock_abort,
         ):
-            mock_unique_id.return_value = mock_entry
             mock_login.return_value = LoginResponse(errors=None, config=new_config)
             mock_abort.return_value = {"type": "abort", "reason": "reauth_successful"}
 
@@ -343,12 +337,14 @@ class TestSensiFlowHandler:
     @pytest.mark.asyncio
     async def test_async_step_reauth_confirm_wrong_account(self, hass: HomeAssistant):
         """A token for a different account must not repoint the entry."""
-        handler = SensiFlowHandler()
-        handler.hass = hass
-        handler.context = {"unique_id": "user123"}
-
-        with patch.object(handler, "async_step_reauth_confirm"):
-            await handler.async_step_reauth({})
+        mock_entry = MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={CONFIG_REFRESH_TOKEN: "old_token"},
+            entry_id="test_entry",
+            unique_id="user123",
+        )
+        mock_entry.add_to_hass(hass)
+        handler = self._reauth_handler(hass, mock_entry)
 
         user_input = {CONFIG_REFRESH_TOKEN: "token_for_someone_else"}
         other_config = AuthenticationConfig(
@@ -358,19 +354,10 @@ class TestSensiFlowHandler:
             user_id="someone_else",
         )
 
-        mock_entry = MockConfigEntry(
-            domain=SENSI_DOMAIN,
-            data={CONFIG_REFRESH_TOKEN: "old_token"},
-            entry_id="test_entry",
-            unique_id="user123",
-        )
-
         with (
-            patch.object(handler, "async_set_unique_id") as mock_unique_id,
             patch.object(handler, "_try_login") as mock_login,
             patch.object(handler, "async_show_form") as mock_form,
         ):
-            mock_unique_id.return_value = mock_entry
             mock_login.return_value = LoginResponse(errors=None, config=other_config)
             mock_form.return_value = {"type": "form", "step_id": "reauth_confirm"}
 
@@ -389,16 +376,14 @@ class TestSensiFlowHandler:
         """An entry removed while the flow was open aborts cleanly."""
         handler = SensiFlowHandler()
         handler.hass = hass
-        handler.context = {"unique_id": "user123"}
+        # The entry_id of an entry that is no longer in hass.
+        handler.context = {
+            "source": config_entries.SOURCE_REAUTH,
+            "entry_id": "removed_entry",
+            "unique_id": "user123",
+        }
 
-        with patch.object(handler, "async_step_reauth_confirm"):
-            await handler.async_step_reauth({})
-
-        with (
-            patch.object(handler, "async_set_unique_id") as mock_unique_id,
-            patch.object(handler, "async_abort") as mock_abort,
-        ):
-            mock_unique_id.return_value = None
+        with patch.object(handler, "async_abort") as mock_abort:
             mock_abort.return_value = {"type": "abort", "reason": "entry_not_found"}
 
             await handler.async_step_reauth_confirm({CONFIG_REFRESH_TOKEN: "new_token"})
@@ -408,28 +393,21 @@ class TestSensiFlowHandler:
     @pytest.mark.asyncio
     async def test_async_step_reauth_confirm_login_failure(self, hass: HomeAssistant):
         """Test async_step_reauth_confirm with login failure."""
-        handler = SensiFlowHandler()
-        handler.hass = hass
-        handler.context = {"unique_id": "user123"}
-
-        with patch.object(handler, "async_step_reauth_confirm"):
-            await handler.async_step_reauth({})
-
-        user_input = {CONFIG_REFRESH_TOKEN: "invalid_token"}
-
         mock_entry = MockConfigEntry(
             domain=SENSI_DOMAIN,
             data={CONFIG_REFRESH_TOKEN: "old_token"},
             entry_id="test_entry",
             unique_id="user123",
         )
+        mock_entry.add_to_hass(hass)
+        handler = self._reauth_handler(hass, mock_entry)
+
+        user_input = {CONFIG_REFRESH_TOKEN: "invalid_token"}
 
         with (
-            patch.object(handler, "async_set_unique_id") as mock_unique_id,
             patch.object(handler, "_try_login") as mock_login,
             patch.object(handler, "async_show_form") as mock_form,
         ):
-            mock_unique_id.return_value = mock_entry
             mock_login.return_value = LoginResponse(
                 errors={"base": "invalid_auth"}, config=None
             )
@@ -555,6 +533,153 @@ class TestReauthFlowRouting:
         assert result3["type"] == FlowResultType.ABORT
         assert result3["reason"] == "reauth_successful"
         assert entry.data[CONFIG_REFRESH_TOKEN] == "new_token"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+class TestReauthForEntriesUpstreamKeyedDifferently:
+    """Reauth for the two entry generations that are not keyed by a user_id.
+
+    Upstream v1.0.0 to v1.2.8 keyed the entry by the login username; v1.3.1
+    to v1.4.1 set no unique_id at all. Both reach this fork through the
+    upgrade path, and for both reauth used to be a dead end: the flow looked
+    the entry up by unique_id, which Home Assistant answers with None for a
+    None unique_id, and on success it demanded that the validated user_id
+    equal the unique_id, which a login never does. The only way out was to
+    remove the integration and add it again. #220.
+
+    Driven through `hass.config_entries.flow`, like TestReauthFlowRouting.
+    """
+
+    _VALIDATED = AuthenticationConfig(
+        refresh_token="rotated",
+        access_token="access",
+        expires_at=9e9,
+        user_id="12345",
+    )
+
+    @staticmethod
+    def _stale_entry(hass: HomeAssistant, unique_id: str | None) -> MockConfigEntry:
+        entry = MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={CONFIG_REFRESH_TOKEN: "old_token"},
+            unique_id=unique_id,
+            title=SENSI_NAME,
+        )
+        entry.add_to_hass(hass)
+        return entry
+
+    async def test_an_entry_without_a_unique_id_is_shown_the_form(
+        self, hass: HomeAssistant
+    ):
+        """It used to abort with entry_not_found before the form appeared."""
+        entry = self._stale_entry(hass, unique_id=None)
+
+        result = await entry.start_reauth_flow(hass)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "reauth_confirm"
+
+    @pytest.mark.parametrize(
+        "unique_id",
+        [None, "someone@example.com"],
+        ids=["no_unique_id", "keyed_by_login"],
+    )
+    async def test_a_confirmed_account_becomes_the_entry_key(
+        self, hass: HomeAssistant, unique_id: str | None
+    ):
+        """Success stores the token and re-keys the entry by the user_id.
+
+        The user_id is adopted rather than compared: there is nothing valid
+        to compare it with, and adopting it is what lets the wrong_account
+        guard apply to this entry from the next reauth on.
+        """
+        entry = self._stale_entry(hass, unique_id=unique_id)
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "pasted"}
+            )
+            await hass.async_block_till_done()
+
+        assert result2["type"] == FlowResultType.ABORT
+        assert result2["reason"] == "reauth_successful"
+        mock_save.assert_called_once_with(hass, self._VALIDATED)
+        assert entry.data[CONFIG_REFRESH_TOKEN] == "rotated"
+        assert entry.unique_id == "12345"
+        assert len(hass.config_entries.async_entries(SENSI_DOMAIN)) == 1
+
+    async def test_the_guard_applies_once_the_entry_is_keyed(self, hass: HomeAssistant):
+        """After adoption the entry is an ordinary one: another account is refused."""
+        entry = self._stale_entry(hass, unique_id="someone@example.com")
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config"),
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "pasted"}
+            )
+            await hass.async_block_till_done()
+        assert entry.unique_id == "12345"
+
+        result = await entry.start_reauth_flow(hass)
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=AuthenticationConfig(
+                    refresh_token="someone_elses", user_id="67890"
+                ),
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "someone_elses"}
+            )
+
+        assert result2["type"] == FlowResultType.FORM
+        assert result2["errors"] == {"base": "wrong_account"}
+        mock_save.assert_not_called()
+        assert entry.unique_id == "12345"
+
+    async def test_a_token_without_a_user_id_leaves_the_key_alone(
+        self, hass: HomeAssistant
+    ):
+        """A response with no user_id must not strip the key the entry had.
+
+        The protocol is undocumented, so the field can go missing; that is
+        not a reason to turn a login-keyed entry into one with no unique_id.
+        """
+        entry = self._stale_entry(hass, unique_id="someone@example.com")
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=AuthenticationConfig(refresh_token="rotated"),
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config"),
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "pasted"}
+            )
+            await hass.async_block_till_done()
+
+        assert result2["reason"] == "reauth_successful"
+        assert entry.unique_id == "someone@example.com"
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")

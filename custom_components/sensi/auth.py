@@ -177,6 +177,29 @@ async def async_save_config(hass: HomeAssistant, config: AuthenticationConfig) -
     await store.async_save(persistent_data)
 
 
+def is_user_id(unique_id: str | None) -> bool:
+    """Return whether an entry's unique_id is a Sensi user_id.
+
+    Three generations of entries reach this integration through the upgrade
+    path from upstream, and only the newest is keyed the way this code
+    expects:
+
+    - upstream v1.0.0 to v1.2.8 keyed the entry by the login username, which
+      for a Sensi account is an email address;
+    - upstream v1.3.1 to v1.4.1 set no unique_id at all;
+    - upstream v1.4.2 and later, and this fork, key it by the `user_id` the
+      token endpoint returns.
+
+    A login and a user_id are different values (upstream's #47 has a user
+    trying each in turn), and the only non-user_id value upstream ever wrote
+    into unique_id was the login. So "contains an @" is what tells the first
+    generation apart from the third. An entry that is not keyed by a user_id
+    cannot be checked against the store; setup and reauth re-key it from the
+    account they have just confirmed instead.
+    """
+    return bool(unique_id) and "@" not in unique_id
+
+
 async def get_stored_config(
     hass: HomeAssistant, expected_user_id: str | None = None
 ) -> AuthenticationConfig:
@@ -202,10 +225,17 @@ async def get_stored_config(
         raise AuthenticationError("Stored config is missing refresh_token")
 
     stored_user_id = persistent_data.get(KEY_USER_ID)
-    # Both have to be present to compare: older installations stored no
-    # user_id, and an entry created before unique_ids were set has none
-    # either. An absent value is "cannot verify", not "does not match".
-    if expected_user_id and stored_user_id and stored_user_id != expected_user_id:
+    # Both have to be a user_id to compare: older installations stored no
+    # user_id, an entry created before unique_ids were set has none, and an
+    # entry upstream keyed by the login username carries a value that is not
+    # a user_id at all (see is_user_id). None of those is "does not match" -
+    # they are "cannot verify", and async_setup_entry re-keys the entry from
+    # the store once it has loaded.
+    if (
+        is_user_id(expected_user_id)
+        and stored_user_id
+        and stored_user_id != expected_user_id
+    ):
         LOGGER.warning(
             "Stored credentials belong to a different Sensi account than this "
             "entry; reauthentication is required"

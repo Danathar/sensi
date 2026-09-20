@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.sensi import SUPPORTED_PLATFORMS, async_unload_entry
 from custom_components.sensi.auth import (
@@ -10,6 +11,7 @@ from custom_components.sensi.auth import (
     AuthenticationError,
     SensiConnectionError,
 )
+from custom_components.sensi.const import SENSI_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -109,9 +111,8 @@ REAUTH_TARGET = "homeassistant.config_entries.ConfigEntry.async_start_reauth"
 """What Home Assistant calls to put a "reauthenticate" prompt in front of the user.
 
 Asserting on this rather than on the flows in progress keeps these tests about
-the classification made here: whether a reauth flow then survives is the
-config flow's business, and it currently aborts for an entry with no
-unique_id.
+the classification made here: what the reauth flow then does with the entry
+is the config flow's business.
 """
 
 
@@ -301,6 +302,95 @@ async def test_setup_accepts_a_store_for_this_account(
         await hass.async_block_till_done()
 
     assert mock_entry.state is ConfigEntryState.LOADED
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize(
+    "unique_id",
+    [None, "someone@example.com"],
+    ids=["no_unique_id", "keyed_by_login"],
+)
+async def test_setup_keys_an_older_entry_by_the_stored_user_id(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data, unique_id
+) -> None:
+    """An entry upstream keyed by login, or not at all, adopts the store's user_id.
+
+    Upstream v1.0.0 to v1.2.8 keyed the entry by the login username and
+    v1.3.1 to v1.4.1 set no unique_id. Neither can be checked against the
+    store, and the login-keyed one was refused outright once a token refresh
+    had written a user_id there. The store is the one place the user_id is
+    known, so setup writes it into the entry; from then on the account guard
+    and the reauth flow's wrong_account check apply to it like any other.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    hass.config_entries.async_update_entry(mock_entry, unique_id=unique_id)
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch(REAUTH_TARGET) as mock_start_reauth,
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    assert mock_entry.unique_id == mock_auth_data[KEY_USER_ID]
+    mock_start_reauth.assert_not_called()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_setup_leaves_an_entry_unkeyed_when_the_store_has_no_user_id(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """Nothing to adopt: an older store carries no user_id until the next refresh."""
+
+    mock_entry = mock_coordinator.config_entry
+    stored = {**mock_auth_data, KEY_USER_ID: None}
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch("homeassistant.helpers.storage.Store.async_load", return_value=stored),
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    assert mock_entry.unique_id is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_setup_does_not_take_a_user_id_another_entry_holds(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data, caplog
+) -> None:
+    """Two entries from before single_config_entry: no duplicate unique_id.
+
+    Home Assistant indexes entries by unique_id and logs an error when two
+    share one. Leaving the entry as it is loses nothing it had.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    holder = MockConfigEntry(
+        domain=SENSI_DOMAIN, data={}, unique_id=mock_auth_data[KEY_USER_ID]
+    )
+    holder.add_to_hass(hass)
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    assert mock_entry.unique_id is None
+    assert "another entry already uses it" in caplog.text
 
 
 STOP_TARGET = "custom_components.sensi.client.SensiClient.stop"

@@ -14,6 +14,7 @@ from .auth import (
     AuthenticationError,
     SensiConnectionError,
     async_save_config,
+    is_user_id,
     validate_refresh_token,
 )
 from .const import (
@@ -35,10 +36,6 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
     """Config flow for Sensi thermostat."""
 
     VERSION = 1
-
-    def __init__(self) -> None:
-        """Start a config flow."""
-        self._reauth_unique_id = None
 
     async def _try_login(self, config: AuthenticationConfig) -> LoginResponse:
         """Check the credentials, without committing them.
@@ -99,13 +96,17 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
         # pylint: disable=unused-argument
         """Handle reauthentication."""
-        self._reauth_unique_id = self.context["unique_id"]
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input=None):
         """Handle reauthentication."""
         errors: dict[str, str] = {}
-        existing_entry = await self.async_set_unique_id(self._reauth_unique_id)
+        # By entry_id, not by unique_id: async_set_unique_id(None) returns
+        # None for an entry that has no unique_id, which aborted reauth for
+        # every entry upstream v1.3.1 to v1.4.1 created.
+        existing_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
         if existing_entry is None:
             # The entry was removed while the reauth flow was open.
             return self.async_abort(reason="entry_not_found")
@@ -116,7 +117,14 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
             )
             result = await self._try_login(config)
             if not result.errors:
-                if result.config.user_id != self._reauth_unique_id:
+                # An entry keyed by a user_id has an account to hold the token
+                # to. One upstream keyed by the login, or not at all, has no
+                # user_id to compare against (see is_user_id): the confirmed
+                # account becomes its key instead, below.
+                if (
+                    is_user_id(existing_entry.unique_id)
+                    and result.config.user_id != existing_entry.unique_id
+                ):
                     # The token is valid but belongs to a different Sensi
                     # account. Accepting it would silently repoint this entry.
                     errors = {"base": "wrong_account"}
@@ -126,6 +134,11 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                     await async_save_config(self.hass, result.config)
                     self.hass.config_entries.async_update_entry(
                         existing_entry,
+                        # Unchanged for an entry already keyed by this user_id;
+                        # for the other two generations this is what makes
+                        # the account guard apply from now on. If the token
+                        # endpoint sent no user_id there is nothing to adopt.
+                        unique_id=result.config.user_id or existing_entry.unique_id,
                         data={
                             **existing_entry.data,
                             CONFIG_REFRESH_TOKEN: result.config.refresh_token,
