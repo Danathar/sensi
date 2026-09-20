@@ -323,6 +323,37 @@ class TestSetTemperature:
 
     @pytest.mark.parametrize(
         "ack",
+        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 71}],
+        ids=["empty_dict", "accepted_string", "three_key_dict"],
+    )
+    async def test_an_aux_setpoint_is_recorded_as_the_heat_setpoint(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """A setpoint accepted while in AUX lands on current_heat_temp.
+
+        AUX is forced heating. The climate entity passes AUX through to the
+        wire unchanged, and that used to match neither branch of
+        `_apply_target_temperature`, so an accepted ack updated nothing.
+        """
+        mock_device.state.operating_mode = OperatingMode.AUX
+        previous_cool_temp = mock_device.state.current_cool_temp
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.AUX, 71
+            )
+
+        assert response.error is None
+        assert mock_device.state.current_heat_temp == 71
+        assert mock_device.state.current_cool_temp == previous_cool_temp
+        assert mock_device.state.operating_mode == OperatingMode.AUX
+
+    @pytest.mark.parametrize(
+        "ack",
         [
             {"current_temp": 70, "mode": "heat"},
             {"current_temp": 70, "mode": "heat", "target_temp": 75, "extra": 1},

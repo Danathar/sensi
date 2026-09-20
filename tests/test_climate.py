@@ -193,6 +193,45 @@ async def test_set_temperature_survives_an_ack_without_detail(
         assert mock_device.state.current_heat_temp == 68
 
 
+async def test_set_temperature_in_aux_keeps_aux_on_the_wire_and_applies_locally(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """In AUX the request still says "aux" and the ack lands on the heat setpoint.
+
+    AUX is forced heating and the entity already reports it as hvac_mode
+    heat. Before this an accepted ack matched neither HEAT nor COOL in
+    `_apply_target_temperature`, so the card snapped back to the old
+    setpoint until the next refresh. The wire mode is deliberately not
+    changed: "aux" is what this integration has always sent, the snap-back
+    is the shape of an accepted ack, and the protocol is reverse engineered
+    with no capture from an AUX-capable thermostat to justify sending
+    something else.
+    """
+
+    mock_device.state.operating_mode = OperatingMode.AUX
+    before = mock_device.state.current_heat_temp
+    cool_before = mock_device.state.current_cool_temp
+    sent = {}
+
+    async def fake_invoke(event, request_data):
+        sent[event] = request_data
+        return ActionResponse(None, {})
+
+    with (
+        patch.object(mock_coordinator.client, "_async_invoke_setter", new=fake_invoke),
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+    ):
+        await mock_thermostat.async_set_temperature(temperature=before + 3)
+
+    assert sent["set_temperature"]["mode"] == OperatingMode.AUX.value
+    assert sent["set_temperature"]["target_temp"] == before + 3
+    assert mock_device.state.current_heat_temp == before + 3
+    assert mock_device.state.current_cool_temp == cool_before
+    # The thermostat is still in AUX; only the setpoint moved.
+    assert mock_device.state.operating_mode == OperatingMode.AUX
+
+
 async def test_set_temperature_reports_an_unreadable_ack_as_an_error(
     hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
 ) -> None:
@@ -553,6 +592,13 @@ class TestSensiThermostatFanModes:
 
         assert mock_thermostat.max_temp is not None
 
+    def test_max_temp_in_aux_mode_is_the_heat_bound(self, mock_device, mock_thermostat):
+        """AUX adjusts the heat setpoint, so it is capped like HEAT is."""
+
+        mock_device.state.operating_mode = OperatingMode.AUX
+
+        assert mock_thermostat.max_temp == mock_device.state.heat_max_temp
+
 
 class TestSensiThermostatTargetTemperature:
     """Test cases for target temperature."""
@@ -579,6 +625,20 @@ class TestSensiThermostatTargetTemperature:
         mock_device.state.demand_status.cool = 100
 
         assert mock_thermostat.target_temperature == mock_device.state.current_cool_temp
+
+    def test_target_temperature_in_aux_follows_heat(self, mock_device, mock_thermostat):
+        """AUX reports the heat setpoint even when the last demand was cooling.
+
+        AUX is forced heating and hvac_mode already says heat; the target
+        shown next to it must be the heat setpoint, not whichever one the
+        last demand happened to act on.
+        """
+
+        mock_device.state.operating_mode = OperatingMode.AUX
+        mock_device.state.demand_status.last = "cool"
+
+        assert mock_thermostat.hvac_mode == HVACMode.HEAT
+        assert mock_thermostat.target_temperature == mock_device.state.current_heat_temp
 
 
 class TestSensiThermostatExtraStateAttributes:
