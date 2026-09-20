@@ -35,6 +35,12 @@ _spec.loader.exec_module(run_tests)
         ["-q", "--cov=custom_components/sensi"],
         ["--pdb"],
         ["-k", "redact"],
+        ["--cov=custom_components.sensi", "--cov-report=term-missing"],
+        ["--cov-report", "term"],
+        ["--cov-report=term-missing:skip-covered"],
+        ["--cov-report", "term:skip-covered"],
+        ["--cov-report=xml"],
+        ["-x", "tests"],
     ],
     ids=[
         "bare",
@@ -45,6 +51,12 @@ _spec.loader.exec_module(run_tests)
         "options with no target",
         "an option that starts with -p only as --",
         "a keyword filter",
+        "the documented coverage command",
+        "a terminal coverage report given as two arguments",
+        "a terminal report with the skip-covered modifier",
+        "the skip-covered modifier given as two arguments",
+        "an xml report written where .coveragerc says",
+        "stop on first failure",
     ],
 )
 def test_an_argument_inside_the_suite_is_forwarded(argv: list[str]) -> None:
@@ -111,6 +123,55 @@ def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
 
     assert run_tests.refusals(argv), (
         f"{argv} reaches an importable module or the ini that names one"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--junitxml=.claude/settings.json"],
+        ["--junit-xml", "/tmp/pwned.xml"],
+        ["--log-file=scripts/run_tests.py"],
+        ["--debug=/tmp/pwned.log"],
+        ["--report-log=/tmp/pwned.jsonl"],
+        ["--basetemp=.claude/hooks"],
+        ["--basetemp", "/tmp/victim"],
+        ["--cov-report=xml:/tmp/pwned.xml"],
+        ["--cov-report", "html:/tmp/pwned"],
+        ["--cov-report=lcov:docs/SECURITY-AI.md"],
+        ["--cov-report=annotate:.github/workflows"],
+        ["--cov-report=json:/tmp/pwned.json"],
+        ["--cov-report=markdown:.claude/settings.json"],
+        ["--cov-config=/tmp/coverage.ini", "--cov-report=xml"],
+        ["--cov-config", "tests/coverage.ini"],
+    ],
+)
+def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
+    """These create, truncate or delete a path the target check never sees.
+
+    The target check reads only arguments that do not start with `-`, so an
+    option carrying its own path is invisible to it, and nothing requires the
+    path to be inside `tests/` or inside the repository. `--junitxml` is
+    written even when collection fails, so no test has to run; `--basetemp`
+    deletes the directory recursively before pytest uses it. Every one of
+    them reaches the `Edit` deny list in `.claude/settings.json` from a
+    command that list allows without a prompt.
+
+    `--cov-report` keeps its documented spelling, `term-missing`, and the
+    `:skip-covered` modifier a terminal type can carry. A `:` after a file
+    type is a destination, and those are refused whether the value is
+    attached with `=` or given as the next argument.
+
+    `--cov-config` is refused in both spellings because the file it names is
+    where a report's destination is decided: `.coveragerc` sets `[xml]
+    output`, so a config of the caller's own can send `--cov-report=xml`
+    anywhere without a `:` appearing on the command line. The two-argument
+    case names a path inside `tests/` on purpose - the target check would
+    forward that path, so the option itself has to be the refusal.
+    """
+
+    assert run_tests.refusals(argv), (
+        f"{argv} writes or deletes a path of its own choosing"
     )
 
 

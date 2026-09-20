@@ -83,8 +83,13 @@ supply-chain concern.
 - Read `AGENTS.md` first. It is the operational half of this policy.
 - Run `python3 scripts/run_tests.py`, `ruff check .` and
   `ruff format --check .`, and report the real numbers rather than an
-  assurance. The wrapper is plain pytest with one rule - every target must be
-  inside `tests/` - because it is what runs without a permission prompt.
+  assurance. The wrapper is pytest with three rules, because it is what runs
+  without a permission prompt: every target must be inside `tests/`, the
+  options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are
+  refused, and so are the options that write or delete a path of their own
+  (`--junitxml`, `--log-file`, `--basetemp`, `--cov-config`, and a
+  `--cov-report` destination such as `xml:DEST`). The full list, with the
+  reason for each entry, is at the top of `scripts/run_tests.py`.
 - Say what could not be verified. There is no thermostat in CI and the protocol
   is undocumented; "unverified against hardware" is an acceptable outcome and
   a silent omission is not.
