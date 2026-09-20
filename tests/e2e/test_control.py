@@ -19,9 +19,15 @@ from homeassistant.components.climate import (
     SERVICE_SET_TEMPERATURE,
     HVACMode,
 )
+from homeassistant.components.number import (
+    ATTR_VALUE,
+    DOMAIN as NUMBER_DOMAIN,
+    SERVICE_SET_VALUE,
+)
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_TEMPERATURE,
+    PERCENTAGE,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_OFF,
@@ -36,6 +42,8 @@ from .conftest import FakeSensiBackend
 CLIMATE = "climate.sensi_living_room"
 DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
+CIRCULATING_FAN = "switch.sensi_living_room_circulating_fan"
+CIRCULATING_DUTY_CYCLE = "number.sensi_living_room_circulating_duty_cycle"
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 
@@ -117,6 +125,113 @@ async def test_switch_round_trip(
         "value": "on",
     }
     assert hass.states.get(DISPLAY_HUMIDITY).state == STATE_ON
+
+
+async def test_circulating_fan_switch_round_trip(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """The switch emits set_circulating_fan and the other entities follow it.
+
+    The sample thermostat reports the fan enabled at a 10% duty cycle. The
+    climate entity's deprecated `circulating_fan` attribute carries the same
+    setting and must keep agreeing with the switch until it is removed.
+    """
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_ON
+    assert hass.states.get(CLIMATE).attributes["circulating_fan"] is True
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == "10"
+
+    await hass.services.async_call(
+        "switch",
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: CIRCULATING_FAN},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Turning off sends the thermostat's own duty cycle back, so the value
+    # the user set in the app is still there when the fan is turned on again.
+    assert sensi_backend.last_emitted("set_circulating_fan") == {
+        "icd_id": ICD_ID,
+        "value": {"enabled": "off", "duty_cycle": 10},
+    }
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_OFF
+    assert hass.states.get(CLIMATE).attributes["circulating_fan"] is False
+    # A duty cycle means nothing while the fan is off.
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == STATE_UNAVAILABLE
+
+    await hass.services.async_call(
+        "switch",
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: CIRCULATING_FAN},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_circulating_fan") == {
+        "icd_id": ICD_ID,
+        "value": {"enabled": "on", "duty_cycle": 10},
+    }
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_ON
+    assert hass.states.get(CLIMATE).attributes["circulating_fan"] is True
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == "10"
+
+
+async def test_circulating_fan_duty_cycle_reaches_the_wire(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """Setting the duty cycle emits set_circulating_fan with the fan left on."""
+    state = hass.states.get(CIRCULATING_DUTY_CYCLE)
+    # The range and step the sample thermostat reports, unconverted.
+    assert state.attributes["unit_of_measurement"] == PERCENTAGE
+    assert state.attributes["min"] == 10
+    assert state.attributes["max"] == 100
+    assert state.attributes["step"] == 5
+
+    # The number refreshes the coordinator after a write, and the fake
+    # backend serves its scripted state on every connect. Script the value
+    # the thermostat would report once it has accepted the write.
+    sensi_backend.devices[ICD_ID]["state"]["circulating_fan"]["duty_cycle"] = 35
+
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: CIRCULATING_DUTY_CYCLE, ATTR_VALUE: 35},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_circulating_fan") == {
+        "icd_id": ICD_ID,
+        "value": {"enabled": "on", "duty_cycle": 35},
+    }
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == "35"
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_ON
+
+
+async def test_circulating_fan_duty_cycle_is_snapped_to_the_thermostats_step(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A value off the step grid goes out rounded to it, as the app would send."""
+    sensi_backend.devices[ICD_ID]["state"]["circulating_fan"]["duty_cycle"] = 40
+
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: CIRCULATING_DUTY_CYCLE, ATTR_VALUE: 38},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_circulating_fan")["value"] == {
+        "enabled": "on",
+        "duty_cycle": 40,
+    }
 
 
 async def test_backend_error_surfaces_to_the_caller(

@@ -93,7 +93,12 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         """Return the state attributes."""
         demand_status = self._state.demand_status
 
-        # Standard attributes that are always present
+        # Standard attributes that are always present.
+        # The two circulating fan attributes are deprecated: the Circulating
+        # Fan switch and the Circulating Fan Duty Cycle number carry the same
+        # data (upstream v2.2.0 removed them outright). They stay for now so an
+        # automation that reads them keeps working; the README says which
+        # entity to move to.
         attrs = {
             ATTR_CIRCULATING_FAN: self._state.circulating_fan.enabled,
             ATTR_CIRCULATING_FAN_DUTY_CYCLE: self._state.circulating_fan.duty_cycle,

@@ -28,6 +28,17 @@
     }
   },
   "entity": {
+    "number": {
+      "circulating_duty_cycle": {
+        "name": "Circulating Fan Duty Cycle"
+      },
+      "humidity_offset": {
+        "name": "Humidity Offset"
+      },
+      "temperature_offset": {
+        "name": "Temperature Offset"
+      }
+    },
     "sensor": {
       "active_savings": {
         "name": "Active Savings Event",
@@ -38,6 +49,23 @@
           "none": "None",
           "unknown": "Unknown"
         }
+      }
+    },
+    "switch": {
+      "circulating_fan": {
+        "name": "Circulating Fan"
+      },
+      "continuous_backlight": {
+        "name": "Continuous Backlight"
+      },
+      "display_humidity": {
+        "name": "Display Humidity"
+      },
+      "display_time": {
+        "name": "Display Time"
+      },
+      "keypad_lockout": {
+        "name": "Keypad Lockout"
       }
     }
   }
