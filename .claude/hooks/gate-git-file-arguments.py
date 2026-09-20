@@ -29,6 +29,7 @@ unparseable payload look like an attack.
 
 import json
 from pathlib import Path
+import re
 import shlex
 import sys
 
@@ -55,8 +56,48 @@ _REFUSED_SHORT = "O"
 # pathname expansion, no substitution. A word holding one of these characters
 # is a word whose final form this script cannot see, and every one of them can
 # rebuild a refused option out of pieces that are not refused -
-# `--no-inde{x,x}`, `--outpu[t]`, `$F`, `$(printf -- --no-index)`.
-_UNEXPANDED = "{}*?[]$`"
+# `--no-inde{x,x}`, `--outpu[t]`, `$F`, `$(printf -- --no-index)`. A brace is
+# the one character here that bash sometimes leaves alone, so it is judged by
+# `_brace_would_expand` below rather than by its presence.
+_UNEXPANDED = "*?[]$`"
+
+# A `{`, then a `,` or a `..` somewhere after it, then a `}` somewhere after
+# that. See `_brace_would_expand`.
+_EXPANDING_BRACE = re.compile(r"\{.*(?:,|\.\.).*\}", re.DOTALL)
+
+
+def _brace_would_expand(word: str) -> bool:
+    """Whether bash would brace-expand `word` before git sees it.
+
+    The test is deliberately cruder than bash's own: a `{`, then a `,` or a
+    `..` anywhere after it, then a `}` anywhere after that. Every expansion
+    bash performs has that shape, so nothing bash would rewrite is called
+    literal. Git's own revision syntax - `HEAD@{1}`, `main@{upstream}`,
+    `@{-1}`, `@{2.days.ago}` - has no comma and no `..` inside the braces and
+    stays allowed, as does a `{` that never closes, which bash leaves alone.
+
+    No nesting or matching is tracked, on purpose. A depth counter that closes
+    a brace at the first `}` misses the comma in `{--src-prefix=x},--no-index}`,
+    which bash expands to `--src-prefix=x}` and `--no-index` (the `{` pairs
+    with the *last* `}` it can), and every refinement toward bash's real
+    matching rule is a chance to disagree with it in some other direction.
+    Over-refusing is the safe direction: `HEAD@{2}..HEAD@{1}` is refused too,
+    though bash would not expand it, and the refusal says to write
+    `HEAD~2..HEAD~1`.
+
+    `${VAR}` is refused as well - a runtime-built argument this script cannot
+    inspect. The `$` in `_UNEXPANDED` refuses it first; this is the same
+    answer by another route.
+
+    The word checked is the shlex token: bash's word boundaries with the quote
+    marks removed. Removing quotes never removes a brace, a comma or a dot, so
+    a word bash would expand still has the shape here, and a quoted comma
+    (`{a",",b}`) or a quoted operator (`{a';',b}`) cannot hide it. A fully
+    quoted `"{a,b}"`, which bash leaves alone, is refused as the price of
+    that.
+    """
+
+    return "${" in word or _EXPANDING_BRACE.search(word) is not None
 
 
 def _is_outside_repo(word: str) -> bool:
@@ -156,11 +197,14 @@ def main() -> int:
         return 0
 
     for word in words:
-        if any(char in word for char in _UNEXPANDED):
+        if any(char in word for char in _UNEXPANDED) or _brace_would_expand(word):
             print(
                 f"Blocked: {word!r} is expanded by the shell, so the argument "
                 "git receives is not the one written here. Spell the arguments "
-                "of git diff, git log and git show out literally.",
+                "of git diff, git log and git show out literally. A brace is "
+                "refused when a comma or a .. follows it before a }; a range "
+                "between two reflog entries such as HEAD@{2}..HEAD@{1} is "
+                "refused with it, so write HEAD~2..HEAD~1 instead.",
                 file=sys.stderr,
             )
             return 2

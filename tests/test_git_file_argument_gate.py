@@ -17,6 +17,7 @@ bit or a broken shebang fails here too.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -184,6 +185,200 @@ def test_shell_expansion_in_a_gated_command_is_refused(command: str) -> None:
     completed = _run(_payload(command))
     assert completed.returncode == 2, f"{command!r} was not blocked"
     assert "expanded by the shell" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Bash expands a brace only when a comma or a `..` range sits inside
+        # it; any other brace is a literal, and git's own `@{...}` revision
+        # syntax is spelled with exactly that. `git diff HEAD@{1}` is the
+        # ordinary diff against the previous commit and touches none of the
+        # gated options, so a gate that refused it was a false positive with
+        # a real cost. The last case pins that a `{` which never closes is a
+        # literal too.
+        "git diff HEAD@{1}",
+        "git diff HEAD@{1} -- docs/SECURITY-AI.md",
+        "git log main@{upstream} -1",
+        "git log @{2.days.ago} -1",
+        "git show @{-1}",
+        "git log HEAD@{1 -1",
+    ],
+)
+def test_a_brace_bash_would_not_expand_is_left_alone(command: str) -> None:
+    """Git's literal `@{...}` revision syntax passes."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The line is drawn where bash draws it, and errs toward refusing.
+        # `@{1,2}` reads as revision syntax and is two words to bash; `{x..x}`
+        # is a one-element sequence that rebuilds the option; a comma nested
+        # one level down still expands (`{{a,b}}` is `{a} {b}`); and `${VAR}`
+        # is a runtime-built argument the hook cannot inspect.
+        "git diff HEAD@{1,2}",
+        "git diff --no-inde{x..x} README.md docs/SECURITY-AI.md",
+        "git diff {{README.md,secrets.yaml}}",
+        "git diff ${SECRET} HEAD",
+        # Mismatched braces (#225 review). Bash pairs the `{` with the last
+        # `}` it can, so `{--src-prefix=x},--no-index}` becomes
+        # `--src-prefix=x}` and `--no-index`. A depth counter that closed the
+        # brace at the first `}` never saw the comma and let both through.
+        "git diff {--src-prefix=x},--no-index} .env secrets.yaml",
+        "git log {--format=%h},--output=.claude/settings.json} -1",
+        # A quoted comma or a quoted operator inside the brace does not hide
+        # the shape: bash still expands `{a",",b}` (the unquoted comma
+        # splits) and `{a';',b}` (the quoted `;` is part of the word).
+        'git diff {README.md",",secrets.yaml}',
+        "git diff {README.md';',secrets.yaml}",
+        # Refused although bash would not expand it: a `..` between two
+        # reflog entries has the shape of a range inside a brace, and the
+        # test does not track which `}` closes which `{`. The refusal says
+        # to write HEAD~2..HEAD~1.
+        "git log HEAD@{2}..HEAD@{1}",
+    ],
+)
+def test_the_brace_test_is_what_bash_would_expand_not_the_spelling(
+    command: str,
+) -> None:
+    """A brace bash would expand is still refused, at any depth."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "expanded by the shell" in completed.stderr
+
+
+def test_the_reflog_range_refusal_names_the_spelling_to_use() -> None:
+    """The over-refusal has a cost; the message pays it back."""
+
+    completed = _run(_payload("git log HEAD@{2}..HEAD@{1}"))
+    assert completed.returncode == 2
+    assert "HEAD~2..HEAD~1" in completed.stderr
+
+
+# --------------------------------------------------------------------------
+# The brace rule, checked against bash rather than against a hand-written
+# expectation. Each word below is put through bash's own expansion, and what
+# bash does is the ground truth: a word it turns into more than one is one
+# the hook must refuse. The literal set - git's `@{...}` revision syntax - is
+# asserted the other way, allowed. Words in neither class are only held to
+# the first rule, so an over-refusal there is not a failure.
+# --------------------------------------------------------------------------
+
+# Git's revision syntax. Bash leaves each of these alone and the hook must
+# too; `HEAD@{1` pins that an unclosed brace is a literal as well.
+_LITERAL_BRACE_WORDS = (
+    "HEAD@{1}",
+    "main@{upstream}",
+    "@{-1}",
+    "@{2.days.ago}",
+    "HEAD@{1",
+)
+
+# Everything the rule has to get right, in one place: the literal set, the
+# ordinary expansions, the two bypasses found in review (mismatched braces,
+# a quoted operator inside the brace), quoted and escaped commas, nesting,
+# ranges, `${VAR}`, mismatched forms in both directions, braces after
+# `--output`, and quoted jq/awk programs that bash leaves alone. Each word is
+# inserted verbatim into a bash script, so the quoting is bash's.
+_BRACE_CORPUS = _LITERAL_BRACE_WORDS + (
+    "HEAD@{2}..HEAD@{1}",
+    "{a,b}",
+    "{1..3}",
+    "x{1..3}y",
+    "a{,b}",
+    "{{a,b}}",
+    "--no-inde{x,x}",
+    "--outpu{t,t}=FILE",
+    "HEAD@{1,2}",
+    "{--src-prefix=x},--no-index}",
+    "{a},b}",
+    "{/tmp/reference';',./cosign.key}",
+    '{a",",b}',
+    "{a\\,b,c}",
+    '"{a,b}"',
+    "'{a,b}'",
+    "{a,b",
+    "{a,b}}",
+    "{{a,b}",
+    "${OPERANDS}",
+    "--output={a,b}",
+    "--output=x{,}",
+    "'{print $1}'",
+    "'{a:1}'",
+    "'{a: .x, b: .y}'",
+)
+
+
+def _bash_expands(word: str) -> bool:
+    """Whether bash turns `word` into more than one word.
+
+    The word is inserted verbatim into the script text on purpose: the
+    corpus is this file's, and the point is to hand bash the spelling the
+    agent would type. `OPERANDS` is set so that `${OPERANDS}` splits into two
+    words the way a runtime-built argument would.
+    """
+
+    completed = subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", 'printf "%s\\0" ' + word],
+        capture_output=True,
+        env={"PATH": os.environ.get("PATH", ""), "OPERANDS": "/dev/null secrets.yaml"},
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.count(b"\0") > 1
+
+
+def test_the_corpus_is_large_enough_and_bash_agrees_with_its_labels() -> None:
+    """A corpus that shrank, or one bash reads differently, is a broken test."""
+
+    assert len(_BRACE_CORPUS) >= 25
+    assert len(set(_BRACE_CORPUS)) == len(_BRACE_CORPUS)
+    for word in _LITERAL_BRACE_WORDS:
+        assert not _bash_expands(word), f"bash expands {word!r}; it is not literal"
+    expanding = [word for word in _BRACE_CORPUS if _bash_expands(word)]
+    assert len(expanding) >= 15, expanding
+
+
+@pytest.mark.parametrize("word", _BRACE_CORPUS)
+def test_every_word_bash_expands_is_refused(word: str) -> None:
+    """The hook is checked against bash, not against a hand-written label."""
+
+    completed = _run(_payload(f"git diff {word}"))
+    if _bash_expands(word):
+        assert completed.returncode == 2, (
+            f"bash expands {word!r}; the hook let it through"
+        )
+        assert "expanded by the shell" in completed.stderr
+
+
+@pytest.mark.parametrize("word", _LITERAL_BRACE_WORDS)
+def test_every_literal_word_is_allowed(word: str) -> None:
+    """Git's `@{...}` syntax, which bash leaves alone, is not refused."""
+
+    completed = _run(_payload(f"git log {word} -1"))
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "jq '{a: .x, b: .y}' tests/sample.json",
+        "awk '{print $1}' README.md",
+    ],
+)
+def test_a_brace_outside_a_git_invocation_is_not_gated(command: str) -> None:
+    """The gate is about git's arguments; a jq or awk program is not one."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_an_unbalanced_quote_is_refused() -> None:
