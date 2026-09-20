@@ -4,9 +4,13 @@
 `.claude/settings.json`, so they run with no permission prompt. Three of their
 options do file I/O the deny list exists to withhold: `--no-index` reads any
 two paths on disk, `--output` creates or truncates any path, and `-O` /
-`--orderfile` makes git open a path. The deny rules bind the `Read` and `Edit`
-tools, not a shell command, so the hook is the only thing standing between the
-allow list and `secrets.yaml` or `.claude/hooks/`.
+`--orderfile` makes git open a path. The shell adds two spellings of its own:
+an output redirection on the git command truncates its target before git runs
+(`git diff HEAD >.claude/settings.json`, and bash reads `>.claude/settings.json
+git diff HEAD` as the same command), and an unquoted `~` names a home file
+without an absolute path or a `..` in the word as typed. The deny rules bind
+the `Read` and `Edit` tools, not a shell command, so the hook is the only
+thing standing between the allow list and `secrets.yaml` or `.claude/hooks/`.
 
 Each test feeds the committed script a payload on stdin, the way Claude Code
 does, and checks the exit code: 0 lets the call through, 2 blocks it and puts
@@ -91,6 +95,27 @@ def test_the_hook_is_executable_with_a_python_shebang() -> None:
         "git diff HEAD~1 HEAD",
         "git diff master feature",
         "git diff --cached",
+        # Redirections that write no path, and redirections on some other
+        # command of the same string, are not git's.
+        "git diff HEAD 2>&1",
+        "git diff HEAD >&2",
+        "git diff HEAD 1>&2",
+        "git diff HEAD >&-",
+        "git diff HEAD <<<''",
+        "git diff HEAD 2>&1 | jq .",
+        "git diff HEAD | jq . > out",
+        "echo x > out; git diff HEAD",
+        "echo x >> out && git diff HEAD",
+        ">out echo x; git diff HEAD",
+        ">out cat f | git diff --stat",
+        "git status 2>&1; git diff HEAD",
+        'git commit -m "x > y"',
+        "2>&1 git diff HEAD",
+        ">&2 git diff HEAD",
+        # A tilde that does not lead the word, or that bash leaves alone.
+        "git diff -- 'lit~eral'",
+        "git diff HEAD -- x~",
+        "git show HEAD:~/x",
     ],
 )
 def test_ordinary_commands_pass(command: str) -> None:
@@ -155,6 +180,15 @@ def test_stdin_that_is_not_json_passes() -> None:
         ("git diff ../secrets.yaml /dev/null", "../secrets.yaml"),
         ("git diff ~/secrets.yaml secrets.yaml", "~/secrets.yaml"),
         ("git diff /tmp/a /tmp/b", "/tmp/a"),
+        # An unquoted leading `~` is a home directory to bash, in any gated
+        # subcommand, on either side of `--`, and for a named user too.
+        ("git diff -- ~/.aws/credentials ~/.bashrc", "~/.aws/credentials"),
+        ("git diff ~/.bashrc ~/.aws/credentials", "~/.bashrc"),
+        ("git diff -- ~ ~/.bashrc", "~"),
+        ("git diff -- ~root/.bashrc README.md", "~root/.bashrc"),
+        ("git log -p -- ~/.ssh/config", "~/.ssh/config"),
+        ("git show HEAD -- ~/.ssh/config", "~/.ssh/config"),
+        ("git status; git diff -- ~/.aws/credentials ~/.bashrc", "~/.aws/credentials"),
     ],
 )
 def test_file_arguments_are_refused(command: str, fragment: str) -> None:
@@ -306,6 +340,143 @@ def test_git_really_prints_the_file_beside_a_process_substitution(
     assert completed.returncode == 2, (
         "the command just shown to print a file was not blocked"
     )
+
+
+@pytest.mark.parametrize(
+    ("command", "spelling"),
+    [
+        # The shell's own spelling of --output: every operator with a `>` in
+        # it opens its target for writing before git runs, whatever the
+        # target, and `<>` creates the file as well.
+        ("git diff HEAD >.claude/settings.json", ">.claude/settings.json"),
+        ("git diff HEAD > .claude/settings.json", ">.claude/settings.json"),
+        ("git diff HEAD >.claude/hooks/gate-git-file-arguments.py", ">.claude/hooks/"),
+        ("git diff HEAD > out.patch", ">out.patch"),
+        ("git log -1 >> out", ">>out"),
+        ("git diff 2>err", "2>err"),
+        ("git diff &>/dev/null", "&>/dev/null"),
+        ("git diff &>>log", "&>>log"),
+        ("git show HEAD >| x", ">|x"),
+        ("git diff HEAD >&secrets.yaml", ">&secrets.yaml"),
+        ("git diff HEAD <>secrets.yaml", "<>secrets.yaml"),
+        ("git diff HEAD 2>&1 >out", ">out"),
+        ("git log -1; git diff HEAD >out", ">out"),
+        ("echo x | git diff HEAD >out", ">out"),
+        # Bash lets the redirection precede the command name; the two
+        # spellings are the same command, and `git status; >x git diff HEAD`
+        # is allowed on its `git status` prefix.
+        (">.claude/settings.json git diff HEAD", ">.claude/settings.json"),
+        ("git status; >.claude/settings.json git diff HEAD", ">.claude/settings.json"),
+        ("2>err git log -1", "2>err"),
+        (">> out git show HEAD", ">>out"),
+        ("FOO=bar >out git diff HEAD", ">out"),
+        (">out git diff --no-index /dev/null secrets.yaml", ">out"),
+        # The write is the shell's, so every allow-listed git subcommand
+        # carries it, not only the three whose options are gated.
+        ("git status >.claude/settings.json", ">.claude/settings.json"),
+        ("git branch > out", ">out"),
+        ("git add -n . 2>err", "2>err"),
+    ],
+)
+def test_an_output_redirection_on_a_gated_git_is_refused(
+    command: str, spelling: str
+) -> None:
+    """The write reaches every Edit deny rule the way --output does."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "Blocked" in completed.stderr
+    assert spelling in completed.stderr
+    assert "read that instead" in completed.stderr
+
+
+def test_bash_really_truncates_the_target_of_a_redirection_written_first(
+    tmp_path: Path,
+) -> None:
+    """The reach the redirection rule exists for, run for real.
+
+    A stand-in file in a throwaway repository: `>victim git diff HEAD HEAD`
+    empties it before git prints anything, exactly as `git diff HEAD HEAD
+    >victim` would, and the hook has to refuse both spellings.
+    """
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    victim = tmp_path / "victim"
+    victim.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "bash",
+            "--norc",
+            "--noprofile",
+            "-c",
+            "git status --short >/dev/null; >victim git diff HEAD HEAD",
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "ORIGINAL-CONTENT" not in victim.read_text(encoding="utf-8"), (
+        "bash no longer truncates the target of a redirection written before "
+        "the command name; re-derive why the hook reads redirections per segment"
+    )
+    for command in (
+        "git status; >victim git diff HEAD HEAD",
+        "git diff HEAD HEAD >victim",
+    ):
+        completed = _run(_payload(command))
+        assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+def test_git_really_reads_a_home_file_named_with_a_tilde(tmp_path: Path) -> None:
+    """The reach the tilde rule exists for, run for real with a throwaway HOME.
+
+    bash expands `~` before git runs, so `git diff -- ~/.aws/credentials
+    ~/.bashrc` is a plain-file diff of two home files that neither start with
+    `/` nor carry a `..` as typed. The hook reads the `~` lexically and
+    refuses it as outside the repository whatever HOME is.
+    """
+
+    home = tmp_path / "home"
+    (home / ".aws").mkdir(parents=True)
+    (home / ".aws" / "credentials").write_text(
+        "STAND-IN-NOT-A-SECRET\n", encoding="utf-8"
+    )
+    (home / ".bashrc").write_text("export FIXTURE=1\n", encoding="utf-8")
+    shown = subprocess.run(
+        [
+            "bash",
+            "--norc",
+            "--noprofile",
+            "-c",
+            "git diff -- ~/.aws/credentials ~/.bashrc",
+        ],
+        cwd=str(_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(home)},
+        check=False,
+    )
+    assert "STAND-IN-NOT-A-SECRET" in shown.stdout, (
+        "git diff no longer prints a home file named through ~; the tilde rule "
+        "in the hook may be more than is needed"
+    )
+    for env_home in (str(home), str(_ROOT)):
+        completed = subprocess.run(
+            [str(_HOOK)],
+            input=_payload("git diff -- ~/.aws/credentials ~/.bashrc"),
+            cwd=str(_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": os.environ.get("PATH", ""), "HOME": env_home},
+            check=False,
+        )
+        assert completed.returncode == 2, (
+            f"the command just shown to read a home file was not blocked with HOME={env_home}"
+        )
 
 
 @pytest.mark.parametrize(

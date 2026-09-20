@@ -21,6 +21,21 @@ three of their arguments do file I/O that has nothing to do with the repository:
   path, which is outside the repository, and git prints the other operand
   whole. The word reaches this script as a bare `<(`, so it is refused by
   that prefix along with `>(`.
+* `git diff HEAD >.claude/settings.json` is `--output` in the shell's own
+  spelling: bash opens the target for writing before git starts, so the file
+  is truncated whatever git then prints, and `>>`, `>|`, `&>`, `2>err`,
+  `>&file` and `<>file` each open a path the same way. Bash also lets the
+  redirection precede the command name, so `>.claude/settings.json git diff
+  HEAD` is the same command. An output redirection in a segment that runs
+  git is refused wherever it is written, for every subcommand and not only
+  the three gated ones, since `git status`, `git branch` and `git add` are
+  allow-listed too and the write is the shell's, not git's; `2>&1`, an input
+  redirection and a redirection on another command of the same string are
+  left alone.
+* `~/secrets.yaml` is `$HOME/secrets.yaml` to bash and, to a check that read
+  the word as typed, a directory called `~` inside the repository. A word
+  that begins with `~` is outside the repository by definition here, whatever
+  `HOME` happens to be.
 
 No permission rule can close this. `deny` matching is by command prefix, and
 every one of these is an option that can be written anywhere in the argument
@@ -78,6 +93,21 @@ _PROCESS_SUBSTITUTION = ("<(", ">(")
 # that. See `_brace_would_expand`.
 _EXPANDING_BRACE = re.compile(r"\{.*(?:,|\.\.).*\}", re.DOTALL)
 
+# A redirection operator as shlex hands it back: `punctuation_chars` glues a
+# run of `<>&|` into one token, so `>`, `>>`, `>|`, `&>`, `&>>`, `>&`, `<`,
+# `<<`, `<<<`, `<&` and `<>` each arrive whole, and the descriptor of `2>err`
+# arrives as the token `2` before it. `|`, `|&`, `&&` and `||` carry no angle
+# bracket and stay the separators they are; `<(` and `>(` carry a `(` and are
+# the process substitutions above. See `_writing_redirection`.
+_REDIRECTION = re.compile(r"^[<>&|]*[<>][<>&|]*$")
+
+# The tokens that end one simple command and begin the next, so that a
+# redirection is charged to the command it is written in: `echo x >out; git
+# diff HEAD` is echo's redirection, `git diff HEAD | jq . >out` is jq's. A
+# newline is whitespace to shlex and never a token, so two commands on two
+# lines are read as one segment here, which can only over-refuse.
+_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+
 
 def _brace_would_expand(word: str) -> bool:
     """Whether bash would brace-expand `word` before git sees it.
@@ -113,16 +143,59 @@ def _brace_would_expand(word: str) -> bool:
     return "${" in word or _EXPANDING_BRACE.search(word) is not None
 
 
+def _segments(words: list[str]) -> list[list[str]]:
+    """Split the words into simple commands at the shell's separators."""
+
+    found: list[list[str]] = [[]]
+    for word in words:
+        if word in _SEPARATORS or (word and set(word) <= set(";&|")):
+            found.append([])
+            continue
+        found[-1].append(word)
+    return [segment for segment in found if segment]
+
+
+def _writing_redirection(segment: list[str]) -> str | None:
+    """Return the first redirection in `segment` that opens a path for writing.
+
+    Every operator with a `>` in it does - `>`, `>>`, `>|`, `&>`, `&>>`, and
+    `<>`, which opens read-write and creates the file - and so does `>&` when
+    its target is a path (`>&file` is bash's older `&>file`). The exception
+    is a target that names a descriptor: `>&1`, `2>&1` and `>&-` duplicate
+    or close a descriptor and touch no path. `<`, `<<`, `<<<` and `<&` open
+    nothing for writing. The spelling returned is the one typed, descriptor
+    included, so the refusal can name it.
+    """
+
+    for index, word in enumerate(segment):
+        if not _REDIRECTION.match(word) or ">" not in word:
+            continue
+        target = segment[index + 1] if index + 1 < len(segment) else ""
+        if word.endswith("&") and (target.isdigit() or target == "-"):
+            continue
+        descriptor = (
+            segment[index - 1] if index and segment[index - 1].isdigit() else ""
+        )
+        return f"{descriptor}{word}{target}"
+    return None
+
+
 def _is_outside_repo(word: str) -> bool:
     """Whether `word` is a path pointing outside the repository.
 
     `git diff` enters `--no-index` mode implicitly when at least one path points
     outside the working tree, even when the option is omitted. Refusing paths
     outside the repository closes that loophole.
+
+    A leading `~` is outside by definition: bash expands it to a home
+    directory before git runs, never to a path under this checkout, so the
+    answer must not depend on where `HOME` points or whether it is set.
     """
 
     if word.startswith("-"):
         return False
+    if word.startswith("~"):
+        return True
 
     base = Path.cwd()
     if not base.is_relative_to(_REPO):
@@ -152,6 +225,12 @@ def _refusal(word: str) -> str | None:
         return f"{word} points outside the repository (implicit --no-index)"
 
     return None
+
+
+def _runs_git(words: list[str]) -> bool:
+    """Whether `words` name git at all, whichever subcommand follows."""
+
+    return any(word == "git" or word.endswith("/git") for word in words)
 
 
 def _runs_gated_git(words: list[str]) -> bool:
@@ -205,6 +284,26 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # The redirection is the shell's write, not git's, so it is refused on
+    # every git segment: `git status >.claude/settings.json` is allow-listed
+    # and truncates the file as surely as `git diff` would.
+    for segment in _segments(words):
+        if not _runs_git(segment):
+            continue
+        redirection = _writing_redirection(segment)
+        if redirection is not None:
+            print(
+                f"Blocked: {redirection} makes the shell open a file for writing "
+                "before git runs, which truncates it whatever git then prints - "
+                "the same write --output makes, in the shell's own spelling, and "
+                "one bash accepts before the command name as readily as after it. "
+                "`git diff`, `git log` and `git show` print to stdout; read that "
+                "instead. 2>&1, >&2, an input redirection, and a redirection on "
+                "another command of the same string are not refused.",
+                file=sys.stderr,
+            )
+            return 2
 
     if not _runs_gated_git(words):
         return 0
