@@ -344,21 +344,36 @@ def test_summarise_rounds_hours_to_one_place():
     assert report["buckets"]["all"]["max_hours_to_merge"] == 1.1
 
 
-def test_summarise_leaves_the_age_of_an_instant_merge_out():
-    """A pull merged in the same second contributes no measurable age.
+def test_summarise_counts_an_instant_merge_as_zero_hours():
+    """A pull merged in the same second it was opened took zero hours, not no time.
 
-    `ages` is built with `if (hours := hours_between(...))`, so a zero-hour
-    span is dropped alongside the None from an unmerged pull. It still counts
-    as merged - only the duration is missing - and with nothing else in the
-    window the medians are None rather than 0.0.
+    Auto-merged bot pulls do exactly this. `hours_between` returns 0.0 for
+    them, and 0.0 is falsy, so a truthiness guard would drop it alongside the
+    None of a missing timestamp. The zero must stay in `ages`: with only
+    instant merges in the window the answer is 0.0, not None.
     """
     report = pr_metrics.summarise([pull(1, merged="2026-01-01T00:00:00Z")], None)
     bucket = report["buckets"]["all"]
 
     assert bucket["merged"] == 1
     assert bucket["acceptance_rate"] == 1.0
-    assert bucket["median_hours_to_merge"] is None
-    assert bucket["max_hours_to_merge"] is None
+    assert bucket["median_hours_to_merge"] == 0.0
+    assert bucket["max_hours_to_merge"] == 0.0
+
+
+def test_summarise_instant_merge_pulls_the_median_down():
+    """One instant merge and one five-hour merge have a median of 2.5, not 5.0."""
+    report = pr_metrics.summarise(
+        [
+            pull(1, merged="2026-01-01T00:00:00Z"),
+            pull(2, merged="2026-01-01T05:00:00Z"),
+        ],
+        None,
+    )
+    bucket = report["buckets"]["all"]
+
+    assert bucket["median_hours_to_merge"] == 2.5
+    assert bucket["max_hours_to_merge"] == 5.0
 
 
 def test_summarise_reports_no_durations_when_nothing_merged():
