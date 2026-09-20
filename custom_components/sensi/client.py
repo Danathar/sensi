@@ -408,7 +408,8 @@ class SensiClient:
                 "fan mode was set but the device does not support it"
             )
 
-        # "circulating_fan":{"capable":"yes","max_duty_cycle":100,"min_duty_cycle":10,"step":5}
+        duty_cycle = self._clamp_duty_cycle(device, duty_cycle)
+
         request = SetCirculatingFanEvent(
             device.identifier, SetCirculatingFanEventValue(enabled, duty_cycle)
         )
@@ -421,6 +422,28 @@ class SensiClient:
             device.state.circulating_fan.duty_cycle = duty_cycle
 
         return action_response
+
+    @staticmethod
+    def _clamp_duty_cycle(device: SensiDevice, duty_cycle: int) -> int:
+        """Snap a duty cycle to what the thermostat accepts.
+
+        The backend rejects a value outside its reported bounds, e.g.
+        "Attempted to set /circulating_fan/min_duty_cycle:0 below allowable
+        value 10", so the value is rounded to the nearest step from the
+        minimum and then clamped to [min, max].
+        """
+
+        # "circulating_fan":{"capable":"yes","max_duty_cycle":100,"min_duty_cycle":10,"step":5}
+        capabilities = device.capabilities.circulating_fan
+        minimum = capabilities.min_duty_cycle
+        step = capabilities.step
+
+        # The capability defaults are non-zero, but a thermostat can still
+        # report a step of 0 explicitly; there is nothing to round to then.
+        if step > 0:
+            duty_cycle = minimum + round((duty_cycle - minimum) / step) * step
+
+        return max(minimum, min(capabilities.max_duty_cycle, duty_cycle))
 
     async def async_set_fan_mode(
         self, device: SensiDevice, mode: str

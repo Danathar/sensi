@@ -29,7 +29,7 @@ from .const import (
     ATTR_POWER_STATUS,
     CONFIG_FAN_SUPPORT,
     DEFAULT_CONFIG_FAN_SUPPORT,
-    FAN_CIRCULATE_DEFAULT_DUTY_CYCLE,
+    FAN_CIRCULATE_DUTY_CYCLE_DEFAULT,
     LOGGER,
     SENSI_DOMAIN,
     SENSI_FAN_AUTO,
@@ -521,6 +521,16 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         if not fan_modes or fan_mode not in fan_modes:
             raise ValueError(f"Unsupported fan mode: {fan_mode}")
 
+        # The duty cycle the user set on the thermostat. Both paths below send
+        # it back unchanged: enabling with it is the point of Circulate, and
+        # disabling with it leaves the thermostat's value alone for next time.
+        # The state reports 0 when none was ever set, and the backend rejects
+        # 0 ("Attempted to set /circulating_fan/min_duty_cycle:0 below
+        # allowable value 10"), so that case falls back to the default.
+        duty_cycle = (
+            self._state.circulating_fan.duty_cycle or FAN_CIRCULATE_DUTY_CYCLE_DEFAULT
+        )
+
         if fan_mode == SENSI_FAN_CIRCULATE:
             # First set fan_mode to auto
             response = await self.coordinator.client.async_set_fan_mode(
@@ -530,24 +540,21 @@ class SensiThermostat(SensiEntity, ClimateEntity):
 
             # Next enable the circulating fan state
             response = await self.coordinator.client.async_set_circulating_fan_mode(
-                self._device, True, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
+                self._device, True, duty_cycle
             )
-            raise_if_error(
-                response,
-                "fan mode",
-                f"{FAN_CIRCULATE_DEFAULT_DUTY_CYCLE} duty cycle",
-            )
+            raise_if_error(response, "fan mode", f"{duty_cycle} duty cycle")
 
         else:
             # First reset circulating fan mode state and then force set fan mode
-            # The min duty cycle is 10. Otherwise the error "Attempted to set /circulating_fan/min_duty_cycle:0 below allowable value 10" is returned.
             if self._device.capabilities.circulating_fan.capable:
                 response = await self.coordinator.client.async_set_circulating_fan_mode(
-                    self._device, False, FAN_CIRCULATE_DEFAULT_DUTY_CYCLE
+                    self._device, False, duty_cycle
                 )
 
                 raise_if_error(
-                    response, "circulating fan mode", "False with duty cycle of 0"
+                    response,
+                    "circulating fan mode",
+                    f"False with duty cycle of {duty_cycle}",
                 )
 
             response = await self.coordinator.client.async_set_fan_mode(
