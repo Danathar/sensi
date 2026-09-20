@@ -315,8 +315,15 @@ def test_git_really_prints_the_file_beside_a_process_substitution(
         "cat <(echo x)",
     ],
 )
-def test_a_process_substitution_outside_a_gated_git_is_not_gated(command: str) -> None:
-    """The gate is about git's arguments; two other programs' output is not one."""
+def test_a_process_substitution_with_no_gated_git_is_not_gated(command: str) -> None:
+    """A command string that runs no gated git is not this hook's business.
+
+    The scope is the whole string, as it is for every shell-expansion rule
+    here: `echo $x; git diff` is refused too, because `_runs_gated_git`
+    marks the payload as gated wherever the git falls in it. So this pins
+    only that the rule stays off when no gated git is present, not that a
+    substitution in another command of the same string passes.
+    """
 
     completed = _run(_payload(command))
     assert completed.returncode == 0, completed.stderr
