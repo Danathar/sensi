@@ -173,9 +173,20 @@ class SensiClient:
 
         # The initial `state` event is what lists the account's thermostats;
         # until it arrives there is no device to ask for info or capabilities.
+        #
+        # The waiter is registered before connecting. socketio dispatches
+        # events from its read loop, and connect() returns only after that
+        # loop has woken it through an Event - so a `state` packet right
+        # behind the namespace handshake reaches _update_state before this
+        # coroutine gets control back. A future created after connect()
+        # returned would then only ever time out, and a backend that answered
+        # promptly would be reported as one that never answered.
+        state_future = await self._create_event_future("state", None)
         try:
             await self._connect()
-            await self._wait_for_event("state", None, PREPARE_DEVICES_TIMEOUT)
+            await self._wait_for_event(
+                "state", None, PREPARE_DEVICES_TIMEOUT, future=state_future
+            )
         except SensiConnectionError as err:
             raise ConfigEntryNotReady from err
         except TimeoutError as err:
@@ -189,6 +200,11 @@ class SensiClient:
             raise ConfigEntryNotReady(
                 f"No state event within {PREPARE_DEVICES_TIMEOUT} seconds"
             ) from err
+        finally:
+            # Already done when the event arrived, already cancelled by
+            # wait_for on a timeout; this is for a connect that raised, so
+            # the waiter is not left pending for the next state event.
+            state_future.cancel()
 
         if not self._devices:
             # The backend answered, and the answer is that there is nothing
@@ -697,7 +713,11 @@ class SensiClient:
         return ActionResponse(None, response_data or {})
 
     async def _wait_for_event(
-        self, event: str, icd_id: str | None, timeout: int = 5
+        self,
+        event: str,
+        icd_id: str | None,
+        timeout: int = 5,
+        future: asyncio.Future | None = None,
     ) -> any:
         """Wait for an event response and return its payload.
 
@@ -706,9 +726,14 @@ class SensiClient:
         resolves to, so a caller could not tell "arrived" from "never came" -
         and wait_for_devices did not try, which is how a backend that never
         sent `state` produced a loaded entry with no devices.
+
+        `future` is a waiter the caller registered earlier with
+        _create_event_future, for an event that may already be in flight by
+        the time this is called; when it is not given one is created here.
         """
 
-        future = await self._create_event_future(event, icd_id)
+        if future is None:
+            future = await self._create_event_future(event, icd_id)
 
         try:
             return await asyncio.wait_for(future, timeout)

@@ -819,6 +819,42 @@ class TestWaitForDevices:
         assert client.get_devices() == []
         assert "retrying" not in caplog.text
 
+    async def test_a_state_event_delivered_inside_connect_is_not_a_timeout(
+        self, mock_coordinator, mock_json, monkeypatch, caplog
+    ):
+        """The initial `state` may arrive before _connect returns; it still counts.
+
+        socketio dispatches events from its read loop while connect() is
+        waiting to be woken, so the first `state` can reach _update_state
+        before wait_for_devices gets control back. The waiter has to be
+        registered before connecting, or a backend that answered at once is
+        reported as one that never answered.
+        """
+        monkeypatch.setattr(
+            "custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.01
+        )
+
+        client = mock_coordinator.client
+        loop = client._hass.loop  # noqa: SLF001
+
+        async def _connect_and_deliver_state():
+            client._on_event("state", [mock_json])  # noqa: SLF001
+
+        async def _answer_getters(name, data, *a, **k):
+            # The getter futures are created after the send, so answer on the
+            # next loop iteration the way the emit loop would.
+            event = {"get_info": "info", "get_capabilities": "capabilities"}[name]
+            loop.call_soon(client._on_event, event, {"icd_id": data["icd_id"]})  # noqa: SLF001
+
+        with (
+            patch.object(client, "_connect", new=_connect_and_deliver_state),
+            patch.object(client, "_send_event", new=_answer_getters),
+        ):
+            await client.wait_for_devices()
+
+        assert [d.identifier for d in client.get_devices()] == [mock_json["icd_id"]]
+        assert "Timed out waiting for event 'state'" not in caplog.text
+
     async def test_a_state_event_with_no_devices_completes_with_a_warning(
         self, mock_coordinator, caplog
     ):
