@@ -64,7 +64,19 @@ supply-chain concern.
   implicit `--no-index` via external paths or a `~` bash expands to a home
   directory, `--output`, `-O`, and an output redirection on the git command —
   `git diff HEAD >out`, or the same redirection written before the command
-  name) is the failure mode the hook exists to refuse.
+  name) is the failure mode the hook exists to refuse. The redirection is not
+  git's alone: an allow rule ending in `:*` means "this command with any
+  arguments", and the redirection is part of the string that rule matches, so
+  the test wrapper run with an output redirection onto the settings file
+  truncated that file before a test was collected, and `gh run view --log`
+  with one onto the wrapper overwrote the wrapper, neither with a prompt —
+  the wrapper's own refusals cover pytest options, never a redirection it is
+  never passed. The hook refuses an output redirection on every `:*` row that
+  is not git's (the test wrapper, the PR metrics script, and the `gh pr`,
+  `gh issue` and `gh run` read verbs), wherever in the command it is written;
+  pipes, `2>&1` and input redirections are untouched, and a command no rule
+  covers prompts on its own. The gate's test file derives that list from the
+  settings file, so a `:*` row added there fails until the hook lists it.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.

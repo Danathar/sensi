@@ -12,6 +12,13 @@ without an absolute path or a `..` in the word as typed. The deny rules bind
 the `Read` and `Edit` tools, not a shell command, so the hook is the only
 thing standing between the allow list and `secrets.yaml` or `.claude/hooks/`.
 
+The redirection is not git's alone: nine other allow rows carry a trailing
+`:*`, and `python3 scripts/run_tests.py >.claude/settings.json` was approved
+on its prefix while bash truncated the settings file. The hook refuses an
+output redirection on a segment that runs one of those commands too, and the
+list of them is derived from the settings file here, so a `:*` row added there
+fails until the hook lists it.
+
 Each test feeds the committed script a payload on stdin, the way Claude Code
 does, and checks the exit code: 0 lets the call through, 2 blocks it and puts
 the reason on stderr. The script is run by its own path so a lost executable
@@ -441,6 +448,282 @@ def test_bash_really_truncates_the_target_of_a_redirection_written_first(
     ):
         completed = _run(_payload(command))
         assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+# --------------------------------------------------------------------------
+# The same write, on the allow-listed commands that are not git.
+# --------------------------------------------------------------------------
+
+
+def _gated_prefixes_from_settings() -> list[str]:
+    """Return the `Bash(...:*)` allow rows other than git's, as command prefixes."""
+
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    prefixes = [
+        rule[len("Bash(") : -len(":*)")]
+        for rule in settings["permissions"]["allow"]
+        if rule.startswith("Bash(") and rule.endswith(":*)")
+    ]
+    return [prefix for prefix in prefixes if not prefix.startswith("git ")]
+
+
+def test_every_allow_rule_with_arguments_is_refused_a_writing_redirection() -> None:
+    """The list of gated commands lives in the hook; this keeps it honest.
+
+    A rule ending in `:*` means "this command with any arguments", and a
+    redirection is part of the string that rule matches, so every one of
+    these writes any path the caller names unless the hook refuses it. The
+    commands are derived from the settings file rather than restated, so a
+    rule added there fails here until the hook lists it. The rows with no
+    `:*` need no entry; `test_a_redirection_on_an_unlisted_command_is_left_alone`
+    holds that half.
+    """
+
+    prefixes = _gated_prefixes_from_settings()
+    assert len(prefixes) >= 9, prefixes
+    for prefix in prefixes:
+        command = f"{prefix} >.claude/settings.json"
+        completed = _run(_payload(command))
+        assert completed.returncode == 2, f"{command!r} was not blocked"
+        assert ">.claude/settings.json" in completed.stderr
+        assert prefix in completed.stderr
+
+
+def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
+    """Neither the hook nor the settings file may carry a row the other lacks."""
+
+    source = _HOOK.read_text(encoding="utf-8")
+    start = source.index("_GATED_PREFIXES = (")
+    end = source.index("\n)\n", start)
+    listed = sorted(
+        " ".join(json.loads(f"[{line.strip().strip('(),')}]"))
+        for line in source[start:end].splitlines()[1:]
+        if line.strip().startswith("(")
+    )
+    assert listed == sorted(_gated_prefixes_from_settings())
+
+
+@pytest.mark.parametrize(
+    ("command", "spelling"),
+    [
+        (
+            "python3 scripts/run_tests.py >.claude/settings.json",
+            ">.claude/settings.json",
+        ),
+        ("python3 scripts/run_tests.py tests/test_x.py >> out", ">>out"),
+        (
+            "python3 scripts/pr_metrics.py --json 2>docs/SECURITY-AI.md",
+            "2>docs/SECURITY-AI.md",
+        ),
+        ("gh run view 1 --log >scripts/run_tests.py", ">scripts/run_tests.py"),
+        ("gh pr diff 1 &>out", "&>out"),
+        ("gh issue list >|out", ">|out"),
+        ("gh run list <>out", "<>out"),
+        ("gh pr view 1 >&out", ">&out"),
+        ("gh issue view 1 2>&1 >out", ">out"),
+        ("gh pr list >/dev/null", ">/dev/null"),
+        # Bash lets the redirection precede the name; it is the same command,
+        # and `git status; >out gh pr list` is allowed on its git prefix.
+        (">out python3 scripts/run_tests.py", ">out"),
+        ("git status; >out gh pr list", ">out"),
+        ("FOO=1 python3 scripts/run_tests.py >out", ">out"),
+        ("FOO=1 >out python3 scripts/run_tests.py", ">out"),
+        ("time python3 scripts/run_tests.py >out", ">out"),
+        ("command gh pr list >out", ">out"),
+        ("gh pr view 1 {fd}>out", "{fd}>out"),
+        # A `$(...)` is a command of its own; the gated command inside it is
+        # decided on its own, redirection included.
+        ("echo $(gh run view 1 --log >out)", ">out"),
+        ("ls | gh pr list >out", ">out"),
+        ("gh pr list 2>&1 | tee x; gh run list >out", ">out"),
+        # A wrapper's own options come before the name it runs.
+        ("command -p gh pr list >out", ">out"),
+        ("env -i python3 scripts/run_tests.py >out", ">out"),
+        # A comment after the write does not hide it, and a quoted `#` is
+        # a word.
+        ("gh pr list >out # ok", ">out"),
+        ("gh pr list '#' >out", ">out"),
+    ],
+)
+def test_an_output_redirection_on_a_gated_command_is_refused(
+    command: str, spelling: str
+) -> None:
+    """The write reaches every Edit deny rule the way `git diff HEAD >out` does."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "Blocked" in completed.stderr
+    assert spelling in completed.stderr
+    assert "read that instead" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The refusal is the operator that opens a path for writing. A pipe,
+        # a descriptor form and an input redirection open none, and AGENTS.md
+        # tells a session to pipe the log output.
+        "python3 scripts/run_tests.py 2>&1 | tail -5",
+        "gh run view 123 --log-failed 2>&1 | sed 's/x/y/'",
+        "gh pr view 1 --json title -q .title",
+        "python3 scripts/run_tests.py <scripts/run_tests.py",
+        "gh pr list >&2",
+        "gh issue list 2>&-",
+        "python3 scripts/run_tests.py tests -k 'a or b'",
+        "python3 scripts/pr_metrics.py --limit 20 --json",
+        "x=$(gh pr list); echo $x",
+        # A `#` that begins a word after whitespace starts a comment bash
+        # drops through the end of the line; the next line is still read.
+        "gh pr list # output > file",
+        "python3 scripts/run_tests.py # >(cat >out)",
+        "git diff HEAD # > out",
+        "gh pr list #c\ngh run list",
+        "command -v gh",
+        # The substitution is the outer command's; its body is the gated
+        # command, decided on its own.
+        "echo $(gh pr list)",
+        "for n in $(gh pr list --json number -q '.[].number'); do echo $n; done",
+        # An assignment on another command, or before git, is left alone.
+        "FOO=1 echo x; gh pr list",
+        "x=1; gh pr list",
+        "PAGER=cat git log -1",
+    ],
+)
+def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None:
+    """The allow list exists so these run without a prompt; keep it that way."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A command no allow rule covers prompts on its own, and refusing it
+        # here would be the hook deciding a question the settings file already
+        # decides; the three exact rows carry no `:*`, so a redirection makes
+        # the string match none of them. A redirection on another command of
+        # the same string is that command's own. The last two are refused by
+        # the Bash tool itself before any rule or hook sees them ("does not
+        # accept compound statements with redirection", Claude Code 2.1.267).
+        "echo x >out",
+        "ruff check . >out",
+        "python3 scripts/check_requirements_sync.py >out",
+        "python3 scripts/other_script.py >out",
+        "echo x >out; gh pr list",
+        "gh pr list | tee out",
+        ">out echo x; python3 scripts/run_tests.py",
+        "gh pr list; { gh run list; } >out",
+        "(gh pr list) >out",
+        "cat <(gh pr list) >out",
+        "diff <(gh pr list) <(gh run list)",
+    ],
+)
+def test_a_redirection_on_an_unlisted_command_is_left_alone(command: str) -> None:
+    """The hook re-gates what the permission rules wave through, nothing more."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A process substitution written as an argument runs its body as
+        # part of the approved string, and the body is held to no rule.
+        "gh pr list >(cat >out)",
+        ">(cat >out) gh pr list",
+        "python3 scripts/run_tests.py <(true)",
+        "git status; gh run list >(tee out)",
+        # A process substitution is a nested command as well, so the outer
+        # command's redirection is still its own; the substitution is what
+        # the refusal names.
+        "python3 scripts/run_tests.py <(true) >out",
+        "gh pr list >(cat) 2>out",
+        # A command substitution or a backtick runs its body the same way.
+        "python3 scripts/run_tests.py $(printf x >.claude/settings.json)",
+        "python3 scripts/run_tests.py $(date) >out",
+        "gh pr list `printf x >out`",
+        "python3 scripts/run_tests.py tests -k $K",
+        'gh pr view 1 --json "$F"',
+        # A quoted `$` is refused with the rest, as it is in a gated git
+        # command: the word is judged by its characters, not its quoting.
+        "gh pr list --search 'a $b'",
+    ],
+)
+def test_a_process_substitution_in_a_gated_command_that_is_not_git_is_refused(
+    command: str,
+) -> None:
+    """The inner command is not this hook's to inspect, so the form is refused."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "substitution" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # An assignment before the name is an environment the command runs
+        # under: pytest reads PYTEST_ADDOPTS after the wrapper has inspected
+        # only sys.argv, so `--junitxml` reaches it unseen (review on #244).
+        "PYTEST_ADDOPTS=--junitxml=.claude/settings.json python3 scripts/run_tests.py tests",
+        "PYTHONPATH=/tmp python3 scripts/pr_metrics.py",
+        "GH_HOST=other gh pr list",
+        "FOO=1 gh run list",
+    ],
+)
+def test_an_assignment_before_a_gated_command_that_is_not_git_is_refused(
+    command: str,
+) -> None:
+    """The wrapper cannot see its environment, so the hook refuses it."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "assignment" in completed.stderr
+
+
+def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:
+    """A `#` after whitespace starts a comment; elsewhere it is a character."""
+
+    completed = _run(_payload("gh pr list #c\ngh run list >out"))
+    assert completed.returncode == 2, (
+        "the command on the line after a comment was hidden"
+    )
+    completed = _run(_payload("git diff --stat#x /dev/null secrets.yaml"))
+    assert completed.returncode == 2, "a mid-word # hid the operands after it"
+
+
+def test_bash_really_truncates_the_target_on_a_command_that_is_not_git(
+    tmp_path: Path,
+) -> None:
+    """The reach the rule exists for, run for real.
+
+    A stand-in in a throwaway directory where the wrapper does not even exist:
+    bash opens the target before python3 runs, so the file is emptied although
+    the command then fails.
+    """
+
+    victim = tmp_path / "victim"
+    victim.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    completed = subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", "python3 scripts/run_tests.py >victim"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode != 0, "the stand-in command was meant to fail"
+    assert "ORIGINAL-CONTENT" not in victim.read_text(encoding="utf-8"), (
+        "bash no longer truncates the target before the command runs; re-derive "
+        "why _GATED_PREFIXES exists"
+    )
+    completed = _run(_payload("python3 scripts/run_tests.py >victim"))
+    assert completed.returncode == 2, (
+        "the command just shown to truncate a file was not blocked"
+    )
 
 
 def test_git_really_reads_a_home_file_named_with_a_tilde(tmp_path: Path) -> None:
