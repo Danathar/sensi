@@ -583,6 +583,10 @@ def test_an_output_redirection_on_a_gated_command_is_refused(
         # command, decided on its own.
         "echo $(gh pr list)",
         "for n in $(gh pr list --json number -q '.[].number'); do echo $n; done",
+        # An assignment on another command, or before git, is left alone.
+        "FOO=1 echo x; gh pr list",
+        "x=1; gh pr list",
+        "PAGER=cat git log -1",
     ],
 )
 def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None:
@@ -656,6 +660,28 @@ def test_a_process_substitution_in_a_gated_command_that_is_not_git_is_refused(
     completed = _run(_payload(command))
     assert completed.returncode == 2, f"{command!r} was not blocked"
     assert "substitution" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # An assignment before the name is an environment the command runs
+        # under: pytest reads PYTEST_ADDOPTS after the wrapper has inspected
+        # only sys.argv, so `--junitxml` reaches it unseen (review on #244).
+        "PYTEST_ADDOPTS=--junitxml=.claude/settings.json python3 scripts/run_tests.py tests",
+        "PYTHONPATH=/tmp python3 scripts/pr_metrics.py",
+        "GH_HOST=other gh pr list",
+        "FOO=1 gh run list",
+    ],
+)
+def test_an_assignment_before_a_gated_command_that_is_not_git_is_refused(
+    command: str,
+) -> None:
+    """The wrapper cannot see its environment, so the hook refuses it."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "assignment" in completed.stderr
 
 
 def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:

@@ -427,7 +427,7 @@ def _refusal(word: str) -> str | None:
     return None
 
 
-def _command_words(segment: list[str]) -> tuple[list[str], bool]:
+def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
     """Return the words the command in `segment` receives, and whether a wrapper led.
 
     A redirection - its operator, its target and a descriptor written before
@@ -442,6 +442,7 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool]:
 
     words: list[str] = []
     wrapped = False
+    assigned = False
     index = 0
     while index < len(segment):
         word = segment[index]
@@ -466,9 +467,10 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool]:
             name = word.split("=", 1)[0]
             if ("=" in word and name.isidentifier()) or word in _COMMAND_WRAPPERS:
                 wrapped = wrapped or word in _COMMAND_WRAPPERS
+                assigned = assigned or word not in _COMMAND_WRAPPERS
                 continue
         words.append(word)
-    return words, wrapped
+    return words, wrapped, assigned
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
@@ -479,7 +481,7 @@ def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
     start; without one, only the first word names the command.
     """
 
-    words, wrapped = _command_words(segment)
+    words, wrapped, _assigned = _command_words(segment)
     starts = range(len(words)) if wrapped else range(min(len(words), 1))
     for start in starts:
         for prefix in _GATED_PREFIXES:
@@ -585,6 +587,18 @@ def main() -> int:
                     "to stdout; read that instead, or pipe it. 2>&1, >&2, an input "
                     "redirection, and a redirection on a command no allow rule "
                     "covers are not refused.",
+                    file=sys.stderr,
+                )
+                return 2
+            if prefix and _command_words(segment)[2]:
+                print(
+                    f"Blocked: an assignment before `{' '.join(prefix)}` is an "
+                    "environment the command runs under, and for these commands "
+                    "that changes what runs or where it goes - PYTEST_ADDOPTS= adds "
+                    "options the wrapper never sees, PYTHONPATH= puts a module of "
+                    "its own ahead of the wrapper's imports, GH_HOST= sends the "
+                    "token elsewhere. Run the command without the assignment; a "
+                    "git invocation is not affected by this rule.",
                     file=sys.stderr,
                 )
                 return 2
