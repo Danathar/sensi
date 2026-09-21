@@ -36,6 +36,22 @@ three of their arguments do file I/O that has nothing to do with the repository:
   the word as typed, a directory called `~` inside the repository. A word
   that begins with `~` is outside the repository by definition here, whatever
   `HOME` happens to be.
+* The redirection is not git's alone. Nine other allow rows in
+  `.claude/settings.json` carry a trailing `:*` - "this command with any
+  arguments" - and an output redirection is part of the string that rule
+  matches, so `python3 scripts/run_tests.py >.claude/settings.json`
+  truncated the settings file before a test was collected (bash opens the
+  target first, so the file is emptied even when the command then fails)
+  and `gh run view 1 --log >scripts/run_tests.py` overwrote the wrapper
+  that carries the test rules, both with no prompt; the wrapper's own
+  refusal list covers pytest options, never a redirection it is never
+  passed. Those commands are named in `_GATED_PREFIXES`, and an output
+  redirection in a segment that runs one of them is refused the way one on
+  a git segment is. Descriptor forms, input redirections, pipes and a
+  command no allow rule covers are left alone - that one prompts on its
+  own - and the rows with no `:*` (`ruff check .`, `ruff format --check .`,
+  `python3 scripts/check_requirements_sync.py`) need no entry, because a
+  redirection makes the string match none of them.
 
 No permission rule can close this. `deny` matching is by command prefix, and
 every one of these is an option that can be written anywhere in the argument
@@ -112,6 +128,36 @@ _DESCRIPTOR = re.compile(r"^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$")
 # newline is whitespace to shlex and never a token, so two commands on two
 # lines are read as one segment here, which can only over-refuse.
 _SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+
+# The allow rows of `.claude/settings.json` that carry a trailing `:*`, other
+# than git's, which `_runs_git` covers: each is a command prefix the
+# permission layer approves with any arguments after it, and a shell output
+# redirection is part of "any arguments". `test_git_file_argument_gate.py`
+# derives this list from the settings file rather than restating it, so a
+# rule added there fails until it is listed here. None of these commands takes
+# a flag that names a file to write: `scripts/run_tests.py` refuses the pytest
+# options that do (see its header), `scripts/pr_metrics.py` takes `--limit`,
+# `--since`, `--repo` and `--json`, and the `gh` read verbs print to stdout.
+_GATED_PREFIXES = (
+    ("python3", "scripts/run_tests.py"),
+    ("python3", "scripts/pr_metrics.py"),
+    ("gh", "pr", "view"),
+    ("gh", "pr", "diff"),
+    ("gh", "pr", "list"),
+    ("gh", "issue", "view"),
+    ("gh", "issue", "list"),
+    ("gh", "run", "view"),
+    ("gh", "run", "list"),
+)
+
+# Words that stand before the name of the command they run and are not part
+# of the prefix an allow rule matches, the way a leading `NAME=value` is not:
+# `time python3 scripts/run_tests.py >out` is the wrapper's redirection. A
+# wrapper's own options are not modelled (`env -i python3 ...` matches nothing
+# here), and such a string matches no allow rule either, so it prompts.
+_COMMAND_WRAPPERS = frozenset(
+    {"time", "command", "builtin", "exec", "env", "nohup", "nice"}
+)
 
 
 def _brace_would_expand(word: str) -> bool:
@@ -207,7 +253,22 @@ def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
     """
 
     found: list[list[str]] = [[]]
+    outer: list[list[str]] = []
     for word, twin in zip(words, masked, strict=True):
+        # A `$(...)` is a nested command: its words become a segment of their
+        # own, and the command around it goes on after the `)` with the `$`
+        # still in place, so `python3 scripts/run_tests.py $(date) >out` is
+        # one command whose redirection is its own, and `echo $(gh run view 1
+        # --log >out)` is a gh command with a redirection. A split that
+        # ended the outer command at the `(` put the redirection in a
+        # segment with no command in it.
+        if twin == "(" and found[-1] and found[-1][-1].endswith("$"):
+            outer.append(found.pop())
+            found.append([])
+            continue
+        if twin == ")" and outer:
+            found.append(outer.pop())
+            continue
         if twin in _SEPARATORS or (twin and set(twin) <= set(";&|")):
             found.append([])
             continue
@@ -289,6 +350,56 @@ def _refusal(word: str) -> str | None:
     return None
 
 
+def _command_words(segment: list[str]) -> list[str]:
+    """Return the words the command in `segment` receives, name first.
+
+    A redirection - its operator, its target and a descriptor written before
+    it - is the shell's, and bash lets it stand anywhere in the simple
+    command, so `>out python3 scripts/run_tests.py` and `python3 >out
+    scripts/run_tests.py` both come back as `['python3',
+    'scripts/run_tests.py']`. A leading `NAME=value` and a leading wrapper
+    word are stepped over, since neither is part of the prefix an allow rule
+    matches. A `$` left behind by a nested `$(...)` is dropped from the end of
+    a word, so the words are the ones typed around the substitution.
+    """
+
+    words: list[str] = []
+    index = 0
+    while index < len(segment):
+        word = segment[index]
+        if _REDIRECTION.match(word):
+            index += 2  # the operator and its target
+            continue
+        if (
+            _DESCRIPTOR.match(word)
+            and index + 1 < len(segment)
+            and _REDIRECTION.match(segment[index + 1])
+        ):
+            index += 1  # the descriptor; the operator is next
+            continue
+        index += 1
+        if word.endswith("$"):
+            word = word[:-1]
+            if not word:
+                continue
+        if not words:
+            name = word.split("=", 1)[0]
+            if ("=" in word and name.isidentifier()) or word in _COMMAND_WRAPPERS:
+                continue
+        words.append(word)
+    return words
+
+
+def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
+    """Return the `_GATED_PREFIXES` entry the segment's leading words match."""
+
+    words = _command_words(segment)
+    for prefix in _GATED_PREFIXES:
+        if tuple(words[: len(prefix)]) == prefix:
+            return prefix
+    return None
+
+
 def _runs_git(words: list[str]) -> bool:
     """Whether `words` name git at all, whichever subcommand follows."""
 
@@ -356,6 +467,22 @@ def main() -> int:
     # and truncates the file as surely as `git diff` would.
     for segment in _segments(words, masked):
         if not _runs_git(segment):
+            prefix = _gated_prefix(segment)
+            redirection = _writing_redirection(segment) if prefix else None
+            if redirection is not None:
+                print(
+                    f"Blocked: {redirection} makes the shell open a file for writing "
+                    f"before `{' '.join(prefix or ())}` runs, which truncates it "
+                    "whatever the command then prints. The allow rule for that "
+                    "command matches its prefix and the redirection is the rest of "
+                    "the string, so nothing else would prompt - it is the same write "
+                    "this hook refuses for `git diff HEAD >out`. These commands print "
+                    "to stdout; read that instead, or pipe it. 2>&1, >&2, an input "
+                    "redirection, and a redirection on a command no allow rule "
+                    "covers are not refused.",
+                    file=sys.stderr,
+                )
+                return 2
             continue
         redirection = _writing_redirection(segment)
         if redirection is not None:
