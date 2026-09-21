@@ -231,6 +231,34 @@ def _mask_quotes(command: str) -> str:
     return "".join(masked)
 
 
+def _strip_comments(command: str) -> str:
+    """Return the command with every shell comment removed.
+
+    A `#` that begins a word after whitespace (or the start of the string)
+    starts a comment bash drops through the end of the line, so `python3
+    scripts/run_tests.py # output > file` opens nothing and must not be
+    refused for the `>` in the comment. The spans are found on the
+    quote-masked copy, where a quoted `#` is a `Q`, and cut from the command
+    itself; `_lex` is then handed a string with no comment in it, and its
+    `commenters = ""` still holds for the `#` this leaves in place: one inside
+    a word (`HEAD^#x`), which is a character of the word, and one straight
+    after an operator (`;#`), which is kept as a word and can only
+    over-refuse.
+    """
+
+    masked = _mask_quotes(command)
+    kept: list[str] = []
+    index = 0
+    while index < len(command):
+        if masked[index] == "#" and (index == 0 or masked[index - 1] in " \t\n"):
+            end = masked.find("\n", index)
+            index = len(command) if end == -1 else end
+            continue
+        kept.append(command[index])
+        index += 1
+    return "".join(kept)
+
+
 def _lex(command: str) -> list[str]:
     """Split a command into bash's words, with operators as words of their own."""
 
@@ -360,8 +388,8 @@ def _refusal(word: str) -> str | None:
     return None
 
 
-def _command_words(segment: list[str]) -> list[str]:
-    """Return the words the command in `segment` receives, name first.
+def _command_words(segment: list[str]) -> tuple[list[str], bool]:
+    """Return the words the command in `segment` receives, and whether a wrapper led.
 
     A redirection - its operator, its target and a descriptor written before
     it - is the shell's, and bash lets it stand anywhere in the simple
@@ -374,6 +402,7 @@ def _command_words(segment: list[str]) -> list[str]:
     """
 
     words: list[str] = []
+    wrapped = False
     index = 0
     while index < len(segment):
         word = segment[index]
@@ -388,6 +417,8 @@ def _command_words(segment: list[str]) -> list[str]:
             index += 1  # the descriptor; the operator is next
             continue
         index += 1
+        if word.startswith(_PROCESS_SUBSTITUTION):
+            continue  # the substitution's opening; its body is a segment of its own
         if word.endswith("$"):
             word = word[:-1]
             if not word:
@@ -395,18 +426,26 @@ def _command_words(segment: list[str]) -> list[str]:
         if not words:
             name = word.split("=", 1)[0]
             if ("=" in word and name.isidentifier()) or word in _COMMAND_WRAPPERS:
+                wrapped = wrapped or word in _COMMAND_WRAPPERS
                 continue
         words.append(word)
-    return words
+    return words, wrapped
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
-    """Return the `_GATED_PREFIXES` entry the segment's leading words match."""
+    """Return the `_GATED_PREFIXES` entry the segment's leading words match.
 
-    words = _command_words(segment)
-    for prefix in _GATED_PREFIXES:
-        if tuple(words[: len(prefix)]) == prefix:
-            return prefix
+    Behind a wrapper the name may stand after the wrapper's own options
+    (`command -p gh pr list >out`), so every later word is tried as the
+    start; without one, only the first word names the command.
+    """
+
+    words, wrapped = _command_words(segment)
+    starts = range(len(words)) if wrapped else range(min(len(words), 1))
+    for start in starts:
+        for prefix in _GATED_PREFIXES:
+            if tuple(words[start : start + len(prefix)]) == prefix:
+                return prefix
     return None
 
 
@@ -450,6 +489,7 @@ def main() -> int:
         return 0
 
     try:
+        command = _strip_comments(command)
         words = _lex(command)
         masked = _lex(_mask_quotes(command))
     except ValueError:
@@ -478,6 +518,19 @@ def main() -> int:
     for segment in _segments(words, masked):
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
+            if prefix and any(
+                word.startswith(_PROCESS_SUBSTITUTION) for word in segment
+            ):
+                print(
+                    f"Blocked: a process substitution in `{' '.join(prefix)}` runs "
+                    "the command inside it as part of a string the allow rule "
+                    "approved on its prefix alone, and that inner command is held "
+                    "to no rule - `gh pr list >(cat >out)` truncates the file while "
+                    "gh prints as usual. Write the inner command as a command of "
+                    "its own.",
+                    file=sys.stderr,
+                )
+                return 2
             redirection = _writing_redirection(segment) if prefix else None
             if redirection is not None:
                 print(

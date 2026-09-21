@@ -537,10 +537,13 @@ def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
         ("echo $(gh run view 1 --log >out)", ">out"),
         ("ls | gh pr list >out", ">out"),
         ("gh pr list 2>&1 | tee x; gh run list >out", ">out"),
-        # A process substitution is a nested command as well; the outer
-        # command's redirection is its own.
-        ("python3 scripts/run_tests.py <(true) >out", ">out"),
-        ("gh pr list >(cat) 2>out", "2>out"),
+        # A wrapper's own options come before the name it runs.
+        ("command -p gh pr list >out", ">out"),
+        ("env -i python3 scripts/run_tests.py >out", ">out"),
+        # A comment after the write does not hide it, and a quoted `#` is
+        # a word.
+        ("gh pr list >out # ok", ">out"),
+        ("gh pr list '#' >out", ">out"),
     ],
 )
 def test_an_output_redirection_on_a_gated_command_is_refused(
@@ -570,6 +573,13 @@ def test_an_output_redirection_on_a_gated_command_is_refused(
         "python3 scripts/run_tests.py tests -k 'a or b'",
         "python3 scripts/pr_metrics.py --limit 20 --json",
         "x=$(gh pr list); echo $x",
+        # A `#` that begins a word after whitespace starts a comment bash
+        # drops through the end of the line; the next line is still read.
+        "gh pr list # output > file",
+        "python3 scripts/run_tests.py # >(cat >out)",
+        "git diff HEAD # > out",
+        "gh pr list #c\ngh run list",
+        "command -v gh",
     ],
 )
 def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None:
@@ -608,6 +618,43 @@ def test_a_redirection_on_an_unlisted_command_is_left_alone(command: str) -> Non
 
     completed = _run(_payload(command))
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A process substitution written as an argument runs its body as
+        # part of the approved string, and the body is held to no rule.
+        "gh pr list >(cat >out)",
+        ">(cat >out) gh pr list",
+        "python3 scripts/run_tests.py <(true)",
+        "git status; gh run list >(tee out)",
+        # A process substitution is a nested command as well, so the outer
+        # command's redirection is still its own; the substitution is what
+        # the refusal names.
+        "python3 scripts/run_tests.py <(true) >out",
+        "gh pr list >(cat) 2>out",
+    ],
+)
+def test_a_process_substitution_in_a_gated_command_that_is_not_git_is_refused(
+    command: str,
+) -> None:
+    """The inner command is not this hook's to inspect, so the form is refused."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "process substitution" in completed.stderr
+
+
+def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:
+    """A `#` after whitespace starts a comment; elsewhere it is a character."""
+
+    completed = _run(_payload("gh pr list #c\ngh run list >out"))
+    assert completed.returncode == 2, (
+        "the command on the line after a comment was hidden"
+    )
+    completed = _run(_payload("git diff --stat#x /dev/null secrets.yaml"))
+    assert completed.returncode == 2, "a mid-word # hid the operands after it"
 
 
 def test_bash_really_truncates_the_target_on_a_command_that_is_not_git(
