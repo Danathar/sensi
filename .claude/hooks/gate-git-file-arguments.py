@@ -129,6 +129,10 @@ _DESCRIPTOR = re.compile(r"^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$")
 # lines are read as one segment here, which can only over-refuse.
 _SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 
+# The characters shlex glues into one word when they stand together; see
+# `_punctuation_pieces`.
+_PUNCTUATION = frozenset("();<>|&")
+
 # The allow rows of `.claude/settings.json` that carry a trailing `:*`, other
 # than git's, which `_runs_git` covers: each is a command prefix the
 # permission layer approves with any arguments after it, and a shell output
@@ -269,19 +273,52 @@ def _lex(command: str) -> list[str]:
     # so `--no-index a#b` would be read as `--no-index a` and the rest of the
     # command - the part doing the reading - would never be seen.
     lexer.commenters = ""
-    return list(lexer)
+    words: list[str] = []
+    for word in lexer:
+        if len(word) > 1 and set(word) <= _PUNCTUATION:
+            words.extend(_punctuation_pieces(word))
+        else:
+            words.append(word)
+    return words
 
 
-def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
+def _punctuation_pieces(run: str) -> list[str]:
+    """Return a glued run of shell punctuation as the words bash reads it as.
+
+    shlex glues a run of `();<>|&` into one word, so the `)` that closes a
+    `$(...)` and the `;` after it arrive as `);`, which is neither the `)`
+    that ends the nested command nor the separator that ends the outer one,
+    and `x=$(gh pr list); echo $x` was read as one segment. Each paren is a
+    word of its own, except that a `<` or `>` right before a `(` is the
+    opening of a process substitution and stays with it; whatever lies
+    between parens is kept whole, and is the separator or redirection it was.
+    """
+
+    pieces: list[str] = []
+    for piece in re.split(r"([()])", run):
+        if not piece:
+            continue
+        if piece == "(" and pieces and pieces[-1][-1] in "<>":
+            piece = pieces[-1][-1] + piece
+            pieces[-1] = pieces[-1][:-1]
+            if not pieces[-1]:
+                pieces.pop()
+        pieces.append(piece)
+    return pieces
+
+
+def _segments(words: list[str], masked: list[str]) -> list[tuple[list[str], list[str]]]:
     """Split the words into simple commands at the separators bash honours.
 
     `masked` is the same list lexed from `_mask_quotes`; a word is a separator
     only when its masked twin is, so a quoted `;` or `|` stays a word of its
-    command.
+    command. Each segment is returned with its twins in the same order, so a
+    check that needs to know what bash would quote can read the twin of the
+    word it is judging.
     """
 
-    found: list[list[str]] = [[]]
-    outer: list[list[str]] = []
+    found: list[tuple[list[str], list[str]]] = [([], [])]
+    outer: list[tuple[list[str], list[str]]] = []
     for word, twin in zip(words, masked, strict=True):
         # A `$(...)` is a nested command: its words become a segment of their
         # own, and the command around it goes on after the `)` with the `$`
@@ -290,9 +327,9 @@ def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
         # --log >out)` is a gh command with a redirection. A split that
         # ended the outer command at the `(` put the redirection in a
         # segment with no command in it.
-        if twin == "(" and found[-1] and found[-1][-1].endswith("$"):
+        if twin == "(" and found[-1][0] and found[-1][1][-1].endswith("$"):
             outer.append(found.pop())
-            found.append([])
+            found.append(([], []))
             continue
         if twin in _PROCESS_SUBSTITUTION:
             # A process substitution is a nested command too, and its `<(`
@@ -300,18 +337,20 @@ def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
             # `python3 scripts/run_tests.py <(true) >out` is one command
             # whose redirection is its own, and the `<(` refusal for a gated
             # git still sees the word.
-            found[-1].append(word)
+            found[-1][0].append(word)
+            found[-1][1].append(twin)
             outer.append(found.pop())
-            found.append([])
+            found.append(([], []))
             continue
         if twin == ")" and outer:
             found.append(outer.pop())
             continue
         if twin in _SEPARATORS or (twin and set(twin) <= set(";&|")):
-            found.append([])
+            found.append(([], []))
             continue
-        found[-1].append(word)
-    return [segment for segment in found if segment]
+        found[-1][0].append(word)
+        found[-1][1].append(twin)
+    return [segment for segment in found if segment[0]]
 
 
 def _writing_redirection(segment: list[str]) -> str | None:
@@ -515,19 +554,22 @@ def main() -> int:
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
     # and truncates the file as surely as `git diff` would.
-    for segment in _segments(words, masked):
+    for segment, _twins in _segments(words, masked):
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
-            if prefix and any(
-                word.startswith(_PROCESS_SUBSTITUTION) for word in segment
+            if prefix and (
+                any(word.startswith(_PROCESS_SUBSTITUTION) for word in segment)
+                or any("$" in word or "`" in word for word in segment)
             ):
                 print(
-                    f"Blocked: a process substitution in `{' '.join(prefix)}` runs "
-                    "the command inside it as part of a string the allow rule "
-                    "approved on its prefix alone, and that inner command is held "
-                    "to no rule - `gh pr list >(cat >out)` truncates the file while "
-                    "gh prints as usual. Write the inner command as a command of "
-                    "its own.",
+                    f"Blocked: a substitution - $(...), a backtick, <(...) or >(...) - "
+                    f"in `{' '.join(prefix)}` runs the command inside it as part of a "
+                    "string the allow rule approved on its prefix alone, and that "
+                    "inner command is held to no rule: `gh pr list >(cat >out)` and "
+                    "`python3 scripts/run_tests.py $(printf x >out)` truncate the "
+                    "file while the command prints as usual. Write the inner command "
+                    "as a command of its own, and the arguments of these commands "
+                    "out literally, as for git diff.",
                     file=sys.stderr,
                 )
                 return 2

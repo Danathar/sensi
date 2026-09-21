@@ -531,9 +531,8 @@ def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
         ("time python3 scripts/run_tests.py >out", ">out"),
         ("command gh pr list >out", ">out"),
         ("gh pr view 1 {fd}>out", "{fd}>out"),
-        # A `$(...)` is a command of its own; the redirection belongs to the
-        # command around it, which resumes at the `)`.
-        ("python3 scripts/run_tests.py $(date) >out", ">out"),
+        # A `$(...)` is a command of its own; the gated command inside it is
+        # decided on its own, redirection included.
         ("echo $(gh run view 1 --log >out)", ">out"),
         ("ls | gh pr list >out", ">out"),
         ("gh pr list 2>&1 | tee x; gh run list >out", ">out"),
@@ -580,6 +579,10 @@ def test_an_output_redirection_on_a_gated_command_is_refused(
         "git diff HEAD # > out",
         "gh pr list #c\ngh run list",
         "command -v gh",
+        # The substitution is the outer command's; its body is the gated
+        # command, decided on its own.
+        "echo $(gh pr list)",
+        "for n in $(gh pr list --json number -q '.[].number'); do echo $n; done",
     ],
 )
 def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None:
@@ -634,6 +637,15 @@ def test_a_redirection_on_an_unlisted_command_is_left_alone(command: str) -> Non
         # the refusal names.
         "python3 scripts/run_tests.py <(true) >out",
         "gh pr list >(cat) 2>out",
+        # A command substitution or a backtick runs its body the same way.
+        "python3 scripts/run_tests.py $(printf x >.claude/settings.json)",
+        "python3 scripts/run_tests.py $(date) >out",
+        "gh pr list `printf x >out`",
+        "python3 scripts/run_tests.py tests -k $K",
+        'gh pr view 1 --json "$F"',
+        # A quoted `$` is refused with the rest, as it is in a gated git
+        # command: the word is judged by its characters, not its quoting.
+        "gh pr list --search 'a $b'",
     ],
 )
 def test_a_process_substitution_in_a_gated_command_that_is_not_git_is_refused(
@@ -643,7 +655,7 @@ def test_a_process_substitution_in_a_gated_command_that_is_not_git_is_refused(
 
     completed = _run(_payload(command))
     assert completed.returncode == 2, f"{command!r} was not blocked"
-    assert "process substitution" in completed.stderr
+    assert "substitution" in completed.stderr
 
 
 def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:
