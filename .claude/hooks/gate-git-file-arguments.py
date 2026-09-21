@@ -266,6 +266,16 @@ def _segments(words: list[str], masked: list[str]) -> list[list[str]]:
             outer.append(found.pop())
             found.append([])
             continue
+        if twin in _PROCESS_SUBSTITUTION:
+            # A process substitution is a nested command too, and its `<(`
+            # stays in the outer command as the operand it becomes, so
+            # `python3 scripts/run_tests.py <(true) >out` is one command
+            # whose redirection is its own, and the `<(` refusal for a gated
+            # git still sees the word.
+            found[-1].append(word)
+            outer.append(found.pop())
+            found.append([])
+            continue
         if twin == ")" and outer:
             found.append(outer.pop())
             continue

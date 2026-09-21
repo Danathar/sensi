@@ -537,6 +537,10 @@ def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
         ("echo $(gh run view 1 --log >out)", ">out"),
         ("ls | gh pr list >out", ">out"),
         ("gh pr list 2>&1 | tee x; gh run list >out", ">out"),
+        # A process substitution is a nested command as well; the outer
+        # command's redirection is its own.
+        ("python3 scripts/run_tests.py <(true) >out", ">out"),
+        ("gh pr list >(cat) 2>out", "2>out"),
     ],
 )
 def test_an_output_redirection_on_a_gated_command_is_refused(
@@ -595,6 +599,8 @@ def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None
         ">out echo x; python3 scripts/run_tests.py",
         "gh pr list; { gh run list; } >out",
         "(gh pr list) >out",
+        "cat <(gh pr list) >out",
+        "diff <(gh pr list) <(gh run list)",
     ],
 )
 def test_a_redirection_on_an_unlisted_command_is_left_alone(command: str) -> None:
