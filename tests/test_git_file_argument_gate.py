@@ -719,6 +719,179 @@ def test_an_assignment_before_git_is_refused(command: str) -> None:
     assert "assignment" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # bash's append form. `NAME+=value` creates the variable when it is
+        # unset, so this is the same environment as `NAME=value`; the hook
+        # split on the first `=` and read the left half as an identifier,
+        # which answered no for `GIT_EXTERNAL_DIFF+`, and the whole word went
+        # on to be read as the command's name.
+        "GIT_EXTERNAL_DIFF+=/tmp/prog git diff HEAD~1 HEAD",
+        "LD_PRELOAD+=/tmp/lib.so git log -1",
+        "PYTHONPATH+=/tmp python3 scripts/run_tests.py",
+        "GH_HOST+=other gh pr list",
+        # The export family: the same assignment written after the command
+        # name instead of before it. Bash applies it to every command it runs
+        # later in the string, so the git invocation carries none of its own.
+        "export GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD~1 HEAD",
+        "declare -x GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD~1 HEAD",
+        "typeset -x GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD~1 HEAD",
+        "readonly PATH=/tmp/bin; git diff HEAD",
+        "export PYTHONPATH=/tmp; python3 scripts/run_tests.py",
+        "export GH_HOST=other && gh pr list",
+        "export GIT_EXTERNAL_DIFF=/tmp/prog\ngit show HEAD",
+        # `env -S` splits a quoted string into a command, and the whole
+        # invocation is one word to every scan below.
+        "env -S 'GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD'",
+        "env -S'GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD'",
+        "env --split-string='GIT_EXTERNAL_DIFF=/tmp/prog git log -1'",
+    ],
+)
+def test_the_other_spellings_of_the_same_assignment_are_refused(
+    command: str,
+) -> None:
+    """Three ways to put a variable in the command's environment, all refused.
+
+    Each reaches the program `GIT_EXTERNAL_DIFF` names exactly as the leading
+    `NAME=value` form does; the test below runs all three for real rather than
+    arguing them from bash's manual.
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # An export reaches what bash runs *after* it and nothing earlier.
+        "git diff HEAD; export GIT_EXTERNAL_DIFF=/tmp/prog",
+        "git status && export FOO=1",
+        # An export in a string that runs none of these commands is not this
+        # hook's business; such a string matches no allow rule and prompts.
+        "export GIT_EXTERNAL_DIFF=/tmp/prog",
+        "export FOO=1; echo hi",
+        "declare -x FOO=1; echo hi",
+        # The builtins that set nothing.
+        "export; git diff HEAD",
+        "declare -p; git diff HEAD",
+        # The word `export` as text rather than as a command name.
+        "echo export FOO=1; git diff HEAD",
+        "git log --grep=export -1",
+        # `env -S` with nothing this hook gates inside it.
+        "env -S 'echo hi'",
+    ],
+)
+def test_an_export_that_reaches_no_gated_command_is_left_alone(
+    command: str,
+) -> None:
+    """Over-refusing here would block ordinary work, so the rule is ordered."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A newline ends a simple command in bash exactly as a `;` does. It is
+        # plain whitespace to shlex, so the words of both lines used to land
+        # in one segment and the assignment on the second line stopped being a
+        # leading one -- the position every rule below reads it in.
+        "echo hi\nGIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD",
+        "git diff HEAD\nGIT_EXTERNAL_DIFF=/tmp/prog git log -1",
+        "echo hi\nPYTHONPATH=/tmp python3 scripts/run_tests.py",
+        "echo hi\nGH_HOST=other gh pr list",
+        # The same for the redirection rule, which the merge over-refused
+        # rather than under-refusing, and which must still refuse this.
+        "echo hi\ngit diff HEAD >out",
+    ],
+)
+def test_a_newline_ends_the_command_the_way_bash_ends_it(command: str) -> None:
+    """Two lines are two commands, and each is judged on its own."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A `\`-continuation is not a command boundary: bash joins the lines.
+        "git diff \\\n  HEAD",
+        # A newline inside quotes is a character of its word.
+        "git log --grep='one\ntwo' -1",
+        # Two ordinary commands on two lines stay unprompted.
+        "echo hi\ngit diff HEAD",
+        "git status\ngit log -1",
+    ],
+)
+def test_a_newline_that_is_not_a_boundary_is_left_alone(command: str) -> None:
+    """Over-refusing a continuation would block ordinary multi-line work."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr}"
+
+
+def test_every_spelling_really_reaches_the_external_diff_program(
+    tmp_path: Path,
+) -> None:
+    """The three refusals above, run for real against git.
+
+    `NAME+=value` with the variable unset, an `export` on an earlier command
+    of the same string, and `env -S` each put the program in git's environment
+    and git runs it once per changed path -- the same reach as the leading
+    `NAME=value` form the test below covers.
+    """
+
+    marker = tmp_path / "ran"
+    program = tmp_path / "prog.sh"
+    program.write_text(f"#!/bin/sh\nprintf x >>{marker}\n", encoding="utf-8")
+    program.chmod(program.stat().st_mode | stat.S_IXUSR)
+
+    work = tmp_path / "work"
+    work.mkdir()
+    tracked = work / "tracked.txt"
+
+    def _git(*arguments: str) -> None:
+        subprocess.run(
+            ["git", *arguments],
+            cwd=str(work),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.invalid")
+    _git("config", "user.name", "test")
+    tracked.write_text("one\n", encoding="utf-8")
+    _git("add", "tracked.txt")
+    _git("commit", "-q", "-m", "one")
+    tracked.write_text("two\n", encoding="utf-8")
+
+    for spelling in (
+        f"GIT_EXTERNAL_DIFF+={program} git diff",
+        f"export GIT_EXTERNAL_DIFF={program}; git diff",
+        f"env -S 'GIT_EXTERNAL_DIFF={program} git diff'",
+    ):
+        subprocess.run(
+            ["bash", "-c", spelling],
+            cwd=str(work),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    assert marker.exists(), "no spelling reached the external diff program"
+    assert marker.read_text(encoding="utf-8") == "xxx", (
+        "a spelling this hook refuses did not in fact run the program: "
+        f"{marker.read_text(encoding='utf-8')!r}"
+    )
+
+
 def test_git_really_runs_the_program_named_by_the_environment(
     tmp_path: Path,
 ) -> None:

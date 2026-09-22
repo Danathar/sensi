@@ -80,9 +80,14 @@ supply-chain concern.
   An assignment written before the command name is part of the string the
   rule matches as well, and git reads the names of programs to run out of its
   environment: `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs `prog` once
-  per changed path, and `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external`
-  sets the same program through the config. The hook refuses an assignment
-  before any of the allow-listed commands, git included.
+  per changed path, and `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external
+  GIT_CONFIG_VALUE_0=prog` sets the same program through the config. The hook
+  refuses an assignment before any of the allow-listed commands, git included,
+  and with it three spellings of the same thing: bash's `NAME+=value` append
+  form, which creates the variable when it is unset; the export family
+  (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
+  applies to every command it runs later in the same string; and `env -S`,
+  which hides the whole invocation inside a single word.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.

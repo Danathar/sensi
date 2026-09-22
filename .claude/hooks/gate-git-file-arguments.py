@@ -41,7 +41,12 @@ three of their arguments do file I/O that has nothing to do with the repository:
   library into git itself. `Bash(git diff:*)` matches the string on its
   prefix, and a leading assignment is part of what that prefix matches, so
   none of these prompts. An assignment before a git segment is refused the
-  way one before the other allow-listed commands already was.
+  way one before the other allow-listed commands already was. Three spellings
+  of the same assignment are refused with it: bash's `NAME+=value` append
+  form, which creates the variable when it is unset; the export family
+  (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
+  applies to every command it runs later in the same string; and `env -S`,
+  which hides the whole invocation inside one word.
 * `~/secrets.yaml` is `$HOME/secrets.yaml` to bash and, to a check that read
   the word as typed, a directory called `~` inside the repository. A word
   that begins with `~` is outside the repository by definition here, whatever
@@ -135,8 +140,13 @@ _DESCRIPTOR = re.compile(r"^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$")
 # The tokens that end one simple command and begin the next, so that a
 # redirection is charged to the command it is written in: `echo x >out; git
 # diff HEAD` is echo's redirection, `git diff HEAD | jq . >out` is jq's. A
-# newline is whitespace to shlex and never a token, so two commands on two
-# lines are read as one segment here, which can only over-refuse.
+# newline is whitespace to shlex and never a token of its own, so
+# `_newlines_to_separators` rewrites an unquoted one to `;` before the lexer
+# runs. It used to be left alone, on the reading that merging two lines into
+# one segment could only over-refuse; for a redirection that is true, and for
+# an assignment it is the other way round -- `echo hi\nGIT_EXTERNAL_DIFF=prog
+# git diff HEAD` put the assignment in the middle of a segment, where it is
+# not a *leading* one and no rule below reads it.
 _SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 
 # The characters shlex glues into one word when they stand together; see
@@ -172,6 +182,33 @@ _GATED_PREFIXES = (
 _COMMAND_WRAPPERS = frozenset(
     {"time", "command", "builtin", "exec", "env", "nohup", "nice"}
 )
+
+# An assignment as bash's grammar spells it, which is wider than `NAME=value`:
+# `NAME+=value` appends, and *creates* the variable when it is unset, so
+# `GIT_EXTERNAL_DIFF+=prog git diff HEAD~1 HEAD` puts exactly the same program
+# in git's environment. Splitting on the first `=` and asking whether the left
+# half is an identifier answered no for that one, because the left half was
+# `GIT_EXTERNAL_DIFF+`, and the word went on to be read as the command's name.
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+
+# `export NAME=value`, and the three builtins that spell the same thing with a
+# flag. Bash applies what they set to every command it runs later in the same
+# string, so the assignment reaches a git invocation that carries none of its
+# own: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` runs prog once per
+# changed path. The builtin is refused rather than its options read, because
+# the flag that exports has several spellings (-x, -gx, a plain `NAME=value`
+# after an earlier `declare -x NAME`) and a half-read option list is a gate
+# that disagrees with bash in some other direction.
+_EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
+
+# `env -S "..."` (--split-string) splits a quoted string into a command of its
+# own. The words inside it are one word to any scan of the string, so a git
+# invocation written there is invisible to everything below.
+_ENV_SPLIT_STRING = re.compile(r"^-S|^--split-string")
+
+# The command names this hook gates, for the two tests that have to ask "would
+# this string reach one of them" without being able to see the words.
+_GUARDED_NAME = re.compile(r"\b(git|gh|python3)\b")
 
 
 def _brace_would_expand(word: str) -> bool:
@@ -271,6 +308,26 @@ def _strip_comments(command: str) -> str:
         kept.append(command[index])
         index += 1
     return "".join(kept)
+
+
+def _newlines_to_separators(command: str) -> str:
+    r"""Return the command with every unquoted newline rewritten to `;`.
+
+    bash ends a simple command at a newline exactly as it does at a `;`, and
+    the Bash tool is handed multi-line strings routinely. shlex treats a
+    newline as plain whitespace, so the words of both lines landed in one
+    segment: an assignment on the second line stopped being a *leading*
+    assignment and the rule that refuses one never saw it.
+
+    A newline inside quotes, and the one of a `\\`-continuation, are `Q` in
+    the masked copy and are left as they are -- the first is a character of
+    its word, the second is not a command boundary at all.
+    """
+
+    masked = _mask_quotes(command)
+    return "".join(
+        ";" if masked[index] == "\n" else char for index, char in enumerate(command)
+    )
 
 
 def _lex(command: str) -> list[str]:
@@ -473,14 +530,33 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
             word = word[:-1]
             if not word:
                 continue
-        if not words:
-            name = word.split("=", 1)[0]
-            if ("=" in word and name.isidentifier()) or word in _COMMAND_WRAPPERS:
-                wrapped = wrapped or word in _COMMAND_WRAPPERS
-                assigned = assigned or word not in _COMMAND_WRAPPERS
-                continue
+        if not words and (_ASSIGNMENT.match(word) or word in _COMMAND_WRAPPERS):
+            wrapped = wrapped or word in _COMMAND_WRAPPERS
+            assigned = assigned or word not in _COMMAND_WRAPPERS
+            continue
         words.append(word)
     return words, wrapped, assigned
+
+
+def _exports_an_assignment(segment: list[str]) -> bool:
+    """Whether this segment is an export-family builtin that sets a variable.
+
+    What it sets is in the environment of every command bash runs after it in
+    the same string, which is the reach a leading `NAME=value` has, written
+    after the command name instead of before it. `export` on its own, and
+    `declare -p`, set nothing and are not this.
+    """
+
+    words, _wrapped, _assigned = _command_words(segment)
+    if not words or words[0] not in _EXPORT_BUILTINS:
+        return False
+    return any(_ASSIGNMENT.match(word) for word in words[1:])
+
+
+def _splits_a_string(segment: list[str]) -> bool:
+    """Whether this segment is an `env -S`, which hides a command in a word."""
+
+    return "env" in segment and any(_ENV_SPLIT_STRING.match(w) for w in segment)
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
@@ -540,7 +616,7 @@ def main() -> int:
         return 0
 
     try:
-        command = _strip_comments(command)
+        command = _newlines_to_separators(_strip_comments(command))
         words = _lex(command)
         masked = _lex(_mask_quotes(command))
     except ValueError:
@@ -566,7 +642,36 @@ def main() -> int:
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
     # and truncates the file as surely as `git diff` would.
+    exported = False
     for segment, _twins in _segments(words, masked):
+        if _splits_a_string(segment) and _GUARDED_NAME.search(" ".join(segment)):
+            print(
+                "Blocked: `env -S` (--split-string) splits a quoted string into a "
+                "command this hook never sees as words - the whole invocation is "
+                "one word to any scan of the string - and the string here names "
+                "git, gh or python3. `env -S 'GIT_EXTERNAL_DIFF=prog git diff "
+                "HEAD~1 HEAD'` is the assignment refused below, written where "
+                "nothing can read it. Write the command out as a command.",
+                file=sys.stderr,
+            )
+            return 2
+        if exported and (_runs_git(segment) or _gated_prefix(segment)):
+            print(
+                "Blocked: an export-family assignment (`export NAME=value`, "
+                "`declare -x`, `typeset -x`, `readonly`) earlier in this string is "
+                "in the environment of this command, which is the reach of a "
+                "leading `NAME=value` written after the command name instead of "
+                "before it: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` "
+                "runs prog once per changed path while the git invocation carries "
+                "no assignment at all. The allow rule matches this command on its "
+                "prefix, so nothing else would prompt. Run it without the export. "
+                "An export written after the command it cannot reach, and one in "
+                "a string that runs none of these commands, are not refused.",
+                file=sys.stderr,
+            )
+            return 2
+        if _exports_an_assignment(segment):
+            exported = True
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
             if prefix and (
