@@ -38,15 +38,28 @@ three of their arguments do file I/O that has nothing to do with the repository:
   path, with the two versions of the file in its arguments;
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0=prog`
   sets the same program through the config, and `LD_PRELOAD=lib.so` loads a
-  library into git itself. `Bash(git diff:*)` matches the string on its
-  prefix, and a leading assignment is part of what that prefix matches, so
-  none of these prompts. An assignment before a git segment is refused the
-  way one before the other allow-listed commands already was. Three spellings
+  library into git itself. An assignment before a git segment is refused the
+  way one before the other allow-listed commands already was. Five spellings
   of the same assignment are refused with it: bash's `NAME+=value` append
   form, which creates the variable when it is unset; the export family
   (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
-  applies to every command it runs later in the same string; and `env -S`,
-  which hides the whole invocation inside one word.
+  applies to every command it runs later in the same string; the bare
+  `export NAME` that arms a name a *later* command assigns to; `set -a`,
+  which makes every later assignment an exported one without naming a
+  builtin at all; and `env -S`, which hides the whole invocation inside one
+  word.
+
+  What this refusal does *not* rest on: Claude Code's own permission matcher
+  documents that "an allow rule won't match past an assignment of any other
+  variable" than a fixed set of known-safe ones, and that set is not
+  published. So most of these spellings prompt on their own account today,
+  and this gate is the layer that does not have to change when the safe set
+  does. It is a backstop by design rather than by accident - a PreToolUse
+  hook runs *before* permission rules are evaluated, and an exit 2 blocks the
+  call even where an allow rule would have approved it. Nothing here assumes
+  a Bash tool call's shell outlives the call: it does not (verified on Claude
+  Code 2.1.267 - `export X=1` in one call, `echo ${X:-UNSET}` in the next,
+  prints UNSET), and every rule below reads one command string only.
 * `~/secrets.yaml` is `$HOME/secrets.yaml` to bash and, to a check that read
   the word as typed, a directory called `~` inside the repository. A word
   that begins with `~` is outside the repository by definition here, whatever
@@ -68,9 +81,44 @@ three of their arguments do file I/O that has nothing to do with the repository:
   `python3 scripts/check_requirements_sync.py`) need no entry, because a
   redirection makes the string match none of them.
 
-No permission rule can close this. `deny` matching is by command prefix, and
-every one of these is an option that can be written anywhere in the argument
-list, so a rule can only ever name one spelling of one position.
+Two shapes of the corpus in issue #250 are decided here as *not reachable*
+rather than refused, so that a later pass does not have to work them out again.
+Each rests on a documented property of the permission matcher, not on a guess:
+
+* Anything behind `env`. `env -i`, `env -C DIR` / `env --chdir=DIR`,
+  `env --split-string=`, and `env -u NAME` all reach the tool, but `env` is
+  not one of the wrappers the matcher steps over (`timeout`, `time`, `nice`,
+  `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, `xargs` are), so a string
+  beginning `env ` matches no allow row and prompts. `_splits_a_string` still
+  refuses the `env -S` spelling, because that one hides a whole invocation
+  inside a single word and a gate that cannot see the words cannot be said to
+  have decided anything about them.
+* git's own global options - `git -c diff.external=prog diff`,
+  `--config-env`, `--exec-path` - which do reach git and do load a program.
+  `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
+  the rule matches only a string that *begins* `git diff `. A global option
+  stands before the subcommand, so `git -c ... diff` begins `git -c` and
+  matches nothing. The same answer covers a brace-built command name
+  (`{,git} diff`), which begins `{,git}`.
+One shape is left *undecided*, deliberately, and is recorded as an open
+question rather than answered: the three allow rows with no `:*` -
+`ruff check .`, `ruff format --check .` and
+`python3 scripts/check_requirements_sync.py`. A rule with no wildcard matches
+one exact string, so on the reading this file has always used - a redirection
+is part of the string the rule is compared against - `ruff check . >path`
+matches nothing and prompts. But the matcher is also documented to check a
+redirect target against the `Read`/`Edit` rules on its own, which reads as the
+command half being matched *without* the redirection; on that reading
+`ruff check . >custom_components/sensi/client.py` matches the exact row and
+the target is governed by the `Edit` deny rows alone, which do not name it.
+Which reading holds decides whether these three rows need gating. Gating them
+on a guess would refuse ordinary work if the first reading is right, so the
+question is carried in `_OPEN_QUESTIONS` in the test file, pinned to today's
+answer, instead of being settled here.
+
+No permission rule can close the rest. `deny` matching is by command prefix,
+and every one of these is an option that can be written anywhere in the
+argument list, so a rule can only ever name one spelling of one position.
 
 Exit 2 blocks the call and returns the message on stderr to the agent. Every
 other path exits 0: a gate that fails closed on its own bugs would make an
@@ -176,11 +224,36 @@ _GATED_PREFIXES = (
 
 # Words that stand before the name of the command they run and are not part
 # of the prefix an allow rule matches, the way a leading `NAME=value` is not:
-# `time python3 scripts/run_tests.py >out` is the wrapper's redirection. A
-# wrapper's own options are not modelled (`env -i python3 ...` matches nothing
-# here), and such a string matches no allow rule either, so it prompts.
+# `time python3 scripts/run_tests.py >out` is the wrapper's redirection.
+#
+# The list is Claude Code's own - the wrappers its permission matcher steps
+# over before matching a rule - plus `env` and `exec`, which it does not step
+# over. Keeping it narrower than the matcher's was the bug: `time` was here
+# and `timeout` was not, so `time python3 scripts/run_tests.py >out` was
+# refused while `timeout 5 python3 scripts/run_tests.py >out` was not, and
+# the matcher steps over both. A wrapper this hook lists and the matcher does
+# not costs nothing, because the string prompts anyway; one the matcher lists
+# and this hook does not is a hole.
+#
+# A wrapper's own options are still not modelled. `env -i python3 ...` matches
+# no allow rule (see the header: `env` is not a wrapper the matcher steps
+# over), and a leading assignment written after a wrapper's operand -
+# `timeout 5 PYTHONPATH=/evil python3 ...` - is itself what stops the rule
+# matching, so neither needs a rule of its own here.
 _COMMAND_WRAPPERS = frozenset(
-    {"time", "command", "builtin", "exec", "env", "nohup", "nice"}
+    {
+        "time",
+        "timeout",
+        "nice",
+        "nohup",
+        "stdbuf",
+        "command",
+        "builtin",
+        "noglob",
+        "xargs",
+        "env",
+        "exec",
+    }
 )
 
 # An assignment as bash's grammar spells it, which is wider than `NAME=value`:
@@ -200,6 +273,15 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 # after an earlier `declare -x NAME`) and a half-read option list is a gate
 # that disagrees with bash in some other direction.
 _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
+
+# The git subcommands `.claude/settings.json` allows with any arguments after
+# them. `_GATED_SUBCOMMANDS` above is the narrower set whose *options* do file
+# I/O; this is every subcommand a rule approves on its prefix, which is the
+# set a substitution can ride in on. `test_git_file_argument_gate.py` derives
+# it from the settings file, so a git row added there fails until it is here.
+_ALLOWED_SUBCOMMANDS = frozenset(
+    {"status", "diff", "log", "show", "branch", "add", "checkout"}
+)
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
 # own. The words inside it are one word to any scan of the string, so a git
@@ -538,25 +620,147 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
     return words, wrapped, assigned
 
 
-def _exports_an_assignment(segment: list[str]) -> bool:
-    """Whether this segment is an export-family builtin that sets a variable.
+def _exports_a_name(segment: list[str]) -> bool:
+    """Whether this segment is an export-family builtin that names a variable.
 
     What it sets is in the environment of every command bash runs after it in
     the same string, which is the reach a leading `NAME=value` has, written
     after the command name instead of before it. `export` on its own, and
-    `declare -p`, set nothing and are not this.
+    `declare -p`, name nothing and are not this.
+
+    A name with no `=` counts. `export GIT_EXTERNAL_DIFF` exports the name
+    first and a later command assigns to it - `export GIT_EXTERNAL_DIFF;
+    GIT_EXTERNAL_DIFF=prog; git diff HEAD` puts the program in git's
+    environment exactly as the one-word spelling does, and asking only
+    whether the builtin's own word carried an `=` answered no for it. Which
+    name is dangerous is deliberately not modelled: a table of variable names
+    is a list to keep up to date, and over-refusing `export PATH=...; git
+    diff` is the cheap direction to be wrong in when the refusal says to run
+    the command without the export.
     """
 
     words, _wrapped, _assigned = _command_words(segment)
     if not words or words[0] not in _EXPORT_BUILTINS:
         return False
-    return any(_ASSIGNMENT.match(word) for word in words[1:])
+    return any(not word.startswith("-") for word in words[1:])
+
+
+def _turns_on_allexport(segment: list[str]) -> bool:
+    """Whether this segment is the `set` that makes later assignments exported.
+
+    `set -a` and `set -o allexport` export every variable assigned after
+    them, so a plain `GIT_EXTERNAL_DIFF=prog` standing as its own command
+    reaches the next git invocation without naming a builtin from
+    `_EXPORT_BUILTINS` at all. Only the arming spellings are read: `set +a`
+    turns it back off and is not matched, which can only leave the flag set
+    for longer than bash would - the over-refusing direction.
+    """
+
+    words, _wrapped, _assigned = _command_words(segment)
+    if not words or words[0] != "set":
+        return False
+    return any(
+        word == "allexport"
+        or (word.startswith("-") and not word.startswith("--") and "a" in word[1:])
+        for word in words[1:]
+    )
+
+
+def _is_bare_assignment(segment: list[str]) -> bool:
+    """Whether this segment is an assignment standing as a command of its own.
+
+    `GIT_EXTERNAL_DIFF=prog` with no command after it sets a shell variable,
+    which no child process sees - so it is not refused on its own. Under
+    `set -a` it sets an environment one, and `_turns_on_allexport` is what
+    tells the two apart.
+    """
+
+    words, wrapped, assigned = _command_words(segment)
+    return assigned and not words and not wrapped
+
+
+def _allowed_git_subcommand(words: list[str]) -> str | None:
+    """Return the allow-listed git subcommand `words` runs, if any.
+
+    Wider than `_runs_gated_git`, which asks only about the three whose
+    options do file I/O. A substitution rides in on whichever rule approved
+    the string, and seven git rows carry a `:*`.
+    """
+
+    for index, word in enumerate(words):
+        if word != "git" and not word.endswith("/git"):
+            continue
+        for later in words[index + 1 :]:
+            if later in _ALLOWED_SUBCOMMANDS:
+                return later
+    return None
+
+
+def _has_substitution(segment: list[str]) -> bool:
+    """Whether any word of `segment` is built by running another command.
+
+    Read off the words as typed rather than off their quote-masked twins, so
+    a single-quoted `$` is refused too. That is the same answer `_UNEXPANDED`
+    already gives for `git diff`, and the same one the `_GATED_PREFIXES`
+    branch gives: bash expands `$` inside double quotes, the twins mask it
+    either way, and a gate that told the two apart by reading the twin would
+    miss `"$(...)"` - the spelling most likely to be written.
+    """
+
+    return any(
+        word.startswith(_PROCESS_SUBSTITUTION) or "$" in word or "`" in word
+        for word in segment
+    )
+
+
+def _env_arguments(segment: list[str]) -> list[str] | None:
+    """Return the words `env` receives, when `env` is what this segment runs.
+
+    `-S` is env's `--split-string` only when env is the command reading it.
+    It is also git's pickaxe, and the two are the same two characters:
+    `git log -S env` carries the letter *and* the word `env`, and a scan that
+    asked whether the segment contained both refused a command that splits
+    nothing - a false refusal of an allow-listed command, which is the
+    expensive direction for a gate to be wrong in. Content cannot tell the
+    two apart; only position can, so the search starts at the command name
+    and reads nothing to the left of it.
+
+    Redirections, their targets and leading assignments are stepped over the
+    way `_command_words` steps over them, because bash lets all three stand
+    before the command name. Unlike `_command_words` this stops *at* the
+    wrapper rather than stepping over it, since the wrapper is the command
+    whose options are being read.
+    """
+
+    index = 0
+    while index < len(segment):
+        word = segment[index]
+        if _REDIRECTION.match(word):
+            index += 2  # the operator and its target
+            continue
+        if (
+            _DESCRIPTOR.match(word)
+            and index + 1 < len(segment)
+            and _REDIRECTION.match(segment[index + 1])
+        ):
+            index += 1  # the descriptor; the operator is next
+            continue
+        if _ASSIGNMENT.match(word):
+            index += 1
+            continue
+        if word == "env" or word.endswith("/env"):
+            return segment[index + 1 :]
+        return None
+    return None
 
 
 def _splits_a_string(segment: list[str]) -> bool:
     """Whether this segment is an `env -S`, which hides a command in a word."""
 
-    return "env" in segment and any(_ENV_SPLIT_STRING.match(w) for w in segment)
+    arguments = _env_arguments(segment)
+    if arguments is None:
+        return False
+    return any(_ENV_SPLIT_STRING.match(word) for word in arguments)
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
@@ -643,6 +847,7 @@ def main() -> int:
     # every git segment: `git status >.claude/settings.json` is allow-listed
     # and truncates the file as surely as `git diff` would.
     exported = False
+    allexport = False
     for segment, _twins in _segments(words, masked):
         if _splits_a_string(segment) and _GUARDED_NAME.search(" ".join(segment)):
             print(
@@ -657,8 +862,10 @@ def main() -> int:
             return 2
         if exported and (_runs_git(segment) or _gated_prefix(segment)):
             print(
-                "Blocked: an export-family assignment (`export NAME=value`, "
-                "`declare -x`, `typeset -x`, `readonly`) earlier in this string is "
+                "Blocked: an exported name earlier in this string (`export "
+                "NAME=value`, `declare -x`, `typeset -x`, `readonly`, a bare "
+                "`export NAME` a later command assigns to, or any assignment "
+                "after `set -a`) is "
                 "in the environment of this command, which is the reach of a "
                 "leading `NAME=value` written after the command name instead of "
                 "before it: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` "
@@ -670,8 +877,13 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        if _exports_an_assignment(segment):
+        # Armed *after* this segment has been judged, so the rule stays
+        # ordered: an export reaches what bash runs after it and nothing
+        # earlier, and `git diff HEAD; export FOO=1` is left alone.
+        if _exports_a_name(segment) or (allexport and _is_bare_assignment(segment)):
             exported = True
+        if _turns_on_allexport(segment):
+            allexport = True
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
             if prefix and (
@@ -727,6 +939,29 @@ def main() -> int:
                 "`git diff`, `git log` and `git show` print to stdout; read that "
                 "instead. 2>&1, >&2, an input redirection, and a redirection on "
                 "another command of the same string are not refused.",
+                file=sys.stderr,
+            )
+            return 2
+        subcommand = _allowed_git_subcommand(_command_words(segment)[0])
+        if (
+            subcommand is not None
+            and subcommand not in _GATED_SUBCOMMANDS
+            and _has_substitution(segment)
+        ):
+            print(
+                f"Blocked: a substitution - $(...), a backtick, <(...) or >(...) - "
+                f"in `git {subcommand}` runs the command inside it as part of a "
+                "string the allow rule approved on its prefix alone, and that "
+                "inner command is held to no rule: `git status $(printf x >out)` "
+                "truncates the file while git prints as usual, and a backtick "
+                "spells the same thing. A `$(...)` is not one of the separators "
+                "the permission "
+                "matcher splits a string at, so the inner command is never matched "
+                "against a rule of its own. This is the refusal `git diff`, "
+                "`git log` and `git show` already make for every expansion; it "
+                "reaches the other allow-listed subcommands because the rule that "
+                "approved them is the same shape. Run the inner command on its own "
+                "and write the result out, as for git diff.",
                 file=sys.stderr,
             )
             return 2
