@@ -13,7 +13,7 @@ score, not additive. A change touching both `client.py` and a doc is
 
 ### `tier/breaking` — can break an existing install on upgrade
 
-`config_flow.py`, `auth.py`, `manifest.json`, `entity.py`.
+`config_flow.py`, `auth.py`, `manifest.json`, `entity.py`, `const.py`.
 
 These decide whether an existing user's integration still loads, still finds its
 credentials, and still owns the same entities after an update. Getting one wrong
@@ -21,6 +21,11 @@ does not produce a bug report about a wrong temperature — it produces an
 integration that will not start, or a duplicate set of entities with the old
 ones orphaned, and the user has no way to roll back through HACS without
 knowing to.
+
+`const.py` is here because `STORAGE_KEY` and `STORAGE_VERSION` name the store
+`auth.py` keeps the credentials in: change either and every existing install
+stops finding its token. The tier is per file, so a change to the fan bounds
+beside them is labelled breaking too; that is the safe direction to be wrong in.
 
 **What is required:** the *Risk* section of the pull request must say explicitly
 what changes for an existing install and what the user will see. A breaking
@@ -30,7 +35,7 @@ the release notes, not buried in a commit subject.
 ### `tier/runtime` — runs against the live service
 
 `client.py`, `coordinator.py`, `__init__.py`, `data.py`, `capabilities.py`,
-`event.py`, `const.py`, `utils.py`.
+`event.py`, `utils.py`.
 
 The connection, the reconnect and token-refresh path, the event queue, and the
 parsing of whatever Sensi actually sends. CI cannot fully verify any of it: the

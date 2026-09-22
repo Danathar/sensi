@@ -19,6 +19,9 @@ tiers:
       - custom_components/sensi/auth.py
       - custom_components/sensi/manifest.json
       - custom_components/sensi/entity.py
+      # STORAGE_KEY and STORAGE_VERSION name the credential store auth.py
+      # opens, and SENSI_DOMAIN is the integration's domain.
+      - custom_components/sensi/const.py
 
   - name: tier/runtime
     label_colour: d93f0b
@@ -33,7 +36,6 @@ tiers:
       - custom_components/sensi/data.py
       - custom_components/sensi/capabilities.py
       - custom_components/sensi/event.py
-      - custom_components/sensi/const.py
       - custom_components/sensi/utils.py
 
   - name: tier/behaviour

@@ -62,8 +62,8 @@ _CATCH_ALL = "**"
 
 # Shipped component files that match no tier but the catch-all, and so carry
 # `tier/support` - the tier whose own label says it "cannot reach a user's
-# installation". Resolved by issue #252: `const.py` and `utils.py` now carry
-# `tier/runtime`, so this mapping stays empty.
+# installation". Resolved by issue #252: `const.py` now carries
+# `tier/breaking` and `utils.py` `tier/runtime`, so this mapping stays empty.
 _SHIPPED_BUT_UNTIERED: dict[str, str] = {}
 
 
