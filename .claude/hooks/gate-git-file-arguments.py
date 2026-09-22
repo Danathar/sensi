@@ -96,6 +96,13 @@ three of their arguments do file I/O that has nothing to do with the repository:
   rest, because the prompt would ask about operands it cannot show. In front
   of a command no rule covers (`git diff --name-only | xargs echo`) xargs
   prompts on its own and is left alone.
+* A wrapper can be written as a path. The matcher cuts the first word at its
+  last slash or backslash and steps over it when a wrapper's name is left, so
+  `/usr/bin/timeout 5 ruff check . >out` is approved on `ruff check .` and is
+  gated here like `timeout 5`. It steps over `./shim/nohup` just as readily,
+  and bash then runs ./shim/nohup, so any spelling ending in a wrapper's name
+  in front of an approved command is refused unless it is the bare name or
+  the system's copy (`/usr/bin/<name>`, `/bin/<name>`); see `_spelled_wrapper`.
 
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
@@ -275,14 +282,19 @@ _EXACT_ROWS = (
 # not enough: the operands it adds are not in the string.
 #
 # A wrapper is recognised by its last path component, as the matcher
-# recognises it: 2.1.267 compares `n[0]?.replace(/^.*[\\/]/, "")`, so it
-# steps over `/usr/bin/timeout 5` as it does `timeout 5`. Compared whole
-# here, `/usr/bin/timeout 5 ruff check . >out` and `/usr/bin/noglob gh pr
-# list >out` named no wrapper, the gated prefix behind them was never looked
-# for, and the redirection passed. A path the shell builds (`$D/timeout`) is
-# matched the same way, since the matcher reads the word as typed; it is
-# refused anyway, by the substitution rule behind a gated prefix and by the
-# expansion rule in a string that runs a gated git.
+# recognises it: 2.1.267 compares `n[0]?.replace(/^.*[\\/]/, "")`, cutting
+# at a `\` as well as a `/`, so it steps over `/usr/bin/timeout 5` as it
+# does `timeout 5`. Compared whole here, `/usr/bin/timeout 5 ruff check .
+# >out` named no wrapper, the gated prefix behind it was never looked for,
+# and the redirection passed. The matcher steps over *any* path that ends in
+# a wrapper's name, though, and the file at that path is what bash runs:
+# `./shim/nohup git diff HEAD` is approved as `git diff HEAD` and runs
+# ./shim/nohup, which anything in the tree could have written. So only the
+# system's own copies, `/usr/bin/<name>` and `/bin/<name>`, are stepped
+# over; every other spelling that ends in a wrapper's name in front of an
+# approved command is refused by `_spelled_wrapper`, whether a literal path,
+# one the shell builds (`$D/timeout`), or one whose `\` bash removes before
+# the matcher's cut would (`/usr/bin\timeout` runs `/usr/bintimeout`).
 #
 # A wrapper's own options are still not modelled. `env -i python3 ...` matches
 # no allow rule (see the header: `env` is not a wrapper the matcher steps
@@ -313,6 +325,15 @@ def _wrapper_name(word: str) -> str:
     """Return `word` as the matcher reads a wrapper: its last path component."""
 
     return _PATH_HEAD.sub("", word)
+
+
+def _is_system_wrapper(word: str) -> bool:
+    """Whether `word` is a wrapper's bare name or the system's own copy of it."""
+
+    return any(
+        word.startswith(directory) and word[len(directory) :] in _COMMAND_WRAPPERS
+        for directory in ("", "/usr/bin/", "/bin/")
+    )
 
 
 # An assignment as bash's grammar spells it, which is wider than `NAME=value`:
@@ -663,9 +684,11 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
     scripts/run_tests.py` both come back as `['python3',
     'scripts/run_tests.py']`. A leading `NAME=value` and a leading wrapper
     word are stepped over, since neither is part of the prefix an allow rule
-    matches: the wrapper names come back second, in the order written and
-    without their path (`/usr/bin/timeout` is `timeout`), and whether an
-    assignment led comes back third. A `$` left behind by a nested
+    matches: the wrapper words come back second, in the order written, and
+    whether an assignment led comes back third. A word is a wrapper when its
+    last path component is one (`/usr/bin/timeout`, `./shim/nohup`), as the
+    matcher reads it; `_spelled_wrapper` refuses the paths that are not the
+    system's own copy. A `$` left behind by a nested
     `$(...)` is dropped from the end of a word, so the words are the ones
     typed around the substitution.
     """
@@ -694,7 +717,7 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
             if not word:
                 continue
         if not words and _wrapper_name(word) in _COMMAND_WRAPPERS:
-            wrappers.append(_wrapper_name(word))
+            wrappers.append(word)
             continue
         if not words and _ASSIGNMENT.match(word):
             assigned = True
@@ -926,6 +949,42 @@ def _xargs_runs(segment: list[str]) -> str | None:
     return " ".join(row) if row else None
 
 
+def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
+    r"""Return a word ending in a wrapper's name before an approved command.
+
+    The matcher cuts a word at its last `/` or `\` and steps over it when
+    what is left is a wrapper's name, so the rule that approves the string
+    never sees that word, while bash runs the file it names: `./shim/nohup
+    git diff HEAD` is approved as `git diff HEAD`. Only the bare name and the
+    system's copies (`/usr/bin/<name>`, `/bin/<name>`) are left alone. The
+    test is on the word's ending rather than its last component, because
+    bash removes an unquoted `\` before this hook sees the word: the matcher
+    reads `/usr/bin\timeout` as `timeout`, and it reaches here as
+    `/usr/bintimeout`.
+
+    The words read run from the start of the chain to the first `git` or the
+    first gated row, which is where the matcher starts comparing. A command
+    no allow row covers prompts on its own and is not read. Returns the word
+    and the wrapper name it ends in.
+    """
+
+    words, wrappers, _assigned = _command_words(segment)
+    chain = wrappers + words
+    found = None
+    for index, word in enumerate(chain):
+        if word == "git" or word.endswith("/git"):
+            return found
+        if _gated_row(chain, range(index, index + 1)):
+            return found
+        if found is None and not _is_system_wrapper(word):
+            name = next(
+                (name for name in _COMMAND_WRAPPERS if word.endswith(name)), None
+            )
+            if name is not None:
+                found = (word, name)
+    return None
+
+
 def _runs_git(words: list[str]) -> bool:
     """Whether `words` name git at all, whichever subcommand follows."""
 
@@ -994,6 +1053,10 @@ def main() -> int:
     # and truncates the file as surely as `git diff` would.
     exported = False
     allexport = False
+    # The system's copies of the wrappers, where they lead a command. bash
+    # runs them and git never receives them, so the operand scan below does
+    # not read them as paths outside the repository.
+    stepped_over: list[str] = []
     for segment, _twins in _segments(words, masked):
         if _splits_a_string(segment) and _GUARDED_NAME.search(" ".join(segment)):
             print(
@@ -1020,6 +1083,23 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+        spelled = _spelled_wrapper(segment)
+        if spelled is not None:
+            word, name = spelled
+            print(
+                f"Blocked: `{word}` ends in the name of the wrapper `{name}`. The "
+                "permission matcher cuts a word at its last / or \\ and steps "
+                "over it when what is left is a wrapper, so the allow rule matched "
+                "only the words after it - while bash runs the file this word "
+                "names, which is not the system's copy: `./shim/nohup git diff "
+                "HEAD` is approved as `git diff HEAD` and runs ./shim/nohup. Use "
+                f"the bare name `{name}` (or /usr/bin/{name}).",
+                file=sys.stderr,
+            )
+            return 2
+        stepped_over.extend(
+            word for word in _command_words(segment)[1] if _is_system_wrapper(word)
+        )
         if exported and (_runs_git(segment) or _gated_prefix(segment)):
             print(
                 "Blocked: an exported name earlier in this string (`export "
@@ -1166,6 +1246,9 @@ def main() -> int:
         return 0
 
     for word in words:
+        if word in stepped_over:
+            stepped_over.remove(word)
+            continue
         if (
             any(char in word for char in _UNEXPANDED)
             or _brace_would_expand(word)

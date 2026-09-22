@@ -1807,8 +1807,8 @@ _CORPUS: tuple[_Row, ...] = (
         "command name",
         "$D/timeout 5 ruff check . >out",
         _REFUSED,
-        "read as timeout, the built path leads ruff check ., and the $ in the "
-        "segment is refused as a substitution; what $D names is not known",
+        "the matcher cuts the word to timeout and approves ruff check ., but "
+        "bash runs whatever $D/timeout names, which is not the system's copy",
     ),
     _Row(
         "command name",
@@ -1816,6 +1816,50 @@ _CORPUS: tuple[_Row, ...] = (
         _ALLOWED,
         "xargs by path in front of a command no allow row covers still "
         "prompts on its own, exactly as the bare spelling does",
+    ),
+    _Row(
+        "command name",
+        "./shim/nohup git diff HEAD",
+        _REFUSED,
+        "the matcher steps over any path ending in a wrapper's name and "
+        "approves git diff HEAD, while bash runs ./shim/nohup, a file anything "
+        "in the tree could have written",
+    ),
+    _Row(
+        "command name",
+        "'./shim\\nohup' git diff HEAD",
+        _REFUSED,
+        "the matcher cuts at a backslash as well as a slash, so a quoted "
+        "backslash spelling is the same wrapper to it and a different file to bash",
+    ),
+    _Row(
+        "command name",
+        "/tmp/timeout 5 python3 scripts/run_tests.py",
+        _REFUSED,
+        "a path to a wrapper outside the system's copies runs that file in "
+        "front of a gated prefix the rule approved on its own",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin\\timeout 5 ruff check . >out",
+        _REFUSED,
+        "the matcher reads the raw word as timeout, but bash removes the "
+        "unquoted backslash and runs /usr/bintimeout after opening out; the "
+        "hook sees the word bash made, so it tests the ending (review on #259)",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/timeout 60 git diff HEAD",
+        _ALLOWED,
+        "the system's copy of a wrapper is stepped over, and git never "
+        "receives it, so it is not an operand outside the repository",
+    ),
+    _Row(
+        "command name",
+        "git diff HEAD -- tools/nohup",
+        _ALLOWED,
+        "a word ending in a wrapper's name after the command name is an "
+        "operand of that command, not a wrapper the matcher steps over",
     ),
     _Row(
         "command name",
@@ -2064,6 +2108,24 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "names = [_wrapper_name(word) for word in chain]",
         "names = chain",
         "timeout 5 /usr/bin/xargs gh pr view <list.txt",
+    ),
+    (
+        "only the system's copy of a wrapper is stepped over",
+        "if found is None and not _is_system_wrapper(word):",
+        "if False:",
+        "./shim/nohup git diff HEAD",
+    ),
+    (
+        "a wrapper's spelling tested on its ending, as bash leaves it",
+        "word.endswith(name)",
+        "_wrapper_name(word) == name",
+        "/usr/bin\\timeout 5 ruff check . >out",
+    ),
+    (
+        "the system's copy of a wrapper is not a git operand",
+        "if word in stepped_over:",
+        "if False:",
+        "/usr/bin/timeout 60 git diff HEAD",
     ),
 )
 
