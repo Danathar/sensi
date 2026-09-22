@@ -1622,6 +1622,42 @@ _CORPUS: tuple[_Row, ...] = (
         "the matcher steps over noglob as it does timeout, and bash applies "
         "the redirection before it finds noglob is no command at all",
     ),
+    _Row(
+        "redirection",
+        "/usr/bin/timeout 5 python3 scripts/run_tests.py >out",
+        _REFUSED,
+        "the matcher reads a wrapper by its last path component, so it steps "
+        "over /usr/bin/timeout as it does timeout; compared whole here, the "
+        "path named no wrapper and the redirection passed",
+    ),
+    _Row(
+        "redirection",
+        "/usr/bin/timeout 5 ruff check . >out",
+        _REFUSED,
+        "the same path in front of an exact row: the row is found behind the "
+        "wrapper's operand once the path is read as timeout",
+    ),
+    _Row(
+        "redirection",
+        "/usr/bin/noglob gh pr list >out",
+        _REFUSED,
+        "noglob by path is noglob to the matcher too, and bash opens the "
+        "target whether or not it then finds a command to run",
+    ),
+    _Row(
+        "redirection",
+        "/usr/bin/nohup git diff HEAD >out",
+        _REFUSED,
+        "a git segment's redirection is refused whatever leads it, so the "
+        "reason is the write, not the path read as a git operand",
+    ),
+    _Row(
+        "redirection",
+        "/usr/bin/timeout 5 ls >out",
+        _ALLOWED,
+        "a wrapper read by its path still leads only the command it runs, and "
+        "ls matches no allow row, so this prompts on its own",
+    ),
     # --- 3. word rewriting bash does before the tool sees the word --------
     _Row(
         "word rewriting",
@@ -1744,6 +1780,86 @@ _CORPUS: tuple[_Row, ...] = (
         _REFUSED,
         "the matcher strips `timeout 5` and then matches `xargs git diff`, "
         "so xargs counts wherever it stands in the wrapper chain",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/xargs git diff <list.txt",
+        _REFUSED,
+        "a path to xargs is xargs, and the matcher reads it so; before this "
+        "it was refused only because /usr/bin/xargs read as a git operand "
+        "outside the repository",
+    ),
+    _Row(
+        "command name",
+        "timeout 5 /usr/bin/xargs gh pr view <list.txt",
+        _REFUSED,
+        "xargs by path after a wrapper's operand is found among the words, "
+        "not only in the wrapper chain, and gh pr view is a gated prefix",
+    ),
+    _Row(
+        "command name",
+        "$D/xargs git diff <list.txt",
+        _REFUSED,
+        "a wrapper path the shell builds is read by its last component as "
+        "typed, like a literal one, and xargs in front of git diff is refused",
+    ),
+    _Row(
+        "command name",
+        "$D/timeout 5 ruff check . >out",
+        _REFUSED,
+        "the matcher cuts the word to timeout and approves ruff check ., but "
+        "bash runs whatever $D/timeout names, which is not the system's copy",
+    ),
+    _Row(
+        "command name",
+        "ls | /usr/bin/xargs wc -l",
+        _ALLOWED,
+        "xargs by path in front of a command no allow row covers still "
+        "prompts on its own, exactly as the bare spelling does",
+    ),
+    _Row(
+        "command name",
+        "./shim/nohup git diff HEAD",
+        _REFUSED,
+        "the matcher steps over any path ending in a wrapper's name and "
+        "approves git diff HEAD, while bash runs ./shim/nohup, a file anything "
+        "in the tree could have written",
+    ),
+    _Row(
+        "command name",
+        "'./shim\\nohup' git diff HEAD",
+        _REFUSED,
+        "the matcher cuts at a backslash as well as a slash, so a quoted "
+        "backslash spelling is the same wrapper to it and a different file to bash",
+    ),
+    _Row(
+        "command name",
+        "/tmp/timeout 5 python3 scripts/run_tests.py",
+        _REFUSED,
+        "a path to a wrapper outside the system's copies runs that file in "
+        "front of a gated prefix the rule approved on its own",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin\\timeout 5 ruff check . >out",
+        _REFUSED,
+        "the matcher reads the raw word as timeout, but bash removes the "
+        "unquoted backslash and runs /usr/bintimeout after opening out; the "
+        "hook sees the word bash made, so it tests the ending (review on #259)",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/timeout 60 git diff HEAD",
+        _ALLOWED,
+        "the system's copy of a wrapper is stepped over, and git never "
+        "receives it, so it is not an operand outside the repository",
+    ),
+    _Row(
+        "command name",
+        "git diff HEAD -- tools/nohup",
+        _ALLOWED,
+        "a word ending in a wrapper's name after the command name is an "
+        "operand of that command, not a wrapper the matcher steps over",
     ),
     _Row(
         "command name",
@@ -1981,6 +2097,36 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "",
         "noglob python3 scripts/run_tests.py >out",
     ),
+    (
+        "a path to a wrapper, read by its last component",
+        'return _PATH_HEAD.sub("", word)',
+        "return word",
+        "/usr/bin/timeout 5 python3 scripts/run_tests.py >out",
+    ),
+    (
+        "a path to xargs among the words after a wrapper's options",
+        "names = [_wrapper_name(word) for word in chain]",
+        "names = chain",
+        "timeout 5 /usr/bin/xargs gh pr view <list.txt",
+    ),
+    (
+        "only the system's copy of a wrapper is stepped over",
+        "if found is None and not _is_system_wrapper(word):",
+        "if False:",
+        "./shim/nohup git diff HEAD",
+    ),
+    (
+        "a wrapper's spelling tested on its ending, as bash leaves it",
+        "word.endswith(name)",
+        "_wrapper_name(word) == name",
+        "/usr/bin\\timeout 5 ruff check . >out",
+    ),
+    (
+        "the system's copy of a wrapper is not a git operand",
+        "if word in stepped_over:",
+        "if False:",
+        "/usr/bin/timeout 60 git diff HEAD",
+    ),
 )
 
 
@@ -1994,7 +2140,8 @@ _MATCHER_SEPARATORS = re.compile(r"&&|\|\||\|&|;|\||&|\n")
 # `xargs` is not one of the wrappers the real matcher steps over: its `:*`
 # test accepts `xargs <prefix>` and nothing else (Claude Code 2.1.267). The
 # model steps over it for every row, which matches more often than the real
-# one - the safe direction again.
+# one - the safe direction again. A wrapper is read by its last path
+# component, as the real matcher reads it (`/usr/bin/timeout` is `timeout`).
 _MATCHER_WRAPPERS = frozenset(
     {
         "timeout",
@@ -2009,6 +2156,7 @@ _MATCHER_WRAPPERS = frozenset(
     }
 )
 _MATCHER_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+_MATCHER_PATH_HEAD = re.compile(r"^.*[\\/]")
 
 
 def _bash_allow_rules() -> list[str]:
@@ -2026,7 +2174,7 @@ def _subcommand_matches(part: str, rules: list[str]) -> bool:
     """Whether one subcommand matches an allow row, by the documented rules."""
 
     words = part.split()
-    while words and words[0] in _MATCHER_WRAPPERS:
+    while words and _MATCHER_PATH_HEAD.sub("", words[0]) in _MATCHER_WRAPPERS:
         words = words[1:]
     if not words or _MATCHER_ASSIGNMENT.match(words[0]):
         return False
@@ -2068,6 +2216,26 @@ def test_every_corpus_row_is_decided_the_way_it_says(row: _Row) -> None:
             f"because {row.why}; refusing it costs ordinary work "
             f"(stderr={completed.stderr!r})"
         )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/bin/xargs git diff <list.txt",
+        "timeout 5 /usr/bin/xargs git diff <list.txt",
+    ],
+)
+def test_a_path_to_xargs_is_refused_as_xargs(command: str) -> None:
+    """The refusal names what hides the operands, not the path of the wrapper.
+
+    Before the path was read by its last component, `/usr/bin/xargs` was
+    refused as a git operand outside the repository - the right exit for the
+    wrong reason, and a message that sends the reader after the wrong word.
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2
+    assert "xargs adds the words it reads" in completed.stderr
 
 
 def test_the_corpus_covers_every_family_with_both_decisions() -> None:
