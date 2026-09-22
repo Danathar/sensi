@@ -19,6 +19,12 @@ output redirection on a segment that runs one of those commands too, and the
 list of them is derived from the settings file here, so a `:*` row added there
 fails until the hook lists it.
 
+An assignment written in front of the command name is part of that approved
+string too, and git reads program names out of its environment:
+`GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs `prog` once per changed
+path. The hook refuses an assignment before any of these commands, git
+included.
+
 Each test feeds the committed script a payload on stdin, the way Claude Code
 does, and checks the exit code: 0 lets the call through, 2 blocks it and puts
 the reason on stderr. The script is run by its own path so a lost executable
@@ -583,10 +589,9 @@ def test_an_output_redirection_on_a_gated_command_is_refused(
         # command, decided on its own.
         "echo $(gh pr list)",
         "for n in $(gh pr list --json number -q '.[].number'); do echo $n; done",
-        # An assignment on another command, or before git, is left alone.
+        # An assignment on another command is left alone.
         "FOO=1 echo x; gh pr list",
         "x=1; gh pr list",
-        "PAGER=cat git log -1",
     ],
 )
 def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None:
@@ -682,6 +687,73 @@ def test_an_assignment_before_a_gated_command_that_is_not_git_is_refused(
     completed = _run(_payload(command))
     assert completed.returncode == 2, f"{command!r} was not blocked"
     assert "assignment" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # git reads the names of programs to run out of its environment, and
+        # the allow rule matches `git diff` on its prefix, so the assignment
+        # in front of it is part of the approved string.
+        "GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external "
+        "GIT_CONFIG_VALUE_0=/tmp/prog git diff HEAD",
+        "LD_PRELOAD=/tmp/lib.so git log -1",
+        "GIT_PAGER=/tmp/prog git --paginate log -1",
+        "PAGER=cat git log -1",
+        # Behind `env` the assignment still stands before the command name.
+        "env GIT_EXTERNAL_DIFF=/tmp/prog git show HEAD",
+        # The subcommand does not matter: `git status`, `git branch` and
+        # `git add` are allow-listed too, and the environment is git's either
+        # way.
+        "GIT_EXTERNAL_DIFF=/tmp/prog git status",
+        # A second git command in the same string is judged on its own.
+        "git diff HEAD; GIT_EXTERNAL_DIFF=/tmp/prog git log -1",
+    ],
+)
+def test_an_assignment_before_git_is_refused(command: str) -> None:
+    """`GIT_EXTERNAL_DIFF=prog git diff` runs prog once per changed path."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "assignment" in completed.stderr
+
+
+def test_git_really_runs_the_program_named_by_the_environment(
+    tmp_path: Path,
+) -> None:
+    """The refusal is not theoretical: git executes GIT_EXTERNAL_DIFF itself."""
+
+    marker = tmp_path / "ran"
+    program = tmp_path / "prog.sh"
+    program.write_text(f"#!/bin/sh\nprintf ran >{marker}\n", encoding="utf-8")
+    program.chmod(program.stat().st_mode | stat.S_IXUSR)
+
+    work = tmp_path / "work"
+    work.mkdir()
+    tracked = work / "tracked.txt"
+
+    def _git(*arguments: str, **environment: str) -> None:
+        subprocess.run(
+            ["git", *arguments],
+            cwd=str(work),
+            env={**os.environ, **environment},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.invalid")
+    _git("config", "user.name", "test")
+    tracked.write_text("one\n", encoding="utf-8")
+    _git("add", "tracked.txt")
+    _git("commit", "-q", "-m", "one")
+    tracked.write_text("two\n", encoding="utf-8")
+
+    _git("diff", GIT_EXTERNAL_DIFF=str(program))
+
+    assert marker.exists(), "git did not run the external diff program"
 
 
 def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:

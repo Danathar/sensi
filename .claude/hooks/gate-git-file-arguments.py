@@ -32,6 +32,16 @@ three of their arguments do file I/O that has nothing to do with the repository:
   allow-listed too and the write is the shell's, not git's; `2>&1`, an input
   redirection and a redirection on another command of the same string are
   left alone.
+* An assignment written before git is the same approval by another route, and
+  git reads program names out of its environment.
+  `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs `prog` once per changed
+  path, with the two versions of the file in its arguments;
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0=prog`
+  sets the same program through the config, and `LD_PRELOAD=lib.so` loads a
+  library into git itself. `Bash(git diff:*)` matches the string on its
+  prefix, and a leading assignment is part of what that prefix matches, so
+  none of these prompts. An assignment before a git segment is refused the
+  way one before the other allow-listed commands already was.
 * `~/secrets.yaml` is `$HOME/secrets.yaml` to bash and, to a check that read
   the word as typed, a directory called `~` inside the repository. A word
   that begins with `~` is outside the repository by definition here, whatever
@@ -597,8 +607,7 @@ def main() -> int:
                     "that changes what runs or where it goes - PYTEST_ADDOPTS= adds "
                     "options the wrapper never sees, PYTHONPATH= puts a module of "
                     "its own ahead of the wrapper's imports, GH_HOST= sends the "
-                    "token elsewhere. Run the command without the assignment; a "
-                    "git invocation is not affected by this rule.",
+                    "token elsewhere. Run the command without the assignment.",
                     file=sys.stderr,
                 )
                 return 2
@@ -613,6 +622,20 @@ def main() -> int:
                 "`git diff`, `git log` and `git show` print to stdout; read that "
                 "instead. 2>&1, >&2, an input redirection, and a redirection on "
                 "another command of the same string are not refused.",
+                file=sys.stderr,
+            )
+            return 2
+        if _command_words(segment)[2]:
+            print(
+                "Blocked: an assignment before git is an environment git runs "
+                "under, and git reads the names of programs to run out of it: "
+                "GIT_EXTERNAL_DIFF=prog makes `git diff` run prog once per "
+                "changed path, GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external "
+                "sets the same program through the config, and LD_PRELOAD=lib.so "
+                "loads a library into git itself. The allow rule matches the "
+                "command on its prefix and the assignment is part of the string "
+                "it matches, so nothing else would prompt. Run git without the "
+                "assignment.",
                 file=sys.stderr,
             )
             return 2
