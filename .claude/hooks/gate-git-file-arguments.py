@@ -44,10 +44,13 @@ three of their arguments do file I/O that has nothing to do with the repository:
   form, which creates the variable when it is unset; the export family
   (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
   applies to every command it runs later in the same string; the bare
-  `export NAME` that arms a name a *later* command assigns to; `set -a`,
-  which makes every later assignment an exported one without naming a
-  builtin at all; and `env -S`, which hides the whole invocation inside one
-  word.
+  `export NAME` (or `declare -x NAME`) that arms a name a *later* command
+  assigns to - but not `declare NAME`, `readonly NAME` or `export -n NAME`,
+  which export nothing; `set -a`, which makes every later assignment an
+  exported one without naming a builtin at all; and `env -S`, which hides
+  the whole invocation inside one word. The rule is ordered, which was decided
+  in #256: an export reaches only the commands after it in the string, so
+  `git diff HEAD; export FOO=1` is not refused.
 
   What this refusal does *not* rest on: Claude Code's own permission matcher
   documents that "an allow rule won't match past an assignment of any other
@@ -77,9 +80,22 @@ three of their arguments do file I/O that has nothing to do with the repository:
   redirection in a segment that runs one of them is refused the way one on
   a git segment is. Descriptor forms, input redirections, pipes and a
   command no allow rule covers are left alone - that one prompts on its
-  own - and the rows with no `:*` (`ruff check .`, `ruff format --check .`,
-  `python3 scripts/check_requirements_sync.py`) need no entry, because a
-  redirection makes the string match none of them.
+  own. The three rows with no `:*` (`ruff check .`, `ruff format --check .`,
+  `python3 scripts/check_requirements_sync.py`) are gated the same way; see
+  `_EXACT_ROWS`.
+* `xargs` hides the operands altogether. It appends the words it reads from
+  standard input, or from the file `-a FILE` names, to the command it runs,
+  so `xargs git diff <list.txt` is `git diff /dev/null ./secrets.yaml` when
+  list.txt says so, and no scan of the string sees either path. The
+  permission matcher's `:*` test accepts `xargs <prefix>` as readily as
+  `<prefix>` (Claude Code 2.1.267), so nothing prompts either. `xargs` is
+  refused in front of any command an allow row approves - git's rows, the
+  `:*` prefixes and the exact rows - wherever it stands in the wrapper chain
+  (`timeout 5 xargs git diff`, `nice xargs gh pr view`). `xargs -r git diff`
+  does not begin `xargs git diff` and would prompt, and is refused with the
+  rest, because the prompt would ask about operands it cannot show. In front
+  of a command no rule covers (`git diff --name-only | xargs echo`) xargs
+  prompts on its own and is left alone.
 
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
@@ -88,11 +104,12 @@ Each rests on a documented property of the permission matcher, not on a guess:
 * Anything behind `env`. `env -i`, `env -C DIR` / `env --chdir=DIR`,
   `env --split-string=`, and `env -u NAME` all reach the tool, but `env` is
   not one of the wrappers the matcher steps over (`timeout`, `time`, `nice`,
-  `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, `xargs` are), so a string
-  beginning `env ` matches no allow row and prompts. `_splits_a_string` still
-  refuses the `env -S` spelling, because that one hides a whole invocation
-  inside a single word and a gate that cannot see the words cannot be said to
-  have decided anything about them.
+  `nohup`, `stdbuf`, `command`, `builtin` and `noglob` are, and a `:*` row
+  also matches `xargs <prefix>`), so a string beginning `env ` matches no
+  allow row and prompts. `_splits_a_string` still refuses the `env -S`
+  spelling, because that one hides a whole invocation inside a single word
+  and a gate that cannot see the words cannot be said to have decided
+  anything about them.
 * git's own global options - `git -c diff.external=prog diff`,
   `--config-env`, `--exec-path` - which do reach git and do load a program.
   `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
@@ -100,21 +117,19 @@ Each rests on a documented property of the permission matcher, not on a guess:
   stands before the subcommand, so `git -c ... diff` begins `git -c` and
   matches nothing. The same answer covers a brace-built command name
   (`{,git} diff`), which begins `{,git}`.
-One shape is left *undecided*, deliberately, and is recorded as an open
-question rather than answered: the three allow rows with no `:*` -
-`ruff check .`, `ruff format --check .` and
-`python3 scripts/check_requirements_sync.py`. A rule with no wildcard matches
-one exact string, so on the reading this file has always used - a redirection
-is part of the string the rule is compared against - `ruff check . >path`
-matches nothing and prompts. But the matcher is also documented to check a
-redirect target against the `Read`/`Edit` rules on its own, which reads as the
-command half being matched *without* the redirection; on that reading
-`ruff check . >custom_components/sensi/client.py` matches the exact row and
-the target is governed by the `Edit` deny rows alone, which do not name it.
-Which reading holds decides whether these three rows need gating. Gating them
-on a guess would refuse ordinary work if the first reading is right, so the
-question is carried in `_OPEN_QUESTIONS` in the test file, pinned to today's
-answer, instead of being settled here.
+
+The three rows with no `:*` were an open question in #250 and were decided in
+#256: they are gated like the `:*` rows. A rule with no wildcard matches one
+exact string. If the matcher compares the string with the redirection in it,
+`ruff check . >path` matches nothing and prompts. But the matcher is also
+documented to check a redirect target against the `Read`/`Edit` rules on its
+own, which reads as the command half being matched *without* the redirection.
+On that reading `ruff check . >custom_components/sensi/client.py` matches the
+exact row, and the target is governed only by the `Edit` deny rows, which do
+not name it. Refusing the redirection costs almost nothing, because nobody
+needs lint output in a file, while the other reading leaves a live write. So
+an output redirection on these commands is refused, and so are
+`RUFF_OUTPUT_FILE=` in front of ruff and ruff's `--output-file`/`-o`.
 
 No permission rule can close the rest. `deny` matching is by command prefix,
 and every one of these is an option that can be written anywhere in the
@@ -222,18 +237,42 @@ _GATED_PREFIXES = (
     ("gh", "run", "list"),
 )
 
+# The allow rows with no `:*`, each of which matches one exact string. They are
+# gated the same way (decided in #256). If the permission matcher compares the
+# string with a redirection in it, `ruff check . >path` matches no row and
+# prompts, and refusing it costs nothing, because nobody needs lint output in
+# a file. If the matcher checks the redirect target against the file rules on
+# its own and compares only the command half, the same string matches the
+# exact row and writes any path the `Edit` deny rows do not name. The
+# documentation reads both ways, and refusing costs almost nothing, so the
+# hook refuses. Ruff's own ways to write a file are refused with it: its
+# `--output-file`/`-o` flag, and `RUFF_OUTPUT_FILE=` as a leading assignment,
+# which the assignment rule for these prefixes already refuses.
+# `test_git_file_argument_gate.py` derives this list from the settings file
+# too.
+_EXACT_ROWS = (
+    ("ruff", "check", "."),
+    ("ruff", "format", "--check", "."),
+    ("python3", "scripts/check_requirements_sync.py"),
+)
+
 # Words that stand before the name of the command they run and are not part
 # of the prefix an allow rule matches, the way a leading `NAME=value` is not:
 # `time python3 scripts/run_tests.py >out` is the wrapper's redirection.
 #
 # The list is Claude Code's own - the wrappers its permission matcher steps
-# over before matching a rule - plus `env` and `exec`, which it does not step
-# over. Keeping it narrower than the matcher's was the bug: `time` was here
-# and `timeout` was not, so `time python3 scripts/run_tests.py >out` was
-# refused while `timeout 5 python3 scripts/run_tests.py >out` was not, and
-# the matcher steps over both. A wrapper this hook lists and the matcher does
+# over before matching a rule (`timeout`, `time`, `nice`, `stdbuf`, `nohup`,
+# `command`, `builtin`, `noglob`, in 2.1.267) - plus `xargs`, which its `:*`
+# test accepts in front of a prefix (`xargs git diff` matches
+# `Bash(git diff:*)`), and `env` and `exec`, which it does not step over.
+# Keeping it narrower than the matcher's was the bug: `time` was here and
+# `timeout` was not, so `time python3 scripts/run_tests.py >out` was refused
+# while `timeout 5 python3 scripts/run_tests.py >out` was not, and the
+# matcher steps over both. A wrapper this hook lists and the matcher does
 # not costs nothing, because the string prompts anyway; one the matcher lists
-# and this hook does not is a hole.
+# and this hook does not is a hole. `xargs` in front of an allow-listed
+# command is refused outright, by `_xargs_runs`, since stepping over it is
+# not enough: the operands it adds are not in the string.
 #
 # A wrapper's own options are still not modelled. `env -i python3 ...` matches
 # no allow rule (see the header: `env` is not a wrapper the matcher steps
@@ -268,19 +307,32 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 # flag. Bash applies what they set to every command it runs later in the same
 # string, so the assignment reaches a git invocation that carries none of its
 # own: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` runs prog once per
-# changed path. The builtin is refused rather than its options read, because
-# the flag that exports has several spellings (-x, -gx, a plain `NAME=value`
-# after an earlier `declare -x NAME`) and a half-read option list is a gate
-# that disagrees with bash in some other direction.
+# changed path. A builtin that assigns a value is refused whatever its options
+# say, because a value given to a name that is already exported reaches every
+# later command however the builtin was spelled (`readonly PATH=/x` included).
+# Only a bare name - no value - has its options read, since what a bare name
+# does depends on them: `export NAME`, `declare -x NAME` and `typeset -x NAME`
+# export it for a later assignment, while `declare NAME`, `readonly NAME`,
+# `export -n NAME` and `declare +x NAME` do not (bash 5.3).
 _EXPORT_BUILTINS = frozenset({"export", "declare", "typeset", "readonly"})
 
-# The git subcommands `.claude/settings.json` allows with any arguments after
-# them. `_GATED_SUBCOMMANDS` above is the narrower set whose *options* do file
-# I/O; this is every subcommand a rule approves on its prefix, which is the
-# set a substitution can ride in on. `test_git_file_argument_gate.py` derives
-# it from the settings file, so a git row added there fails until it is here.
-_ALLOWED_SUBCOMMANDS = frozenset(
-    {"status", "diff", "log", "show", "branch", "add", "checkout"}
+# The git allow rows of `.claude/settings.json`, as the words after `git` that
+# each rule approves with any arguments after them. `_GATED_SUBCOMMANDS` above
+# is the narrower set whose *options* do file I/O; this is every prefix a rule
+# approves, which is the set a substitution can ride in on. The whole prefix
+# counts, not just the subcommand: `Bash(git checkout -b:*)` approves
+# `git checkout -b topic` and not `git checkout $(...)`, which prompts, and a
+# refusal there would take away the prompt the user could have answered.
+# `test_git_file_argument_gate.py` derives this from the settings file, so a
+# git row added there fails until it is here.
+_ALLOWED_GIT_PREFIXES = (
+    ("status",),
+    ("diff",),
+    ("log",),
+    ("show",),
+    ("branch",),
+    ("add",),
+    ("checkout", "-b"),
 )
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
@@ -290,7 +342,13 @@ _ENV_SPLIT_STRING = re.compile(r"^-S|^--split-string")
 
 # The command names this hook gates, for the two tests that have to ask "would
 # this string reach one of them" without being able to see the words.
-_GUARDED_NAME = re.compile(r"\b(git|gh|python3)\b")
+_GUARDED_NAME = re.compile(r"\b(git|gh|python3|ruff)\b")
+
+# Ruff's own file-writing flag, `--output-file PATH` / `--output-file=PATH`,
+# and its short `-o`, which clap also takes attached (`-oPATH`) or at the end
+# of a cluster of short flags (`-qo PATH`). The letter is looked for anywhere
+# in a short cluster, as `-O` is for git.
+_RUFF_OUTPUT_FLAG = re.compile(r"^--output-file(=|$)|^-[A-Za-z]*o")
 
 
 def _brace_would_expand(word: str) -> bool:
@@ -576,8 +634,8 @@ def _refusal(word: str) -> str | None:
     return None
 
 
-def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
-    """Return the words the command in `segment` receives, and whether a wrapper led.
+def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
+    """Return the words the command in `segment` receives, and what led it.
 
     A redirection - its operator, its target and a descriptor written before
     it - is the shell's, and bash lets it stand anywhere in the simple
@@ -585,12 +643,14 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
     scripts/run_tests.py` both come back as `['python3',
     'scripts/run_tests.py']`. A leading `NAME=value` and a leading wrapper
     word are stepped over, since neither is part of the prefix an allow rule
-    matches. A `$` left behind by a nested `$(...)` is dropped from the end of
-    a word, so the words are the ones typed around the substitution.
+    matches: the wrapper words come back second, in the order written, and
+    whether an assignment led comes back third. A `$` left behind by a nested
+    `$(...)` is dropped from the end of a word, so the words are the ones
+    typed around the substitution.
     """
 
     words: list[str] = []
-    wrapped = False
+    wrappers: list[str] = []
     assigned = False
     index = 0
     while index < len(segment):
@@ -612,12 +672,14 @@ def _command_words(segment: list[str]) -> tuple[list[str], bool, bool]:
             word = word[:-1]
             if not word:
                 continue
-        if not words and (_ASSIGNMENT.match(word) or word in _COMMAND_WRAPPERS):
-            wrapped = wrapped or word in _COMMAND_WRAPPERS
-            assigned = assigned or word not in _COMMAND_WRAPPERS
+        if not words and word in _COMMAND_WRAPPERS:
+            wrappers.append(word)
+            continue
+        if not words and _ASSIGNMENT.match(word):
+            assigned = True
             continue
         words.append(word)
-    return words, wrapped, assigned
+    return words, wrappers, assigned
 
 
 def _exports_a_name(segment: list[str]) -> bool:
@@ -628,21 +690,35 @@ def _exports_a_name(segment: list[str]) -> bool:
     after the command name instead of before it. `export` on its own, and
     `declare -p`, name nothing and are not this.
 
-    A name with no `=` counts. `export GIT_EXTERNAL_DIFF` exports the name
-    first and a later command assigns to it - `export GIT_EXTERNAL_DIFF;
-    GIT_EXTERNAL_DIFF=prog; git diff HEAD` puts the program in git's
-    environment exactly as the one-word spelling does, and asking only
-    whether the builtin's own word carried an `=` answered no for it. Which
-    name is dangerous is deliberately not modelled: a table of variable names
-    is a list to keep up to date, and over-refusing `export PATH=...; git
-    diff` is the cheap direction to be wrong in when the refusal says to run
-    the command without the export.
+    A name with no `=` counts when the builtin exports it. `export
+    GIT_EXTERNAL_DIFF` exports the name first and a later command assigns to
+    it - `export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=prog; git diff HEAD`
+    puts the program in git's environment exactly as the one-word spelling
+    does, and asking only whether the builtin's own word carried an `=`
+    answered no for it. A bare name counts only for the spellings that
+    export: `export` without `-n`, and `declare`/`typeset` with `-x`.
+    `declare FOO`, `readonly FOO`, `export -n FOO` and `declare +x FOO` put
+    nothing in a later command's environment (bash 5.3), and refusing the
+    git command after them would block a call the user could have approved.
+
+    A name *with* a value counts for every builtin in `_EXPORT_BUILTINS`,
+    whatever its options: a value given to a name that is already exported
+    reaches later commands however it was assigned. Which name is dangerous
+    is deliberately not modelled: a table of variable names is a list to
+    keep up to date, and over-refusing `export PATH=...; git diff` is the
+    cheap direction to be wrong in when the refusal says to run the command
+    without the export.
     """
 
-    words, _wrapped, _assigned = _command_words(segment)
+    words, _wrappers, _assigned = _command_words(segment)
     if not words or words[0] not in _EXPORT_BUILTINS:
         return False
-    return any(not word.startswith("-") for word in words[1:])
+    names = [word for word in words[1:] if not word.startswith(("-", "+"))]
+    if any(_ASSIGNMENT.match(word) for word in names):
+        return True
+    flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+    exports = "n" not in flags if words[0] == "export" else "x" in flags
+    return exports and bool(names)
 
 
 def _turns_on_allexport(segment: list[str]) -> bool:
@@ -656,7 +732,7 @@ def _turns_on_allexport(segment: list[str]) -> bool:
     for longer than bash would - the over-refusing direction.
     """
 
-    words, _wrapped, _assigned = _command_words(segment)
+    words, _wrappers, _assigned = _command_words(segment)
     if not words or words[0] != "set":
         return False
     return any(
@@ -675,24 +751,27 @@ def _is_bare_assignment(segment: list[str]) -> bool:
     tells the two apart.
     """
 
-    words, wrapped, assigned = _command_words(segment)
-    return assigned and not words and not wrapped
+    words, wrappers, assigned = _command_words(segment)
+    return assigned and not words and not wrappers
 
 
-def _allowed_git_subcommand(words: list[str]) -> str | None:
-    """Return the allow-listed git subcommand `words` runs, if any.
+def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
+    """Return the git allow row `words` runs under, if any.
 
     Wider than `_runs_gated_git`, which asks only about the three whose
     options do file I/O. A substitution rides in on whichever rule approved
-    the string, and seven git rows carry a `:*`.
+    the string, and seven git rows carry a `:*`. The row's whole prefix has
+    to be there, word for word: `git checkout $(...)` does not begin
+    `git checkout -b `, so no rule approved it and it prompts on its own.
     """
 
     for index, word in enumerate(words):
         if word != "git" and not word.endswith("/git"):
             continue
-        for later in words[index + 1 :]:
-            if later in _ALLOWED_SUBCOMMANDS:
-                return later
+        for start in range(index + 1, len(words)):
+            for prefix in _ALLOWED_GIT_PREFIXES:
+                if tuple(words[start : start + len(prefix)]) == prefix:
+                    return prefix
     return None
 
 
@@ -764,20 +843,63 @@ def _splits_a_string(segment: list[str]) -> bool:
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
-    """Return the `_GATED_PREFIXES` entry the segment's leading words match.
+    """Return the gated allow row the segment's leading words match.
+
+    `_GATED_PREFIXES` and `_EXACT_ROWS` alike. An exact row is matched as a
+    prefix too, so `ruff check . --output-file=x` is read as `ruff check .`
+    with more after it - a string that prompts today, and refusing it costs
+    nothing.
 
     Behind a wrapper the name may stand after the wrapper's own options
     (`command -p gh pr list >out`), so every later word is tried as the
     start; without one, only the first word names the command.
     """
 
-    words, wrapped, _assigned = _command_words(segment)
-    starts = range(len(words)) if wrapped else range(min(len(words), 1))
+    words, wrappers, _assigned = _command_words(segment)
+    starts = range(len(words)) if wrappers else range(min(len(words), 1))
+    return _gated_row(words, starts)
+
+
+def _gated_row(words: list[str], starts: range) -> tuple[str, ...] | None:
+    """Return the first gated allow row that begins at one of `starts`."""
+
     for start in starts:
-        for prefix in _GATED_PREFIXES:
+        for prefix in _GATED_PREFIXES + _EXACT_ROWS:
             if tuple(words[start : start + len(prefix)]) == prefix:
                 return prefix
     return None
+
+
+def _xargs_runs(segment: list[str]) -> str | None:
+    """Return the allow-listed command `xargs` runs in `segment`, if it runs one.
+
+    xargs appends the words it reads from standard input, or from the file
+    `-a FILE` names, to the command it runs, so the operands that command
+    receives are not in the string: `xargs git diff <list.txt` is `git diff
+    /dev/null ./secrets.yaml` when list.txt says so, and every rule here
+    reads words this string never carries. The matcher's `:*` test accepts
+    `xargs <prefix>` as readily as `<prefix>`, so nothing prompts either.
+
+    xargs counts wherever it stands in the wrapper chain: first, behind
+    another wrapper (`timeout 5 xargs git diff`), or ahead of options of its
+    own (`xargs -r -0 git diff`). As in `_gated_prefix`, every word after it
+    is tried as the start of the command it runs, since its options are not
+    modelled. The command counts when an allow row approves it - a git row,
+    a `:*` prefix or an exact row. `xargs echo` and `xargs wc -l` match no
+    row and prompt on their own, and so does `xargs git commit`, which is an
+    ask row; refusing those would take away a prompt the user could answer.
+    """
+
+    words, wrappers, _assigned = _command_words(segment)
+    chain = wrappers + words
+    if not wrappers or "xargs" not in chain:
+        return None
+    after = chain[chain.index("xargs") + 1 :]
+    git_prefix = _allowed_git_prefix(after)
+    if git_prefix is not None:
+        return " ".join(("git", *git_prefix))
+    row = _gated_row(after, range(len(after)))
+    return " ".join(row) if row else None
 
 
 def _runs_git(words: list[str]) -> bool:
@@ -854,9 +976,23 @@ def main() -> int:
                 "Blocked: `env -S` (--split-string) splits a quoted string into a "
                 "command this hook never sees as words - the whole invocation is "
                 "one word to any scan of the string - and the string here names "
-                "git, gh or python3. `env -S 'GIT_EXTERNAL_DIFF=prog git diff "
+                "git, gh, python3 or ruff. `env -S 'GIT_EXTERNAL_DIFF=prog git diff "
                 "HEAD~1 HEAD'` is the assignment refused below, written where "
                 "nothing can read it. Write the command out as a command.",
+                file=sys.stderr,
+            )
+            return 2
+        xargs_runs = _xargs_runs(segment)
+        if xargs_runs is not None:
+            print(
+                f"Blocked: xargs adds the words it reads from standard input (or "
+                f"from `-a FILE`) to `{xargs_runs}`, so the operands that command "
+                "receives are not in this string and cannot be checked - `xargs "
+                "git diff <list.txt` is `git diff /dev/null ./secrets.yaml` when "
+                "list.txt says so. The allow rule matches `xargs <prefix>` as "
+                "readily as `<prefix>`, so nothing else would prompt. Name the "
+                "operands in the command itself instead. xargs in front of a "
+                "command no allow rule covers (`xargs echo`) is not refused.",
                 file=sys.stderr,
             )
             return 2
@@ -879,7 +1015,11 @@ def main() -> int:
             return 2
         # Armed *after* this segment has been judged, so the rule stays
         # ordered: an export reaches what bash runs after it and nothing
-        # earlier, and `git diff HEAD; export FOO=1` is left alone.
+        # earlier, and `git diff HEAD; export FOO=1` is left alone. Decided in
+        # #256, matching zfs-kinoite-complex#230 and aurora-zfs-simple#223:
+        # the shell does not outlive a Bash call, so an export can only reach
+        # a later command of the same string, and refusing the earlier one
+        # would refuse a command the export cannot touch.
         if _exports_a_name(segment) or (allexport and _is_bare_assignment(segment)):
             exported = True
         if _turns_on_allexport(segment):
@@ -924,10 +1064,28 @@ def main() -> int:
                     "that changes what runs or where it goes - PYTEST_ADDOPTS= adds "
                     "options the wrapper never sees, PYTHONPATH= puts a module of "
                     "its own ahead of the wrapper's imports, GH_HOST= sends the "
-                    "token elsewhere. Run the command without the assignment.",
+                    "token elsewhere, RUFF_OUTPUT_FILE= makes ruff write its "
+                    "report to a path. Run the command without the assignment.",
                     file=sys.stderr,
                 )
                 return 2
+            if prefix and prefix[0] == "ruff":
+                flag = next(
+                    (
+                        word
+                        for word in _command_words(segment)[0]
+                        if _RUFF_OUTPUT_FLAG.match(word)
+                    ),
+                    None,
+                )
+                if flag is not None:
+                    print(
+                        f"Blocked: `{flag}` is ruff's --output-file, which writes "
+                        "the report to a path of the caller's choosing - the same "
+                        "write a redirection makes. Read ruff's output on stdout.",
+                        file=sys.stderr,
+                    )
+                    return 2
             continue
         redirection = _writing_redirection(segment)
         if redirection is not None:
@@ -942,15 +1100,15 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        subcommand = _allowed_git_subcommand(_command_words(segment)[0])
+        git_prefix = _allowed_git_prefix(_command_words(segment)[0])
         if (
-            subcommand is not None
-            and subcommand not in _GATED_SUBCOMMANDS
+            git_prefix is not None
+            and git_prefix[0] not in _GATED_SUBCOMMANDS
             and _has_substitution(segment)
         ):
             print(
                 f"Blocked: a substitution - $(...), a backtick, <(...) or >(...) - "
-                f"in `git {subcommand}` runs the command inside it as part of a "
+                f"in `git {' '.join(git_prefix)}` runs the command inside it as part of a "
                 "string the allow rule approved on its prefix alone, and that "
                 "inner command is held to no rule: `git status $(printf x >out)` "
                 "truncates the file while git prints as usual, and a backtick "

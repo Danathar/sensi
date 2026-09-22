@@ -361,6 +361,38 @@ def test_git_really_prints_the_file_beside_a_process_substitution(
     )
 
 
+def test_git_really_prints_a_file_named_only_in_what_xargs_reads(
+    tmp_path: Path,
+) -> None:
+    """The reach the xargs rule exists for, run for real.
+
+    The command string names no path at all; the two operands that make git
+    diff an implicit --no-index are in list.txt. A stand-in file in a
+    throwaway repository, never the real secrets.yaml.
+    """
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    (tmp_path / "secrets.yaml").write_text("STAND-IN-NOT-A-SECRET\n", encoding="utf-8")
+    (tmp_path / "list.txt").write_text("/dev/null\n./secrets.yaml\n", encoding="utf-8")
+    command = "xargs git diff <list.txt"
+    shown = subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", command],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "STAND-IN-NOT-A-SECRET" in shown.stdout, (
+        "git diff no longer prints a file whose name reaches it through xargs; "
+        "the xargs rule in the hook may be more than is needed"
+    )
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, (
+        "the command just shown to print a file was not blocked"
+    )
+
+
 @pytest.mark.parametrize(
     ("command", "spelling"),
     [
@@ -483,8 +515,8 @@ def test_every_allow_rule_with_arguments_is_refused_a_writing_redirection() -> N
     these writes any path the caller names unless the hook refuses it. The
     commands are derived from the settings file rather than restated, so a
     rule added there fails here until the hook lists it. The rows with no
-    `:*` need no entry; `test_a_redirection_on_an_unlisted_command_is_left_alone`
-    holds that half.
+    `:*` are held the same way by
+    `test_every_exact_allow_row_is_refused_a_writing_redirection`.
     """
 
     prefixes = _gated_prefixes_from_settings()
@@ -497,18 +529,58 @@ def test_every_allow_rule_with_arguments_is_refused_a_writing_redirection() -> N
         assert prefix in completed.stderr
 
 
-def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
-    """Neither the hook nor the settings file may carry a row the other lacks."""
+def _listed_rows(name: str) -> list[str]:
+    """Return a tuple-of-tuples constant of the hook, one command per entry."""
 
     source = _HOOK.read_text(encoding="utf-8")
-    start = source.index("_GATED_PREFIXES = (")
+    start = source.index(f"{name} = (")
     end = source.index("\n)\n", start)
-    listed = sorted(
+    return sorted(
         " ".join(json.loads(f"[{line.strip().strip('(),')}]"))
         for line in source[start:end].splitlines()[1:]
         if line.strip().startswith("(")
     )
-    assert listed == sorted(_gated_prefixes_from_settings())
+
+
+def test_the_gated_prefixes_are_exactly_the_settings_rows() -> None:
+    """Neither the hook nor the settings file may carry a row the other lacks."""
+
+    assert _listed_rows("_GATED_PREFIXES") == sorted(_gated_prefixes_from_settings())
+
+
+def _exact_rows_from_settings() -> list[str]:
+    """Return the `Bash(...)` allow rows with no `:*`, as whole commands."""
+
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    return [
+        rule[len("Bash(") : -len(")")]
+        for rule in settings["permissions"]["allow"]
+        if rule.startswith("Bash(") and not rule.endswith(":*)")
+    ]
+
+
+def test_every_exact_allow_row_is_refused_a_writing_redirection() -> None:
+    """The three rows with no `:*` are gated too (decided in #256).
+
+    Whether the permission matcher compares an exact row against the string
+    with its redirection or without it is not settled by the documentation.
+    On the second reading `ruff check . >path` matches the row and writes a
+    path no `Edit` deny row names, and refusing it costs nothing, so each
+    exact row is refused a writing redirection whichever reading holds.
+    Derived from the settings file, so a fourth exact row fails here until
+    the hook lists it in `_EXACT_ROWS`.
+    """
+
+    rows = _exact_rows_from_settings()
+    assert len(rows) >= 3, rows
+    assert _listed_rows("_EXACT_ROWS") == sorted(rows)
+    for row in rows:
+        command = f"{row} >.claude/settings.json"
+        completed = _run(_payload(command))
+        assert completed.returncode == 2, f"{command!r} was not blocked"
+        assert ">.claude/settings.json" in completed.stderr
+        plain = _run(_payload(row))
+        assert plain.returncode == 0, f"{row!r} itself was blocked: {plain.stderr}"
 
 
 @pytest.mark.parametrize(
@@ -609,14 +681,11 @@ def test_reading_the_output_of_a_gated_command_still_works(command: str) -> None
     [
         # A command no allow rule covers prompts on its own, and refusing it
         # here would be the hook deciding a question the settings file already
-        # decides; the three exact rows carry no `:*`, so a redirection makes
-        # the string match none of them. A redirection on another command of
-        # the same string is that command's own. The last two are refused by
-        # the Bash tool itself before any rule or hook sees them ("does not
-        # accept compound statements with redirection", Claude Code 2.1.267).
+        # decides. A redirection on another command of the same string is
+        # that command's own. The last two are refused by the Bash tool itself
+        # before any rule or hook sees them ("does not accept compound
+        # statements with redirection", Claude Code 2.1.267).
         "echo x >out",
-        "ruff check . >out",
-        "python3 scripts/check_requirements_sync.py >out",
         "python3 scripts/other_script.py >out",
         "echo x >out; gh pr list",
         "gh pr list | tee out",
@@ -1410,6 +1479,44 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "declare -x GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+        _REFUSED,
+        "declare -x exports the bare name as export does, so the later plain "
+        "assignment lands in git's environment (bash 5.3)",
+    ),
+    _Row(
+        "environment",
+        "declare GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+        _ALLOWED,
+        "declare without -x exports nothing, so the later assignment stays a "
+        "shell variable git never sees (bash 5.3); refusing it would take away "
+        "a prompt the user could have answered (review on #256)",
+    ),
+    _Row(
+        "environment",
+        "export -n GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+        _ALLOWED,
+        "export -n takes the export attribute away, the opposite of arming "
+        "it, so nothing reaches git (bash 5.3)",
+    ),
+    _Row(
+        "environment",
+        "readonly FOO; git diff HEAD",
+        _ALLOWED,
+        "readonly with a bare name marks it read-only and exports nothing; "
+        "readonly with a value is refused, since a value given to an already "
+        "exported name reaches later commands",
+    ),
+    _Row(
+        "environment",
+        "RUFF_OUTPUT_FILE=.claude/settings.json ruff check .",
+        _REFUSED,
+        "ruff writes its report to the path this names. The exact rows are "
+        "gated like the :* rows (decided in #256), and a leading assignment "
+        "on a gated command is refused",
+    ),
+    _Row(
+        "environment",
         "PYTEST_ADDOPTS=--junitxml=/tmp/x python3 scripts/run_tests.py",
         _REFUSED,
         "reaches pytest past every option scripts/run_tests.py refuses, "
@@ -1427,10 +1534,12 @@ _CORPUS: tuple[_Row, ...] = (
         "git diff HEAD; export GIT_EXTERNAL_DIFF=/tmp/prog",
         _ALLOWED,
         "an export reaches what bash runs after it and nothing earlier, so "
-        "this one arms nothing; the rule is ordered for that reason. The "
-        "export half is not this hook's business either way - an allow rule "
-        "for `git diff` matches only that subcommand, and `;` starts a fresh "
-        "match, so the export prompts on its own account",
+        "this one arms nothing. Decided in #256: the rule is ordered, because "
+        "the shell does not outlive a Bash call and an export cannot reach a "
+        "command before it (matching zfs-kinoite-complex#230 and "
+        "aurora-zfs-simple#223). The export half prompts on its own account - "
+        "an allow rule for `git diff` matches only that subcommand, and `;` "
+        "starts a fresh match",
     ),
     _Row(
         "environment",
@@ -1498,6 +1607,21 @@ _CORPUS: tuple[_Row, ...] = (
         "the redirection is echo's, and a string containing echo matches no "
         "allow rule, so it prompts on its own",
     ),
+    _Row(
+        "redirection",
+        "ruff check . >custom_components/sensi/client.py",
+        _REFUSED,
+        "decided in #256: if the matcher compares the exact row without the "
+        "redirection, this writes a path no Edit deny row names; refusing it "
+        "costs nothing, since nobody needs lint output in a file",
+    ),
+    _Row(
+        "redirection",
+        "noglob python3 scripts/run_tests.py >out",
+        _REFUSED,
+        "the matcher steps over noglob as it does timeout, and bash applies "
+        "the redirection before it finds noglob is no command at all",
+    ),
     # --- 3. word rewriting bash does before the tool sees the word --------
     _Row(
         "word rewriting",
@@ -1552,6 +1676,21 @@ _CORPUS: tuple[_Row, ...] = (
         "a newline inside quotes is a character of its word, not a command "
         "boundary, so the line is not split into two segments",
     ),
+    _Row(
+        "word rewriting",
+        "git checkout -b $(git branch --show-current)-2",
+        _REFUSED,
+        "`Bash(git checkout -b:*)` approves this on its prefix, and the "
+        "substitution runs a command matched against no rule of its own",
+    ),
+    _Row(
+        "word rewriting",
+        "git checkout $(git branch --show-current)",
+        _ALLOWED,
+        "no allow row begins `git checkout ` without -b, so this prompts on "
+        "its own; the git rows are matched on their whole prefix (review on "
+        "#256)",
+    ),
     # --- 4. the command name itself ---------------------------------------
     _Row(
         "command name",
@@ -1571,8 +1710,68 @@ _CORPUS: tuple[_Row, ...] = (
         "command name",
         "xargs python3 scripts/run_tests.py >out",
         _REFUSED,
-        "xargs is on the matcher's own list of stepped-over wrappers, so it "
-        "reaches the wrapper's allow row the way time does",
+        "the matcher's :* test accepts `xargs <prefix>` as readily as "
+        "`<prefix>`, so the wrapper's allow row approves this, and xargs "
+        "adds words from stdin the string does not carry; the xargs rule "
+        "refuses it before the redirection is read",
+    ),
+    _Row(
+        "command name",
+        "xargs git diff <list.txt",
+        _REFUSED,
+        "git diff receives the words in list.txt, which this string does not "
+        "carry: /dev/null and ./secrets.yaml there make it an implicit "
+        "--no-index that prints the file, and `Bash(git diff:*)` matches "
+        "`xargs git diff`",
+    ),
+    _Row(
+        "command name",
+        "cat list.txt | xargs git diff",
+        _REFUSED,
+        "the same operands arriving through a pipe; the words git receives "
+        "are cat's output, which no scan of the string can see",
+    ),
+    _Row(
+        "command name",
+        "xargs -a list.txt git diff",
+        _REFUSED,
+        "-a names the file xargs reads its words from, so stdin is not the "
+        "only way in, and every word after xargs is tried as the command",
+    ),
+    _Row(
+        "command name",
+        "timeout 5 xargs git diff <list.txt",
+        _REFUSED,
+        "the matcher strips `timeout 5` and then matches `xargs git diff`, "
+        "so xargs counts wherever it stands in the wrapper chain",
+    ),
+    _Row(
+        "command name",
+        "nice xargs gh pr view <list.txt",
+        _REFUSED,
+        "the gated prefixes are allow rows too, and xargs in front of one "
+        "hides its arguments the same way it hides git's",
+    ),
+    _Row(
+        "command name",
+        "git diff --name-only | xargs echo",
+        _ALLOWED,
+        "xargs in front of a command no allow row covers matches nothing, so "
+        "Claude Code prompts for it on its own account",
+    ),
+    _Row(
+        "command name",
+        "xargs git commit -m wip",
+        _ALLOWED,
+        "git commit is an ask row, so this prompts on its own; refusing it "
+        "would take away a prompt the user could have answered",
+    ),
+    _Row(
+        "command name",
+        "git log --grep=xargs -1",
+        _ALLOWED,
+        "xargs inside an argument is text, not a command; the rule reads the "
+        "wrapper chain in front of the command name, not the string",
     ),
     _Row(
         "command name",
@@ -1642,6 +1841,27 @@ _CORPUS: tuple[_Row, ...] = (
         "path itself, and checks the argv bash hands it; this hook does not "
         "second-guess that list",
     ),
+    _Row(
+        "options",
+        "ruff check . --output-file=.claude/settings.json",
+        _REFUSED,
+        "ruff's own flag for writing its report to a path - the write a "
+        "redirection makes, spelled as an option (ruff 0.16.6 writes it)",
+    ),
+    _Row(
+        "options",
+        "ruff check . -qo .claude/settings.json",
+        _REFUSED,
+        "-o is --output-file spelled short, and clap accepts it at the end of "
+        "a cluster of short flags, so the letter is looked for anywhere in it",
+    ),
+    _Row(
+        "options",
+        "ruff check . --output-format=github",
+        _ALLOWED,
+        "--output-format picks how the report looks and still prints it to "
+        "stdout; a flag test that matched --output* would refuse it",
+    ),
 )
 
 
@@ -1682,36 +1902,6 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
 )
 
 
-# Shapes whose answer depends on a matcher behaviour that is not documented,
-# recorded here rather than decided. Each is pinned to the answer the hook
-# gives today, so a change of behaviour is visible in a diff rather than
-# silent; the reason says what would have to be true for the shape to reach.
-_OPEN_QUESTIONS: tuple[tuple[str, str, str, str], ...] = (
-    (
-        "redirection",
-        "ruff check . >custom_components/sensi/client.py",
-        _ALLOWED,
-        "`Bash(ruff check .)` has no :* and matches one exact string, so this "
-        "reaches nothing *if* a redirection is part of the string the matcher "
-        "compares. The documentation says instead that a redirect target is "
-        "checked against the file rules on its own, which would make the "
-        "command half match the exact row and leave the target governed by "
-        "`Edit(...)` deny rows alone - and this target is on none of them. "
-        "Which of the two readings holds decides whether the three rows "
-        "without a :* need gating; it is not this pass's call to make",
-    ),
-    (
-        "environment",
-        "RUFF_OUTPUT_FILE=.claude/settings.json ruff check .",
-        _ALLOWED,
-        "ruff's own write primitive. Unreachable on the documented rule that "
-        "an allow rule will not match past an assignment - but the set of "
-        "known-safe variables that *are* stepped over is not published, so "
-        "the answer rests on a list this repository cannot read",
-    ),
-)
-
-
 # Disabling a rule must fail a row of the corpus, or the row is not what holds
 # the rule. `(label, before, after, witness)`: the edit is applied to a copy of
 # the hook and the witness must flip to the opposite decision. A witness that
@@ -1739,15 +1929,57 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "an export-family builtin naming a variable with no value",
-        'return any(not word.startswith("-") for word in words[1:])',
-        "return any(_ASSIGNMENT.match(word) for word in words[1:])",
+        "return exports and bool(names)",
+        "return False",
         "export GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "a bare name armed only by declare -x, not by declare",
+        'else "x" in flags',
+        "else True",
+        "declare GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "a bare name disarmed by export -n",
+        '"n" not in flags if',
+        "True if",
+        "export -n GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
     ),
     (
         "set -a, which exports every assignment after it",
         "if _turns_on_allexport(segment):",
         "if False:",
         "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "the exact allow rows, gated like the :* rows",
+        "for prefix in _GATED_PREFIXES + _EXACT_ROWS:",
+        "for prefix in _GATED_PREFIXES:",
+        "ruff check . >custom_components/sensi/client.py",
+    ),
+    (
+        "ruff's own --output-file / -o",
+        "if flag is not None:",
+        "if False:",
+        "ruff check . --output-file=.claude/settings.json",
+    ),
+    (
+        "matching a git allow row on its whole prefix",
+        '    ("checkout", "-b"),',
+        '    ("checkout",),',
+        "git checkout $(git branch --show-current)",
+    ),
+    (
+        "xargs in front of an allow-listed command",
+        "if xargs_runs is not None:",
+        "if False:",
+        "xargs git diff <list.txt",
+    ),
+    (
+        "noglob, which the matcher steps over",
+        '        "noglob",\n',
+        "",
+        "noglob python3 scripts/run_tests.py >out",
     ),
 )
 
@@ -1759,6 +1991,10 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
 # not published - which makes this model refuse to match slightly more often
 # than the real one, the safe direction for an unreachability claim.
 _MATCHER_SEPARATORS = re.compile(r"&&|\|\||\|&|;|\||&|\n")
+# `xargs` is not one of the wrappers the real matcher steps over: its `:*`
+# test accepts `xargs <prefix>` and nothing else (Claude Code 2.1.267). The
+# model steps over it for every row, which matches more often than the real
+# one - the safe direction again.
 _MATCHER_WRAPPERS = frozenset(
     {
         "timeout",
@@ -1906,26 +2142,6 @@ def test_an_unreachable_shape_matches_no_allow_rule(
     )
 
 
-@pytest.mark.parametrize(
-    ("family", "command", "decision", "why"),
-    _OPEN_QUESTIONS,
-    ids=lambda value: str(value)[:40],
-)
-def test_an_open_question_is_pinned_to_the_answer_it_has_today(
-    family: str, command: str, decision: str, why: str
-) -> None:
-    """An undecided shape still gets a recorded state, so a change is visible."""
-
-    assert family in _FAMILIES, f"{family} is not one of the corpus families"
-    completed = _run(_payload(command))
-    expected = 2 if decision == _REFUSED else 0
-    assert completed.returncode == expected, (
-        f"{command!r} is an open question of issue #250 pinned as {decision}, "
-        f"and the hook now answers otherwise. Decide the question rather than "
-        f"repinning the row: {why}"
-    )
-
-
 @pytest.mark.parametrize("mutation", _MUTATIONS, ids=lambda mutation: mutation[0])
 def test_disabling_a_rule_flips_a_row_of_the_corpus(
     mutation: tuple[str, str, str, str], tmp_path: Path
@@ -1972,38 +2188,21 @@ def test_disabling_a_rule_flips_a_row_of_the_corpus(
         )
 
 
-def _git_subcommands_from_settings() -> set[str]:
-    """Return the git subcommands the allow rows approve with any arguments.
-
-    `Bash(git checkout -b:*)` contributes `checkout`: the hook's set names
-    subcommands, and the narrower rule is still a rule that approves a string
-    beginning `git checkout `. Reading the second word of each row is enough
-    because every git row spells the subcommand there.
-    """
-
-    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
-    return {
-        rule[len("Bash(") : -len(":*)")].split()[1]
-        for rule in settings["permissions"]["allow"]
-        if rule.startswith("Bash(git ") and rule.endswith(":*)")
-    }
-
-
-def test_the_allowed_git_subcommands_are_exactly_the_settings_rows() -> None:
+def test_the_allowed_git_prefixes_are_exactly_the_settings_rows() -> None:
     """A git row added to the settings file must reach the substitution rule.
 
     `_GATED_SUBCOMMANDS` is the narrower set whose *options* do file I/O;
-    this is every subcommand a rule approves on its prefix, which is the set
-    a `$(...)` can ride in on. Derived rather than restated, so a seventh git
-    row fails here until the hook carries it.
+    this is every prefix a rule approves, which is the set a `$(...)` can
+    ride in on. The whole prefix is compared, not its first word:
+    `Bash(git checkout -b:*)` approves `git checkout -b topic` and not
+    `git checkout $(...)`, which prompts. Derived rather than restated, so an
+    eighth git row fails here until the hook carries it.
     """
 
-    source = _HOOK.read_text(encoding="utf-8")
-    start = source.index("_ALLOWED_SUBCOMMANDS = frozenset(")
-    end = source.index("\n)\n", start)
-    listed = set(re.findall(r'"([a-z-]+)"', source[start:end]))
-
-    assert listed == _git_subcommands_from_settings(), (
-        f"the hook allows {sorted(listed)} but the settings file approves "
-        f"{sorted(_git_subcommands_from_settings())}"
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    approved = sorted(
+        rule[len("Bash(git ") : -len(":*)")]
+        for rule in settings["permissions"]["allow"]
+        if rule.startswith("Bash(git ") and rule.endswith(":*)")
     )
+    assert _listed_rows("_ALLOWED_GIT_PREFIXES") == approved
