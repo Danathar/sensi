@@ -274,6 +274,16 @@ _EXACT_ROWS = (
 # command is refused outright, by `_xargs_runs`, since stepping over it is
 # not enough: the operands it adds are not in the string.
 #
+# A wrapper is recognised by its last path component, as the matcher
+# recognises it: 2.1.267 compares `n[0]?.replace(/^.*[\\/]/, "")`, so it
+# steps over `/usr/bin/timeout 5` as it does `timeout 5`. Compared whole
+# here, `/usr/bin/timeout 5 ruff check . >out` and `/usr/bin/noglob gh pr
+# list >out` named no wrapper, the gated prefix behind them was never looked
+# for, and the redirection passed. A path the shell builds (`$D/timeout`) is
+# matched the same way, since the matcher reads the word as typed; it is
+# refused anyway, by the substitution rule behind a gated prefix and by the
+# expansion rule in a string that runs a gated git.
+#
 # A wrapper's own options are still not modelled. `env -i python3 ...` matches
 # no allow rule (see the header: `env` is not a wrapper the matcher steps
 # over), and a leading assignment written after a wrapper's operand -
@@ -294,6 +304,16 @@ _COMMAND_WRAPPERS = frozenset(
         "exec",
     }
 )
+
+# Everything up to the last `/` or `\` of a word: the matcher's own pattern.
+_PATH_HEAD = re.compile(r"^.*[\\/]")
+
+
+def _wrapper_name(word: str) -> str:
+    """Return `word` as the matcher reads a wrapper: its last path component."""
+
+    return _PATH_HEAD.sub("", word)
+
 
 # An assignment as bash's grammar spells it, which is wider than `NAME=value`:
 # `NAME+=value` appends, and *creates* the variable when it is unset, so
@@ -643,8 +663,9 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
     scripts/run_tests.py` both come back as `['python3',
     'scripts/run_tests.py']`. A leading `NAME=value` and a leading wrapper
     word are stepped over, since neither is part of the prefix an allow rule
-    matches: the wrapper words come back second, in the order written, and
-    whether an assignment led comes back third. A `$` left behind by a nested
+    matches: the wrapper names come back second, in the order written and
+    without their path (`/usr/bin/timeout` is `timeout`), and whether an
+    assignment led comes back third. A `$` left behind by a nested
     `$(...)` is dropped from the end of a word, so the words are the ones
     typed around the substitution.
     """
@@ -672,8 +693,8 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
             word = word[:-1]
             if not word:
                 continue
-        if not words and word in _COMMAND_WRAPPERS:
-            wrappers.append(word)
+        if not words and _wrapper_name(word) in _COMMAND_WRAPPERS:
+            wrappers.append(_wrapper_name(word))
             continue
         if not words and _ASSIGNMENT.match(word):
             assigned = True
@@ -888,13 +909,16 @@ def _xargs_runs(segment: list[str]) -> str | None:
     a `:*` prefix or an exact row. `xargs echo` and `xargs wc -l` match no
     row and prompt on their own, and so does `xargs git commit`, which is an
     ask row; refusing those would take away a prompt the user could answer.
+    A path to xargs is xargs, in the chain and among the words after a
+    wrapper's options (`timeout 5 /usr/bin/xargs git diff`).
     """
 
     words, wrappers, _assigned = _command_words(segment)
     chain = wrappers + words
-    if not wrappers or "xargs" not in chain:
+    names = [_wrapper_name(word) for word in chain]
+    if not wrappers or "xargs" not in names:
         return None
-    after = chain[chain.index("xargs") + 1 :]
+    after = chain[names.index("xargs") + 1 :]
     git_prefix = _allowed_git_prefix(after)
     if git_prefix is not None:
         return " ".join(("git", *git_prefix))
