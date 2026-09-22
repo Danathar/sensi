@@ -594,12 +594,14 @@ def test_every_committed_label_description_fits_in_a_github_label():
         ("custom_components/sensi/auth.py", "tier/breaking"),
         ("custom_components/sensi/manifest.json", "tier/breaking"),
         ("custom_components/sensi/entity.py", "tier/breaking"),
+        ("custom_components/sensi/const.py", "tier/breaking"),
         ("custom_components/sensi/client.py", "tier/runtime"),
         ("custom_components/sensi/coordinator.py", "tier/runtime"),
         ("custom_components/sensi/__init__.py", "tier/runtime"),
         ("custom_components/sensi/data.py", "tier/runtime"),
         ("custom_components/sensi/capabilities.py", "tier/runtime"),
         ("custom_components/sensi/event.py", "tier/runtime"),
+        ("custom_components/sensi/utils.py", "tier/runtime"),
         ("custom_components/sensi/climate.py", "tier/behaviour"),
         ("custom_components/sensi/binary_sensor.py", "tier/behaviour"),
         ("custom_components/sensi/number.py", "tier/behaviour"),
@@ -627,9 +629,14 @@ def test_each_committed_rule_path_lands_in_its_own_tier(path, tier):
 
 
 def test_a_component_file_in_no_rule_still_lands_in_support():
-    """The `**` catch-all means the real rules always produce a tier."""
+    """The `**` catch-all means the real rules always produce a tier.
+
+    Every committed component file is now listed in some tier, so this uses a
+    module the integration does not have yet: a new file lands in
+    `tier/support` until a rule names it.
+    """
     result = classify_pr.classify(
-        ["custom_components/sensi/utils.py"], 1, classify_pr.load_rules()
+        ["custom_components/sensi/diagnostics.py"], 1, classify_pr.load_rules()
     )
 
     assert result["tier"]["name"] == "tier/support"

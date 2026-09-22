@@ -26,8 +26,8 @@ branch protection; the ruleset cannot condition on paths at all
 why the path list lives here. This file is the join nothing else makes.
 
 Note what is deliberately NOT asserted: that every high-risk path has a
-specific owner. `.github/risk-tiers.yml` puts four files in `tier/breaking`
-and CODEOWNERS calls out one of them. Whether the other three belong in the
+specific owner. `.github/risk-tiers.yml` puts five files in `tier/breaking`
+and CODEOWNERS calls out one of them. Whether the other four belong in the
 control plane is a judgement for a human, not an invariant - pinning it here
 would turn a maintainer's decision into a red test.
 """
