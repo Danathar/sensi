@@ -33,6 +33,8 @@ tiers:
       - custom_components/sensi/data.py
       - custom_components/sensi/capabilities.py
       - custom_components/sensi/event.py
+      - custom_components/sensi/const.py
+      - custom_components/sensi/utils.py
 
   - name: tier/behaviour
     label_colour: fbca04

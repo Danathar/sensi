@@ -62,19 +62,9 @@ _CATCH_ALL = "**"
 
 # Shipped component files that match no tier but the catch-all, and so carry
 # `tier/support` - the tier whose own label says it "cannot reach a user's
-# installation". Both of these do reach one. Which tier they belong in is a
-# maintainer's judgement, so this module records the state rather than
-# asserting the intended one; see issue #252. When that is resolved this
-# mapping empties and `test_every_shipped_module_is_tiered_or_declared` starts
-# requiring it to stay empty.
-_SHIPPED_BUT_UNTIERED = {
-    "custom_components/sensi/const.py": (
-        "holds the circulating-fan duty-cycle bounds the client divides by"
-    ),
-    "custom_components/sensi/utils.py": (
-        "holds to_bool/to_int/to_float, the converters the platforms parse with"
-    ),
-}
+# installation". Resolved by issue #252: `const.py` and `utils.py` now carry
+# `tier/runtime`, so this mapping stays empty.
+_SHIPPED_BUT_UNTIERED: dict[str, str] = {}
 
 
 def _read(path: Path) -> str:
@@ -354,17 +344,6 @@ def test_every_shipped_module_is_tiered_or_declared() -> None:
         f"shipped modules reaching only the catch-all are {sorted(untiered)}, "
         f"but this module declares {sorted(_SHIPPED_BUT_UNTIERED)}; a new one "
         "is labelled tier/support, which says it cannot reach an installation"
-    )
-
-
-@pytest.mark.parametrize("path", sorted(_SHIPPED_BUT_UNTIERED))
-def test_a_declared_untiered_module_is_still_untiered(path: str) -> None:
-    """The declaration has to rot loudly once issue #252 is resolved."""
-    assert path in _TRACKED, f"{path} is declared untiered but is not committed"
-    result = classify_pr.classify([path], 1, _rules())
-    assert result["tier"]["name"] == "tier/support", (
-        f"{path} now classifies as {result['tier']['name']}; drop it from "
-        "_SHIPPED_BUT_UNTIERED"
     )
 
 
