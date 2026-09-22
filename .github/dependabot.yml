@@ -29,5 +29,7 @@ updates:
           - "*"
     commit-message:
       prefix: "ci"
-    labels:
-      - dependencies
+    # No `labels:` here, deliberately: labeler.yml's `sync-labels: true` would
+    # strip `dependencies` right back off, since an action bump touches only
+    # `.github/workflows/**`, which the `dependencies` rule does not match.
+    # Action bumps keep whatever labeler.yml assigns (`ci`) instead. See #246.

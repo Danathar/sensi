@@ -4,8 +4,8 @@
 the file present at all: that it watches `github-actions`, and that it watches
 the repository root. Everything else in it - the schema version, the weekly
 cadence, the group that collapses a week of bumps into one pull request, the
-`ci` commit prefix, the `dependencies` label - was committed once and opened by
-nothing since.
+`ci` commit prefix, the deliberate absence of a `labels:` key - was committed
+once and opened by nothing since.
 
 That is the expensive half to get wrong, because every failure here is silent.
 Dependabot does not report a configuration it disagrees with on a pull request
@@ -39,7 +39,6 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[1]
 _CONFIG = _ROOT / ".github" / "dependabot.yml"
 _WORKFLOWS = _ROOT / ".github" / "workflows"
-_LABELER = _ROOT / ".github" / "labeler.yml"
 _AGENTS = _ROOT / "AGENTS.md"
 _CLAUDE = _ROOT / "CLAUDE.md"
 
@@ -470,71 +469,23 @@ def test_the_commit_prefix_carries_no_punctuation() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_every_label_dependabot_applies_is_one_the_repository_defines() -> None:
-    """A label named only here is created on first use and means nothing.
+def test_dependabot_does_not_claim_a_label_labeler_would_strip() -> None:
+    """`labels:` must stay absent, not merely correct.
 
-    `.github/labeler.yml` is where this repository's path labels are defined.
-    A typo in the value below does not fail anything: GitHub creates the label
-    on the first pull request, in a generated colour, and the dependency
-    filter a maintainer saved silently stops matching.
-
-    The interaction in the other direction - `sync-labels: true` removing a
-    label the config defines but does not match, which is what happens to this
-    one today - is tracked in #246 and deliberately not asserted here.
+    `.github/workflows/labeler.yml` runs `actions/labeler@v5.0.0` with
+    `sync-labels: true` on every `pull_request_target`, including the ones
+    Dependabot opens. A `github-actions` update only touches
+    `.github/workflows/**`, which does not match the `dependencies` rule in
+    `.github/labeler.yml`, so `sync-labels` would remove any label Dependabot
+    applied here on the same pull request it was applied to - see #246, where
+    this was `- dependencies` doing exactly that. Asserting the key's absence
+    is the vocabulary join #246 asks for: the two files are made to agree by
+    dependabot.yml no longer claiming a label labeler.yml would undo.
     """
-    labels = _actions_entry().get("labels")
-    assert labels, "`labels:` is empty, so nothing marks these as dependency work"
-    defined = set(yaml.safe_load(_text(_LABELER)))
-    unknown = sorted(set(labels) - defined)
-    assert not unknown, (
-        f"{unknown} are applied by Dependabot but defined nowhere in "
-        f".github/labeler.yml ({sorted(defined)})"
-    )
-
-
-def _labeler_globs(labels: set[str]) -> set[str]:
-    """Return every glob `.github/labeler.yml` attaches to `labels`.
-
-    Only the v5 `changed-files:` shape carries a glob; the other matchers read
-    a branch name and are walked past. A label with no rule contributes
-    nothing rather than raising, because whether it has one is the thing the
-    caller is asserting.
-    """
-    rules = yaml.safe_load(_text(_LABELER))
-    globs: set[str] = set()
-    for label in labels:
-        for matcher in rules.get(label) or []:
-            for inner in matcher.get("changed-files") or []:
-                for patterns in inner.values():
-                    if isinstance(patterns, list):
-                        globs.update(patterns)
-                    else:
-                        globs.add(patterns)
-    return globs
-
-
-def test_the_dependency_label_is_the_one_the_manifests_carry() -> None:
-    """The label has to be the same one a hand-written bump would get.
-
-    A `dependencies` label that marks Dependabot's pull requests and a
-    different rule marking the requirements files would split one review
-    filter into two, which is the failure this join exists to catch.
-    """
-    labels = set(_actions_entry()["labels"])
-    globs = _labeler_globs(labels)
-    tracked = set(_tracked())
-    manifests = {
-        "requirements_component.txt",
-        "requirements_test.txt",
-        "custom_components/sensi/manifest.json",
-    }
-    assert manifests <= tracked, (
-        f"{sorted(manifests - tracked)} is no longer committed; this test "
-        "names the dependency manifests explicitly"
-    )
-    assert manifests <= globs, (
-        f"the label(s) {sorted(labels)} Dependabot applies cover {sorted(globs)}, "
-        f"not the dependency manifests {sorted(manifests - globs)}"
+    assert "labels" not in _actions_entry(), (
+        "`.github/dependabot.yml` claims a `labels:` value that "
+        "`.github/labeler.yml`'s `sync-labels: true` would strip back off "
+        "the same pull request; see #246"
     )
 
 
