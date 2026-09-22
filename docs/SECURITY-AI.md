@@ -77,6 +77,13 @@ supply-chain concern.
   pipes, `2>&1` and input redirections are untouched, and a command no rule
   covers prompts on its own. The gate's test file derives that list from the
   settings file, so a `:*` row added there fails until the hook lists it.
+  The three rows with no `:*` (`ruff check .`, `ruff format --check .` and
+  `python3 scripts/check_requirements_sync.py`) are refused a redirection the
+  same way, and ruff its own `--output-file`/`-o`. `xargs` in front of any
+  allow-listed command is refused outright: it appends words read from
+  standard input or from `-a FILE`, so the operands are not in the string the
+  hook reads, and a `:*` rule matches `xargs <prefix>` as readily as
+  `<prefix>`.
   An assignment written before the command name is part of the string the
   rule matches as well, and git reads the names of programs to run out of its
   environment: `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs `prog` once
