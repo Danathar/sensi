@@ -40,10 +40,13 @@ The e2e tier exists because those paths are exactly what unit tests are worst at
 Before it, `client.py` — the module with the most runtime risk — sat at 52% line
 coverage while the repository read 85%.
 
-| | before `tests/e2e/` | now |
+| | before `tests/e2e/` | after it landed |
 | --- | --- | --- |
 | `client.py` | 52% | **100%** |
 | repository total | 85% | 98% |
+
+Those are the numbers that tier moved, not today's. The live figure is the
+**Unit coverage** badge, which the *Trend* section below explains.
 
 **What the number does not mean.** Line coverage counts executed lines, not
 asserted behaviour. A test that calls a function and asserts nothing raises
@@ -70,11 +73,17 @@ Stating these plainly is part of the signal.
 
 ## Nightly
 
-`.github/workflows/nightly.yml` runs the whole gate once a day, and separately
-runs the suite against the **latest** Home Assistant rather than the pinned one.
-Home Assistant ships monthly and deprecates aggressively; that second leg is how
-an upcoming break arrives as a nightly notice instead of as a user's broken
-installation. It is informational and never gates a pull request.
+`.github/workflows/nightly.yml` runs the four commands *Reproducing all of it
+locally* lists below — lint, format, the requirements-sync check and the suite —
+once a day, and separately runs the suite against the **latest** Home Assistant
+rather than the pinned one. Home Assistant ships monthly and deprecates
+aggressively; that second leg is how an upcoming break arrives as a nightly
+notice instead of as a user's broken installation. It is informational and
+never gates a pull request.
+
+It is not the whole gate. `hassfest` and `HACS` need a Home Assistant action
+and are not in it, and the nightly coverage run measures without enforcing the
+threshold — that measurement is what feeds the tuner below.
 
 A failure of the *pinned* leg means something broke without a code change — a
 transitive dependency, a yanked release. It opens a single issue that later runs
