@@ -1128,6 +1128,16 @@ _POLICY_LITERAL = re.compile(r"`([^`]+)`")
 # the four paths already there -- green, with no deny rule behind it.
 _PATH_SHAPED = re.compile(r"/|\.[A-Za-z0-9]+$")
 
+# A literal the bullet backticks to show a *command* rather than to name a
+# file. No path in this repository contains a space, and the bullet quotes
+# whole invocations -- `git diff --no-index`, `git diff HEAD >out` -- so the
+# space is what tells the two apart. Without this, a command whose last word
+# ends in a dotted suffix was read as a path and demanded an Edit deny rule:
+# `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external` matched `_PATH_SHAPED`
+# on its `.external` ending and failed this test for a file that does not and
+# could not exist.
+_COMMAND_SHAPED = re.compile(r"\s")
+
 # The bullet says "and this file" rather than naming itself in backticks, so
 # the self-reference has to be supplied.
 _POLICY_SELF = "docs/SECURITY-AI.md"
@@ -1147,6 +1157,8 @@ def _policy_paths(text: str, tracked: set[str], directories: set[str]) -> set[st
     found: set[str] = set()
     for literal in _POLICY_LITERAL.findall(text):
         candidate = literal.rstrip("/")
+        if _COMMAND_SHAPED.search(candidate):
+            continue
         if (
             candidate in tracked
             or candidate in directories
@@ -1186,6 +1198,23 @@ def test_policy_paths_ignores_prose_literals() -> None:
     """`Edit` and `Write` are tool names the bullet backticks, not files."""
 
     assert _policy_paths("after every `Edit` and `Write`", set(), set()) == set()
+
+
+def test_policy_paths_ignores_a_backticked_command() -> None:
+    """A whole invocation is not a path, however its last word is spelled.
+
+    `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external` ends in `.external`,
+    which is the shape `_PATH_SHAPED` reads as a file extension, and the
+    bullet quotes it to show what the gate refuses. A path in this repository
+    has no space in it, so the space is what separates the two.
+    """
+
+    text = (
+        "`GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` and "
+        "`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external` reach a program, "
+        "while `docs/SECURITY-AI.md` is a file"
+    )
+    assert _policy_paths(text, set(), set()) == {"docs/SECURITY-AI.md"}
 
 
 def test_every_boundary_path_is_denied_rather_than_asked() -> None:
