@@ -95,6 +95,12 @@ supply-chain concern.
   (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`), which bash
   applies to every command it runs later in the same string; and `env -S`,
   which hides the whole invocation inside a single word.
+  Two of git's allow rows write or read files through git itself. A start
+  point after `git checkout -b NAME` makes git write that commit's files over
+  the working tree, its copy of the settings file, the hooks and the test
+  wrapper included, so the hook refuses anything after the branch name. And
+  `git add --pathspec-from-file` reads any file and prints the first line it
+  cannot match in its error, so the hook refuses that option too.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.
