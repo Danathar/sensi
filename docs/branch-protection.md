@@ -1,12 +1,12 @@
 # Protecting `master`
 
-`master` is the default branch and, at the time of writing, **unprotected**:
-no branch protection, no rulesets. Every gate in this repository — CI, the
-coverage threshold, the review rubric, the rules agents are given in
-`docs/SECURITY-AI.md` — sits downstream of a pull request that nothing forces
-anyone to open.
+`master` is the default branch. Until the ruleset below was applied on
+2026-09-08 it was unprotected: no branch protection, no rulesets. Every gate in
+this repository — CI, the coverage threshold, the review rubric, the rules
+agents are given in `docs/SECURITY-AI.md` — sat downstream of a pull request
+that nothing forced anyone to open.
 
-That is the gap [#109](https://github.com/Danathar/sensi/issues/109) is about,
+That was the gap [#109](https://github.com/Danathar/sensi/issues/109) closed,
 and it matters more here than in a repository maintained by hand: Hive runs
 agents against this one continuously. Hive's own policy is one layer. GitHub
 refusing the push is a second, independent one, and independence is the point —
@@ -55,26 +55,26 @@ deliberately **not** required:
 Adding a required check means editing `master.json` *and* re-applying it. A
 check added to CI is not automatically required.
 
-## Before applying it: the release workflow
+## The release workflow, and why it had to change first
 
-**Do not apply this ruleset while `release.yml` still pushes to `master`.**
+The ruleset could not be applied while `release.yml` committed the version bump
+and pushed it straight to `master`. With the monthly scheduled run armed by the
+`AUTO_RELEASE_ENABLED` repository variable, applying it would not have produced
+a warning — it would have produced a failed release on the 1st, and the
+obvious-looking fix would have been a bypass actor for Actions, which hands back
+most of what the ruleset is for.
 
-The release job commits the version bump and pushes it directly:
-
-```
-git push origin HEAD:"${GITHUB_REF_NAME}"
-```
-
-`AUTO_RELEASE_ENABLED` is set to `true`, so the monthly scheduled run is armed.
-Applying the ruleset today would not produce a warning — it would produce a
-failed release on the 1st, and the obvious-looking fix would be to add a bypass
-actor for Actions, which hands back most of what the ruleset was for.
-
-[#116](https://github.com/Danathar/sensi/pull/116) restructures the release
+[#116](https://github.com/Danathar/sensi/pull/116) restructured the release
 workflow so it tags an already-approved commit instead of pushing one, and the
-version moves through an ordinary pull request. **Merge that first.** This is
-the dependency #109 names, and it is the whole of it: nothing else in the
-repository writes to `master` outside a pull request.
+version moves through an ordinary pull request. It merged before the ruleset
+was applied. That was the dependency #109 named, and it was the whole of it:
+nothing else in the repository wrote to `master` outside a pull request.
+
+`release.yml` now pushes two things, and neither is `master`: the `prepare` job
+pushes a `release/<version>` branch and opens the version-bump pull request
+from it, and the `release` job pushes a tag. Keep it that way. A step that
+pushes to `master` again fails on the next scheduled run, and the fix is to
+change that step, not to add a bypass actor.
 
 ## Review requirements, and why they are set where they are
 
@@ -108,21 +108,17 @@ file auto-requests review rather than requiring it. Committing it now is still
 worth doing: agreeing which paths are the control plane is a separate act from
 enforcing it, and the list is the part worth reviewing.
 
-## Applying it
+## Checking it, and applying it elsewhere
 
 ```bash
-# 1. Confirm the dependency above is merged, then preview:
+# Validate the committed definition without contacting GitHub:
 python3 scripts/check_ruleset.py --offline
 
-# 2. Apply:
-gh api --method POST repos/Danathar/sensi/rulesets \
-  --input .github/rulesets/master.json
-
-# 3. Verify GitHub agrees with the file:
+# Verify GitHub agrees with the file:
 python3 scripts/check_ruleset.py
 ```
 
-Step 3 is the one worth repeating later. A ruleset is repository configuration,
+The second command is the one worth repeating. A ruleset is repository configuration,
 not a file, so nothing in a checkout proves what is being enforced — and the
 changes that matter here (a bypass actor, enforcement switched to `disabled`, a
 required check dropped) leave no trace in any diff. Run it after any change to
@@ -130,7 +126,14 @@ repository settings, and consider running it on a schedule; it needs admin on
 the repository to read rulesets.
 
 To change the ruleset, edit `master.json`, open a pull request, and after it
-merges re-apply with `--method PUT repos/…/rulesets/{id}`.
+merges re-apply with `--method PUT repos/…/rulesets/{id}`. The ruleset already
+exists on this repository, so a `POST` here would add a second one beside it.
+A repository that does not have it yet — a fork, say — applies it once with:
+
+```bash
+gh api --method POST repos/<owner>/<repo>/rulesets \
+  --input .github/rulesets/master.json
+```
 
 ## What this does not cover
 
@@ -140,6 +143,8 @@ ruleset itself. `CODEOWNERS` does the path scoping and the ruleset makes it
 mandatory or not — that is the whole mechanism available, and it is why the
 control-plane list lives in `CODEOWNERS` rather than here.
 
-Tags are not covered. This ruleset targets branches; after #116 the release
-workflow's only write is a tag push, which it needs. A separate tag ruleset
-would be a reasonable follow-up if tag rewriting ever becomes a concern.
+Tags are not covered. This ruleset targets branches, and only the default
+one; the release workflow's tag push needs the first, and the `release/*`
+branch it opens the version-bump pull request from needs the second. A
+separate tag ruleset would be a reasonable follow-up if tag rewriting ever
+becomes a concern.
