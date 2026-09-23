@@ -103,6 +103,23 @@ three of their arguments do file I/O that has nothing to do with the repository:
   and bash then runs ./shim/nohup, so any spelling ending in a wrapper's name
   in front of an approved command is refused unless it is the bare name or
   the system's copy (`/usr/bin/<name>`, `/bin/<name>`); see `_spelled_wrapper`.
+* `git checkout -b NAME START` is not only a new branch. Git writes START's
+  tree over the working tree, and that tree carries its own
+  `.claude/settings.json`, `.claude/hooks/` and `scripts/run_tests.py`: the
+  `Edit` deny rows bind the Edit tool, not git. `git checkout -b x 00ff1e2`
+  put back that commit's allow list (`ruff check` and `ruff format` with any
+  arguments) and its test wrapper (which forwarded `--junitxml=PATH`), and
+  deleted this file, which did not exist yet. The hook command is read from
+  disk on every call, and one that fails to start is a non-blocking error,
+  so every refusal here went with it. Any remote branch - an unreviewed PR head
+  included - is a start point too. `git checkout -b NAME` with nothing after
+  the name leaves the files alone and is still approved.
+* `git add --pathspec-from-file=PATH` reads its pathspecs out of PATH, which
+  can be any file on disk, and the first line that matches no file comes
+  back in git's error (`fatal: pathspec 'SECRET=value' did not match any
+  files`). Creating a file named after that line and running it again
+  gives the next one, so the whole of `secrets.yaml` or `.env` is readable
+  a line at a time past the `Read` deny rows.
 
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
@@ -375,6 +392,13 @@ _ALLOWED_GIT_PREFIXES = (
     ("add",),
     ("checkout", "-b"),
 )
+
+# `git add --pathspec-from-file=PATH` reads its pathspecs out of PATH, which
+# can be any file on disk, and the first line that matches nothing comes back
+# in git's own error: `fatal: pathspec 'SECRET=value' did not match any files`.
+# Compared the way `_REFUSED_LONG` is, so `--pathspec-fr` is refused too. Of the
+# allow-listed subcommands only `git add` takes the option (git 2.47.3).
+_PATHSPEC_FILE = "pathspec-from-file"
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
 # own. The words inside it are one word to any scan of the string, so a git
@@ -819,6 +843,54 @@ def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
     return None
 
 
+def _after_git(words: list[str], subcommand: tuple[str, ...]) -> list[str] | None:
+    """Return the words after `git <subcommand>`, when git runs that directly.
+
+    The subcommand has to follow `git` at once, as the allow row that
+    approves it is written: `git -C dir checkout -b topic HEAD~5` begins
+    `git -C` and prompts on its own.
+    """
+
+    for index, word in enumerate(words):
+        if word != "git" and not word.endswith("/git"):
+            continue
+        after = index + 1 + len(subcommand)
+        if tuple(words[index + 1 : after]) == subcommand:
+            return words[after:]
+    return None
+
+
+def _checkout_moves_the_tree(words: list[str]) -> str | None:
+    """Return what `git checkout -b` was given beyond a branch name, if any.
+
+    `git checkout -b topic` makes a branch at HEAD and leaves every file as it
+    is. Anything more is a start point or an option, and a start point makes
+    git write that commit's tree over the working tree:
+    `git checkout -b x 00ff1e2` puts back the settings file and the test
+    wrapper of that commit and deletes this hook, which did not exist yet.
+    """
+
+    operands = _after_git(words, ("checkout", "-b"))
+    if operands is None:
+        return None
+    if len(operands) > 1 or any(word.startswith("-") for word in operands):
+        return " ".join(operands)
+    return None
+
+
+def _reads_a_pathspec_file(words: list[str]) -> str | None:
+    """Return the `--pathspec-from-file` option given to `git add`, if any."""
+
+    operands = _after_git(words, ("add",))
+    for word in operands or ():
+        if word == "--":
+            break
+        name = word[2:].split("=", 1)[0] if word.startswith("--") else ""
+        if name and _PATHSPEC_FILE.startswith(name):
+            return word
+    return None
+
+
 def _has_substitution(segment: list[str]) -> bool:
     """Whether any word of `segment` is built by running another command.
 
@@ -1238,6 +1310,33 @@ def main() -> int:
                 "command on its prefix and the assignment is part of the string "
                 "it matches, so nothing else would prompt. Run git without the "
                 "assignment.",
+                file=sys.stderr,
+            )
+            return 2
+        moved = _checkout_moves_the_tree(_command_words(segment)[0])
+        if moved is not None:
+            print(
+                f"Blocked: `{moved}` after `git checkout -b NAME` is a start point "
+                "or an option, and a start point makes git write that commit's "
+                "files over the working tree - .claude/settings.json, "
+                ".claude/hooks/ and scripts/run_tests.py included, which the Edit "
+                "deny rules protect only from the Edit tool. `git checkout -b x "
+                "00ff1e2` restores the allow list of that commit and deletes this "
+                "hook. The allow rule matches the command on its prefix, so "
+                "nothing else would prompt. Create the branch at HEAD with "
+                "`git checkout -b NAME` alone; switching to another commit needs "
+                "a command the user approves.",
+                file=sys.stderr,
+            )
+            return 2
+        pathspec_file = _reads_a_pathspec_file(_command_words(segment)[0])
+        if pathspec_file is not None:
+            print(
+                f"Blocked: `{pathspec_file}` makes `git add` read its pathspecs "
+                "out of a file, which can be any file on disk, and git prints the "
+                "first line that matches nothing in its error - `git add "
+                "--pathspec-from-file=secrets.yaml` shows a line of a file the "
+                "Read deny rules withhold. Name the paths in the command instead.",
                 file=sys.stderr,
             )
             return 2

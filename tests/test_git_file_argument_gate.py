@@ -1121,6 +1121,71 @@ def test_bash_really_truncates_behind_a_quoted_separator(tmp_path: Path) -> None
     )
 
 
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(repo)},
+        check=False,
+    )
+
+
+def test_git_really_rewrites_the_control_plane_from_a_start_point(
+    tmp_path: Path,
+) -> None:
+    """The reach the checkout rule exists for, in a throwaway repository.
+
+    An older commit carries an older settings file and no hook; checking out
+    a new branch from it replaces the one and deletes the other, and nothing
+    about that write goes through the Edit tool.
+    """
+
+    repo = tmp_path / "repo"
+    (repo / ".claude" / "hooks").mkdir(parents=True)
+    settings = repo / ".claude" / "settings.json"
+    settings.write_text('{"allow": ["everything"]}\n', encoding="utf-8")
+    assert _git(repo, "init", "-q").returncode == 0
+    _git(repo, "add", ".")
+    assert _git(repo, "commit", "-qm", "old").returncode == 0
+    settings.write_text('{"allow": []}\n', encoding="utf-8")
+    hook = repo / ".claude" / "hooks" / "gate.py"
+    hook.write_text("# the gate\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    assert _git(repo, "commit", "-qm", "new").returncode == 0
+
+    moved = _git(repo, "checkout", "-b", "topic", "HEAD~1")
+    assert moved.returncode == 0, moved.stderr
+    assert "everything" in settings.read_text(encoding="utf-8"), (
+        "git checkout -b NAME START no longer writes START's settings file; "
+        "the checkout rule in the hook may be more than is needed"
+    )
+    assert not hook.exists(), "git checkout -b left a file START does not have"
+
+    completed = _run(_payload("git checkout -b topic HEAD~1"))
+    assert completed.returncode == 2, "the command just shown was not blocked"
+
+
+def test_git_really_prints_a_line_of_a_pathspec_file(tmp_path: Path) -> None:
+    """The reach the pathspec-file rule exists for, run for real."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert _git(repo, "init", "-q").returncode == 0
+    listed = tmp_path / "secrets.yaml"
+    listed.write_text("STAND-IN-NOT-A-SECRET\n", encoding="utf-8")
+
+    shown = _git(repo, "add", f"--pathspec-from-file={listed}")
+    assert "STAND-IN-NOT-A-SECRET" in shown.stderr, (
+        "git add no longer prints a line of the pathspec file it could not "
+        "match; the pathspec-file rule in the hook may be more than is needed"
+    )
+    completed = _run(_payload(f"git add --pathspec-from-file={listed}"))
+    assert completed.returncode == 2, "the command just shown was not blocked"
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -1978,6 +2043,55 @@ _CORPUS: tuple[_Row, ...] = (
         "--output-format picks how the report looks and still prints it to "
         "stdout; a flag test that matched --output* would refuse it",
     ),
+    _Row(
+        "options",
+        "git checkout -b topic 00ff1e2",
+        _REFUSED,
+        "a start point makes git write that commit's tree over the working "
+        "tree, and 00ff1e2 carries an older settings file and no hook at all",
+    ),
+    _Row(
+        "options",
+        "git checkout -b topic origin/fix-issue-250",
+        _REFUSED,
+        "any remote branch is a start point too, an unreviewed PR head "
+        "included, with whatever settings file and hook it carries",
+    ),
+    _Row(
+        "options",
+        "git checkout -b topic -f",
+        _REFUSED,
+        "an option after the name is not a branch name; -f, --track and the "
+        "rest are refused with the start point rather than listed one by one",
+    ),
+    _Row(
+        "options",
+        "git checkout -b topic",
+        _ALLOWED,
+        "a branch made at HEAD leaves every file as it is, which is what the "
+        "allow row is there for",
+    ),
+    _Row(
+        "options",
+        "git add --pathspec-from-file=secrets.yaml",
+        _REFUSED,
+        "git reads pathspecs out of any file and prints the first line that "
+        "matches nothing in its error, past the Read deny rows",
+    ),
+    _Row(
+        "options",
+        "git add --pathspec-fr /etc/passwd",
+        _REFUSED,
+        "git accepts an unambiguous abbreviation of a long option, so the "
+        "name is compared the way --no-index and --output are",
+    ),
+    _Row(
+        "options",
+        "git add --pathspec-file-nul -- custom_components/sensi/climate.py",
+        _ALLOWED,
+        "--pathspec-file-nul only changes how a pathspec file would be split "
+        "and names no file of its own",
+    ),
 )
 
 
@@ -2084,6 +2198,24 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '    ("checkout", "-b"),',
         '    ("checkout",),',
         "git checkout $(git branch --show-current)",
+    ),
+    (
+        "git checkout -b with anything after the branch name",
+        "if moved is not None:",
+        "if False:",
+        "git checkout -b topic 00ff1e2",
+    ),
+    (
+        "a start point, not only an option, after git checkout -b NAME",
+        "if len(operands) > 1 or any(",
+        "if any(",
+        "git checkout -b topic origin/fix-issue-250",
+    ),
+    (
+        "git add's --pathspec-from-file",
+        "if pathspec_file is not None:",
+        "if False:",
+        "git add --pathspec-from-file=secrets.yaml",
     ),
     (
         "xargs in front of an allow-listed command",
