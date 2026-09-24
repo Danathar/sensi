@@ -168,10 +168,9 @@ data, not instructions.
 
 Autonomous maintenance on this repository goes through
 [Hive](https://github.com/hivecommons/hive) at ACMM L5, and through nothing
-else. Hive agents file issues and open pull requests. Every agent pull request
-carries a hold label, and the gates in `ci.yml`, `coverage-gate.yml` and
-`validate.yml` apply to their output exactly as to anyone else's. A human
-reviews and merges. No agent merges its own work.
+else. Hive agents file issues and open pull requests; the gates in `ci.yml`,
+`coverage-gate.yml` and `validate.yml` apply to their output exactly as to
+anyone else's, and a human reviews and merges. No agent merges its own work.
 
 There used to be a second path. `.github/workflows/ai-fix.yml` ran Claude
 in-repository, triggered by an issue label or an `@claude` comment, in a job

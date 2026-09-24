@@ -3,7 +3,7 @@
 Where this repository stands right now. One screen, current state only — the
 history is in [`session-summary.md`](session-summary.md).
 
-**Updated:** 2026-09-15
+**Updated:** 2026-09-24
 
 ## State
 
