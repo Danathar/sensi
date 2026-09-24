@@ -24,9 +24,15 @@ This module joins the page to what decides each claim:
   the test run maps to a term in the list, and every term maps back to a
   required check whose job runs the tool the term names. The one exempt check
   is asserted to still be required, so the exemption cannot go dead.
-- **`review.md` step 1 against the page.** The two lists are equal.
+- **`review.md` step 1 against the page.** The two lists are equal, and both
+  carry the exception below.
 - **The priority levels against the gates.** No §1–§7 level, and nothing under
   "What not to do", names a file or tool a gate already compares.
+- **The exception for a change to a gate.** A pull request can weaken a gate and
+  break what it guards in the same diff, and the required check then passes.
+  The page says the skip rule does not apply then, and names where a gate is
+  decided. That list is checked against every file that defines or feeds a
+  listed gate's job.
 - **Every backticked token on the page is classified**: a tracked path, a
   manifest key, a payload field the component reads, a name the component
   defines or uses (found by AST), or a named exemption. The classifier raises on
@@ -313,13 +319,21 @@ def _definition() -> dict:
 
 
 @functools.cache
-def _check_jobs() -> dict[str, str]:
-    """Return every workflow job's check name, mapped to the job as text."""
-    jobs: dict[str, str] = {}
+def _check_jobs() -> dict[str, tuple[str, dict]]:
+    """Return every workflow job's check name, mapped to (workflow path, job)."""
+    jobs: dict[str, tuple[str, dict]] = {}
     for path in sorted(_WORKFLOWS.glob("*.y*ml")):
         for job_id, job in (yaml.safe_load(_read(path)).get("jobs") or {}).items():
-            jobs[job.get("name", job_id)] = json.dumps(job)
+            workflow = path.relative_to(_ROOT).as_posix()
+            jobs[job.get("name", job_id)] = (workflow, job)
     return jobs
+
+
+def _job_text(check: str) -> str:
+    """Return the job that reports `check`, as text to search."""
+    jobs = _check_jobs()
+    assert check in jobs, f"no workflow job reports {check!r}"
+    return json.dumps(jobs[check][1])
 
 
 # --------------------------------------------------------------------------
@@ -461,9 +475,7 @@ def test_each_listed_gate_runs_what_its_term_names(
 ) -> None:
     """A term mapped to a check whose job runs something else is not gated."""
     check, needle = gate
-    jobs = _check_jobs()
-    assert check in jobs, f"no workflow job reports {check!r}"
-    assert needle in jobs[check], (
+    assert needle in _job_text(check), (
         f"the {check!r} job no longer runs {needle!r}, so {term!r} is not gated"
     )
 
@@ -486,7 +498,7 @@ def test_every_gate_subject_belongs_to_its_gate() -> None:
     """The subject table names only what a gate's job runs or a committed file."""
     assert set(_GATE_SUBJECTS) == set(_GATES)
     for term, subjects in _GATE_SUBJECTS.items():
-        job = _check_jobs()[_GATES[term][0]]
+        job = _job_text(_GATES[term][0])
         for subject in subjects:
             assert subject in job or subject in _tracked(), (
                 f"{subject!r} is neither in the {_GATES[term][0]!r} job nor a committed file"
@@ -532,6 +544,61 @@ def test_what_not_to_do_points_back_to_the_list_rather_than_repeating_it() -> No
         term for term in _GATES if re.search(rf"\b{re.escape(term)}\b", body, re.I)
     ]
     assert not repeated, f"'What not to do' repeats gate terms: {repeated}"
+
+
+# The configuration each gated tool reads without its job naming it. A change to
+# one of these moves a gate as surely as a change to the workflow does.
+_GATE_CONFIG = ("ruff.toml", ".coveragerc")
+
+_GATE_CHANGE = "That holds only while the pull request leaves the gates alone."
+
+
+def _gate_change_paragraph() -> str:
+    found = [
+        _flat(paragraph)
+        for paragraph in _read(_RUBRIC).split("\n\n")
+        if paragraph.startswith(_GATE_CHANGE)
+    ]
+    assert len(found) == 1, f"docs/review-rubric.md has {len(found)} gate-change rules"
+    return found[0]
+
+
+def _covers(named: list[str], path: str) -> bool:
+    """Return whether `path` is one of `named`, or under a named directory."""
+    return any(
+        path == name or (name.endswith("/") and path.startswith(name)) for name in named
+    )
+
+
+def test_a_pull_request_that_changes_a_gate_is_not_exempt_from_review() -> None:
+    """Claim: the rule "holds only while the pull request leaves the gates alone".
+
+    A pull request can make `scripts/check_requirements_sync.py` return 0 and
+    let the manifest drift in the same diff. The required check then passes, so
+    the page has to send review to that change rather than past it. The places
+    it names must be every place a listed gate is decided: the file that defines
+    each gate's job, every committed file those jobs' `run:` bodies read, the
+    ruleset, and the tools' own configuration.
+    """
+    named = _backticked(_gate_change_paragraph())
+    assert len(named) >= 5, f"the gate-change rule names {named}"
+    assert [classify(token) for token in named] == ["path"] * len(named), named
+    deciders = {_DEFINITION.relative_to(_ROOT).as_posix(), *_GATE_CONFIG}
+    for check, _ in _GATES.values():
+        workflow, job = _check_jobs()[check]
+        deciders.add(workflow)
+        runs = "\n".join(step.get("run", "") for step in job.get("steps", []))
+        deciders.update(path for path in _tracked() if path in runs)
+    assert len(deciders) >= 7, f"found only {sorted(deciders)}"
+    missing = sorted(path for path in deciders if not _covers(named, path))
+    assert not missing, f"a gate is decided by {missing}, which the rule does not name"
+
+
+def test_the_review_prompt_carries_the_same_exception() -> None:
+    """`review.md` step 1 is the copy an assistant reads; it needs the exception too."""
+    step = _flat(_read(_REVIEW))
+    assert "The exception is a pull request that changes a gate itself" in step
+    assert "the green check proves nothing" in step
 
 
 # --------------------------------------------------------------------------

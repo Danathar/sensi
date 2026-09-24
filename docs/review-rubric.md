@@ -9,6 +9,13 @@ cannot merge. Requirements sync is the check that `manifest.json`
 required too, but whether a new test checks the right thing is not something
 CI can see; that is §6. Spend review on what CI cannot see.
 
+That holds only while the pull request leaves the gates alone. A gate is
+decided by its workflow in `.github/workflows/`, a script it runs from
+`scripts/`, its configuration (`ruff.toml`, `.coveragerc`, and the pins in
+`requirements_test.txt`) and `.github/rulesets/master.json`. If a pull request
+changes any of those, a green check proves nothing about that change: review
+the gate change itself, and check by hand what that gate covers.
+
 Use it as a human, or hand it to an assistant via
 [`.github/prompts/review.md`](../.github/prompts/review.md).
 
@@ -105,8 +112,9 @@ The Sensi protocol is reverse engineered and undocumented. Ask:
 
 ## What not to do in review
 
-- Do not re-flag anything the automated gates at the top of this page cover.
-  A pull request that fails one of them cannot merge anyway.
+- Do not re-flag anything the automated gates at the top of this page cover,
+  unless the pull request changes the gate itself. A pull request that fails
+  one of them cannot merge anyway.
 - Do not report a finding without a concrete failure case — "this could be
   fragile" is not reviewable. Say which input produces which wrong result.
 - Do not ask for hardware verification as a condition of merge. There is no

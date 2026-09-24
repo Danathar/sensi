@@ -12,7 +12,10 @@ The diff, plus the PR description. `gh pr diff <number>` and
 
 1. **Do not re-check what CI already checks.** Formatting, lint, coverage
    threshold, manifest validity, HACS metadata and requirements sync are
-   gated. A review that reports them has spent itself on nothing.
+   gated. A review that reports them has spent itself on nothing. The
+   exception is a pull request that changes a gate itself — its workflow, a
+   script it runs, its configuration or the ruleset. Then the green check
+   proves nothing, so review the gate change and check what it covers by hand.
 
 2. **Work the rubric in priority order** and stop escalating once you have a
    blocking finding:
