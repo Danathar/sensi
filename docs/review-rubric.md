@@ -3,11 +3,14 @@
 What a review of this repository is supposed to check, in priority order. The
 automated gates already cover formatting, lint, coverage threshold, manifest
 validity, HACS metadata and requirements sync — do not spend review on those.
-Each is a required status check on master, so a pull request that fails one
-cannot merge. Requirements sync is the check that `manifest.json`
-`requirements` and `requirements_component.txt` agree. The test suite is
-required too, but whether a new test checks the right thing is not something
-CI can see; that is §6. Spend review on what CI cannot see.
+Each runs on every pull request and is a required check in
+`.github/rulesets/master.json`, so a failing one is already red where the
+reviewer can see it. Whether GitHub still enforces that file is a separate
+question that nothing in a checkout answers; `scripts/check_ruleset.py` does.
+Requirements sync is the check that `manifest.json` `requirements` and
+`requirements_component.txt` agree. The test suite is required too, but
+whether a new test checks the right thing is not something CI can see; that
+is §6. Spend review on what CI cannot see.
 
 That holds only while the pull request leaves the gates alone. A gate is
 decided by its workflow in `.github/workflows/`, a script it runs from
@@ -113,8 +116,8 @@ The Sensi protocol is reverse engineered and undocumented. Ask:
 ## What not to do in review
 
 - Do not re-flag anything the automated gates at the top of this page cover,
-  unless the pull request changes the gate itself. A pull request that fails
-  one of them cannot merge anyway.
+  unless the pull request changes the gate itself. A failing gate is already
+  red on the pull request.
 - Do not report a finding without a concrete failure case — "this could be
   fragile" is not reviewable. Say which input produces which wrong result.
 - Do not ask for hardware verification as a condition of merge. There is no

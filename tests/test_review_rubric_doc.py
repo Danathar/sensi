@@ -37,8 +37,9 @@ This module joins the page to what decides each claim:
   manifest key, a payload field the component reads, a name the component
   defines or uses (found by AST), or a named exemption. The classifier raises on
   anything else, so a token in a new shape fails loudly instead of being skipped.
-- **The code and template claims the levels make**: the four value helpers in
-  `utils.py`, the emit loop that runs as a background task and that `stop()`
+- **The code and template claims the levels make**: the three conversion
+  helpers in `utils.py`, logging going through `redact_token` (wherever it is
+  defined), the emit loop that runs as a background task and that `stop()`
   cancels, `_futures`, the two config-entry exceptions being raised, the aux heat
   switch's capability gate, the release workflow owning the manifest version,
   the pull request template's *Risk* and *How it was verified* sections, and
@@ -487,6 +488,24 @@ def test_the_opening_says_why_the_test_run_is_not_on_the_list() -> None:
     assert "### 6. Tests" in _read(_RUBRIC)
 
 
+def test_the_opening_rests_the_skip_on_the_red_check_not_on_the_committed_file() -> (
+    None
+):
+    """Claim: a failing gate "is already red where the reviewer can see it".
+
+    `.github/rulesets/master.json` is what GitHub is meant to enforce, not proof
+    that it does: the live ruleset can lose a required check while the file
+    stays the same, and only the online `scripts/check_ruleset.py` would notice.
+    So the page must not tell a reviewer that a failing gate cannot merge; it
+    points at the checker for that question instead.
+    """
+    opening = _opening()
+    assert "`.github/rulesets/master.json`" in opening
+    assert "`scripts/check_ruleset.py`" in opening
+    assert "scripts/check_ruleset.py" in _tracked()
+    assert "cannot merge" not in _flat(_read(_RUBRIC))
+
+
 def test_the_review_prompt_lists_the_same_gates_as_the_page() -> None:
     """`review.md` step 1 is the copy an assistant reads."""
     assert [term.lower() for term in _review_gates()] == [
@@ -628,9 +647,9 @@ def _self_attribute(node: ast.AST) -> str | None:
     return None
 
 
-@pytest.mark.parametrize("helper", ["redact_token", "to_bool", "to_int", "to_float"])
-def test_the_value_helpers_the_levels_name_are_in_utils(helper: str) -> None:
-    """§1 names `redact_token`; §3 names `to_bool` / `to_int` / `to_float`."""
+@pytest.mark.parametrize("helper", ["to_bool", "to_int", "to_float"])
+def test_the_conversion_helpers_the_level_names_are_in_utils(helper: str) -> None:
+    """§3 names `to_bool` / `to_int` / `to_float`; AGENTS.md places them in `utils.py`."""
     assert f"`{helper}`" in _read(_RUBRIC)
     defined = {
         node.name
@@ -638,6 +657,39 @@ def test_the_value_helpers_the_levels_name_are_in_utils(helper: str) -> None:
         if isinstance(node, ast.FunctionDef)
     }
     assert helper in defined, f"utils.py no longer defines {helper}"
+
+
+def test_the_component_logs_tokens_through_redact_token() -> None:
+    """Claim (§1): token-shaped values are logged "through `redact_token`".
+
+    The page does not say where it is defined, so neither does this test: it
+    must be a top-level function of exactly one component module, and some
+    logging call in the component must pass its result.
+    """
+    assert "`redact_token`" in _read(_RUBRIC)
+    defined = [
+        stem
+        for stem, tree in _module_trees().items()
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "redact_token"
+    ]
+    assert len(defined) == 1, f"redact_token is defined in {defined}"
+    logged = [
+        node
+        for tree in _module_trees().values()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "LOGGER"
+        and any(
+            isinstance(arg, ast.Call)
+            and isinstance(arg.func, ast.Name)
+            and arg.func.id == "redact_token"
+            for arg in node.args
+        )
+    ]
+    assert logged, "no LOGGER call in the component passes a redact_token() result"
 
 
 def test_the_emit_loop_is_a_background_task_that_stop_cancels() -> None:
