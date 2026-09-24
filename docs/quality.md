@@ -121,7 +121,7 @@ Because publishing only happens on a green master run, a red **Coverage gate**
 badge next to a healthy-looking **Unit coverage** number means the number is
 stale, not that coverage is fine. That is why both badges are there.
 
-Change acceptance is tracked separately in [`docs/metrics.md`](metrics.md).
+Change acceptance is tracked separately in [`docs/metrics/`](metrics/README.md).
 
 ## Reproducing all of it locally
 

@@ -74,5 +74,5 @@ a later reading has something to compare against.
 
 ## Related
 
-- [`docs/quality.md`](quality.md) — the code-quality signals (coverage, CI, lint)
-- [`docs/review-rubric.md`](review-rubric.md) — what a review is supposed to check
+- [`docs/quality.md`](../quality.md) — the code-quality signals (coverage, CI, lint)
+- [`docs/review-rubric.md`](../review-rubric.md) — what a review is supposed to check

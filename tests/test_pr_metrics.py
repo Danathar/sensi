@@ -1,7 +1,7 @@
 """Tests for scripts/pr_metrics.py.
 
 Not part of the component, so not measured by the coverage gate - but this is
-the script `docs/metrics.md` and the README point at when they claim the
+the script `docs/metrics/README.md` and the README point at when they claim the
 project measures outcomes rather than activity. Its numbers are the ones an
 acceptance-rate comparison between human- and agent-authored changes is read
 from, and every one of them is a silent number: a wrong median or a

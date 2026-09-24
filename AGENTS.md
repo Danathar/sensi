@@ -203,7 +203,7 @@ A person who was not in your head will read what you write. Write for them.
 | --- | --- |
 | [`docs/review-rubric.md`](docs/review-rubric.md) | what a review checks, in priority order |
 | [`docs/quality.md`](docs/quality.md) | what each CI gate proves, and what is not covered at all |
-| [`docs/metrics.md`](docs/metrics.md) | change acceptance, and how to read it here |
+| [`docs/metrics/`](docs/metrics/README.md) | change acceptance, and how to read it here |
 | [`docs/risk-tiers.md`](docs/risk-tiers.md) | what the automatic `tier/*` label means and what it requires of you |
 | [`docs/SECURITY-AI.md`](docs/SECURITY-AI.md) | what an agent may and may not do here - read this before acting autonomously |
 | [`docs/reflections/`](docs/reflections/) | knowledge that outlived the change that produced it |

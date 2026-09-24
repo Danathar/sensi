@@ -1,4 +1,4 @@
-"""Tests for `docs/metrics.md`, the prose that models `scripts/pr_metrics.py`.
+"""Tests for `docs/metrics/README.md`, the prose that models `scripts/pr_metrics.py`.
 
 The script itself is pinned by `tests/test_pr_metrics.py`. This module pins the
 *document*, which is a hand-written copy of the script's interface: four
@@ -29,7 +29,7 @@ import sys
 import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DOC = _ROOT / "docs" / "metrics.md"
+_DOC = _ROOT / "docs" / "metrics" / "README.md"
 _SCRIPT = _ROOT / "scripts" / "pr_metrics.py"
 _RULESET = _ROOT / ".github" / "rulesets" / "master.json"
 _COVERAGE_GATE = _ROOT / ".github" / "workflows" / "coverage-gate.yml"
@@ -49,9 +49,9 @@ _TEXT = _DOC.read_text(encoding="utf-8")
 def _section(title: str) -> str:
     """Return the body of the `## <title>` section, without its heading."""
     match = re.search(rf"^## {re.escape(title)}\n(.*?)(?=^## |\Z)", _TEXT, re.M | re.S)
-    assert match, f"docs/metrics.md has no '## {title}' section"
+    assert match, f"docs/metrics/README.md has no '## {title}' section"
     body = match.group(1)
-    assert body.strip(), f"docs/metrics.md's '## {title}' section is empty"
+    assert body.strip(), f"docs/metrics/README.md's '## {title}' section is empty"
     return body
 
 
@@ -178,7 +178,7 @@ def _documented_commands() -> list[tuple[list[str], str]]:
             continue
         code, _, comment = line.partition("#")
         commands.append((shlex.split(code), comment.strip()))
-    assert commands, "docs/metrics.md documents no commands"
+    assert commands, "docs/metrics/README.md documents no commands"
     return commands
 
 
@@ -193,7 +193,7 @@ def test_every_documented_command_invokes_the_committed_script(argv) -> None:
     assert argv[0] == "python3", f"documented command does not use python3: {argv}"
     script = _ROOT / argv[1]
     assert script == _SCRIPT and script.is_file(), (
-        f"docs/metrics.md documents {argv[1]!r}, which is not "
+        f"docs/metrics/README.md documents {argv[1]!r}, which is not "
         f"{_SCRIPT.relative_to(_ROOT)}"
     )
 
@@ -225,7 +225,7 @@ def test_the_bare_command_fetches_the_number_of_pulls_its_comment_claims(
     capsys.readouterr()
 
     assert calls == [(int(documented.group(1)), None)], (
-        f"docs/metrics.md says the default is {documented.group(1)}; the script "
+        f"docs/metrics/README.md says the default is {documented.group(1)}; the script "
         f"asked for {calls}"
     )
 
@@ -256,7 +256,7 @@ def test_the_bare_commands_comment_describes_closed_pulls(monkeypatch) -> None:
     argv = recorded[0]
     assert argv[:3] == ["gh", "pr", "list"], argv
     assert argv[argv.index("--state") + 1] == "closed", (
-        f"docs/metrics.md says these are closed PRs; {argv} asks for something else"
+        f"docs/metrics/README.md says these are closed PRs; {argv} asks for something else"
     )
 
 
@@ -334,7 +334,7 @@ def test_the_script_imports_only_the_standard_library() -> None:
     assert imported, "the import scan found nothing, so it proves nothing"
     outside = sorted(imported - set(sys.stdlib_module_names))
     assert not outside, (
-        f"docs/metrics.md says {_SCRIPT.name} needs no third-party packages, but "
+        f"docs/metrics/README.md says {_SCRIPT.name} needs no third-party packages, but "
         f"it imports {outside}"
     )
 
@@ -400,7 +400,7 @@ def test_the_column_table_defines_a_column_for_every_rendered_one() -> None:
     rendered_header = _rendered(_report([_pull(1, hours=1.0)]))[0]
     assert rendered_header[0] == "Author", rendered_header
     assert rendered_header[1:] == _DOCUMENTED_COLUMNS, (
-        "docs/metrics.md defines columns "
+        "docs/metrics/README.md defines columns "
         f"{_DOCUMENTED_COLUMNS} but the table pr_metrics.py renders has "
         f"{rendered_header[1:]}"
     )
@@ -424,7 +424,7 @@ _COLUMN_MEANING_TESTS = {
 def test_every_documented_column_has_a_test_giving_it_meaning(column: str) -> None:
     """A definition in prose is only a definition if something enforces it."""
     assert column in _COLUMN_MEANING_TESTS, (
-        f"docs/metrics.md defines the column {column!r}, which no test in "
+        f"docs/metrics/README.md defines the column {column!r}, which no test in "
         f"{Path(__file__).name} joins to pr_metrics.py"
     )
     assert _COLUMN_MEANING_TESTS[column] in globals(), (
@@ -434,11 +434,11 @@ def test_every_documented_column_has_a_test_giving_it_meaning(column: str) -> No
 
 
 def _definition(column: str) -> str:
-    """Return the Definition cell docs/metrics.md gives a column."""
+    """Return the Definition cell docs/metrics/README.md gives a column."""
     for row in _COLUMN_ROWS:
         if row[0] == f"**{column}**":
             return _normalised(row[1])
-    raise AssertionError(f"docs/metrics.md has no row for the column {column!r}")
+    raise AssertionError(f"docs/metrics/README.md has no row for the column {column!r}")
 
 
 # Three merged and two abandoned, with the unmerged pair carrying the largest
@@ -562,7 +562,7 @@ def test_the_rendered_rows_are_the_documented_buckets_in_the_documented_order() 
     rows = _rendered(_report(pulls))[2:]
 
     assert [row[0] for row in rows] == _DOCUMENTED_BUCKETS, (
-        f"docs/metrics.md says the rows are {_DOCUMENTED_BUCKETS}; "
+        f"docs/metrics/README.md says the rows are {_DOCUMENTED_BUCKETS}; "
         f"pr_metrics.py renders {[row[0] for row in rows]}"
     )
 
@@ -626,7 +626,7 @@ def _named_gates() -> list[str]:
         _normalised(_HONESTLY),
     )
     assert match, (
-        "docs/metrics.md no longer names the gates that stand in for a reviewer"
+        "docs/metrics/README.md no longer names the gates that stand in for a reviewer"
     )
     return [
         re.sub(r"^and ", "", item.strip())
@@ -648,11 +648,11 @@ def test_a_repository_that_merges_everything_reads_at_one_hundred_percent() -> N
 def test_every_gate_the_prose_names_is_a_required_check(gate: str) -> None:
     """The prose calls these the only reviewer, so they must actually be required."""
     assert gate in _GATE_CONTEXTS, (
-        f"docs/metrics.md names the gate {gate!r}, which is not joined to any "
+        f"docs/metrics/README.md names the gate {gate!r}, which is not joined to any "
         "context in .github/rulesets/master.json"
     )
     assert _GATE_CONTEXTS[gate] in _required_contexts(), (
-        f"docs/metrics.md calls {gate!r} a gate, but master.json does not "
+        f"docs/metrics/README.md calls {gate!r} a gate, but master.json does not "
         f"require {_GATE_CONTEXTS[gate]!r}"
     )
 
@@ -665,7 +665,7 @@ def test_the_prose_names_every_required_check() -> None:
     missing = sorted(set(_required_contexts()) - claimed)
 
     assert not missing, (
-        "docs/metrics.md says the automated gates are the only reviewer but "
+        "docs/metrics/README.md says the automated gates are the only reviewer but "
         f"does not name {missing}"
     )
 
@@ -716,7 +716,7 @@ def test_the_baseline_table_is_shaped_like_the_renderers_output() -> None:
     """The table is pasted output, so a renamed column makes it a fake."""
     rendered = _rendered(_report([_pull(1, hours=1.0)]))
     assert rendered[0] == _BASELINE_HEADER, (
-        f"docs/metrics.md's baseline header is {_BASELINE_HEADER}; pr_metrics.py "
+        f"docs/metrics/README.md's baseline header is {_BASELINE_HEADER}; pr_metrics.py "
         f"renders {rendered[0]}"
     )
     assert [row[0] for row in _BASELINE_ROWS], "the baseline table has no rows"
@@ -742,7 +742,7 @@ def test_the_baseline_numbers_are_output_the_renderer_still_produces() -> None:
     )
     for documented, produced in zip(_BASELINE_ROWS, rendered[2:], strict=True):
         assert documented == produced, (
-            f"docs/metrics.md's baseline row {documented} is not what "
+            f"docs/metrics/README.md's baseline row {documented} is not what "
             f"pr_metrics.py renders for it: {produced}"
         )
 
