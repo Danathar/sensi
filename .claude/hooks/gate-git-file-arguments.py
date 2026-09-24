@@ -1215,7 +1215,9 @@ def main() -> int:
     exported = False
     allexport = False
     # A `cd` earlier in the string moves where bash opens a relative `<`
-    # target, so a later git's redirection cannot be resolved here.
+    # target, so a later git's redirection cannot be resolved here. Only a
+    # cd, pushd or popd sets it, and nothing clears it: a git segment between
+    # the cd and the redirection does not move bash back.
     moved = False
     # The system's copies of the wrappers, where they lead a command. bash
     # runs them and git never receives them, so the operand scan below does
@@ -1425,12 +1427,12 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        moved = _checkout_moves_the_tree(_command_words(segment)[0])
-        if moved is not None:
+        start_point = _checkout_moves_the_tree(_command_words(segment)[0])
+        if start_point is not None:
             print(
-                f"Blocked: `{moved}` after `git checkout -b NAME` is a start point "
-                "or an option, and a start point makes git write that commit's "
-                "files over the working tree - .claude/settings.json, "
+                f"Blocked: `{start_point}` after `git checkout -b NAME` is a "
+                "start point or an option, and a start point makes git write "
+                "that commit's files over the working tree - .claude/settings.json, "
                 ".claude/hooks/ and scripts/run_tests.py included, which the Edit "
                 "deny rules protect only from the Edit tool. `git checkout -b x "
                 "00ff1e2` restores the allow list of that commit and deletes this "

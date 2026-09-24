@@ -556,6 +556,12 @@ def test_git_really_prints_the_first_line_of_a_file_on_standard_input(
         "cd config && git log --stdin <configuration.yaml",
         "cd config; git log --stdin <configuration.yaml",
         "pushd config && git log --stdin <configuration.yaml",
+        # A git segment between the cd and the redirection leaves bash in
+        # config/, so it must not clear what the cd set (#280).
+        "cd config && git status && git log --stdin <configuration.yaml",
+        "cd config; git branch; git log --stdin <configuration.yaml",
+        "pushd config && git status && git log --stdin <configuration.yaml",
+        "cd config && git checkout -b topic && git log --stdin <configuration.yaml",
     ],
 )
 def test_a_denied_file_on_the_stdin_of_git_is_refused(command: str) -> None:
@@ -580,6 +586,9 @@ def test_a_denied_file_on_the_stdin_of_git_is_refused(command: str) -> None:
         "git log -1 && cat <.env",
         "cd config && git log --stdin </dev/null",
         "git log --stdin <revs.txt; cd config",
+        # `git checkout -b NAME` moves no directory, so a < after it is still
+        # resolved from the repository root (#280).
+        "git checkout -b topic && git log --stdin <revs.txt",
     ],
 )
 def test_an_ordinary_input_redirection_on_git_is_left_alone(command: str) -> None:
@@ -1802,6 +1811,20 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "redirection",
+        "cd config && git status && git log --stdin <configuration.yaml",
+        _REFUSED,
+        "a git segment between the cd and the redirection leaves bash in "
+        "config/, and it once cleared the cd flag by reusing its name (#280)",
+    ),
+    _Row(
+        "redirection",
+        "git checkout -b topic && git log --stdin <revs.txt",
+        _ALLOWED,
+        "git checkout -b NAME moves no directory, so the < after it is still "
+        "resolved from the repository root (#280)",
+    ),
+    _Row(
+        "redirection",
         "git log --stdin <revs.txt",
         _ALLOWED,
         "a revision list inside the repository with no denied name is what "
@@ -2215,6 +2238,13 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "options",
+        "cd config && git checkout -b topic 00ff1e2",
+        _REFUSED,
+        "the start-point refusal still holds after a cd, now that it no "
+        "longer shares a name with the cd flag (#280)",
+    ),
+    _Row(
+        "options",
         "git checkout -b topic",
         _ALLOWED,
         "a branch made at HEAD leaves every file as it is, which is what the "
@@ -2360,6 +2390,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "cd config && git log --stdin <configuration.yaml",
     ),
     (
+        "the cd flag kept apart from the checkout start point",
+        "        start_point = _checkout_moves_the_tree(",
+        "        moved = start_point = _checkout_moves_the_tree(",
+        "cd config && git status && git log --stdin <configuration.yaml",
+    ),
+    (
         "a </dev/null target read as the shell's, not as an operand",
         'if word == "/dev/null" and index and masked[index - 1] == "<":',
         "if False:",
@@ -2385,7 +2421,7 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "git checkout -b with anything after the branch name",
-        "if moved is not None:",
+        "if start_point is not None:",
         "if False:",
         "git checkout -b topic 00ff1e2",
     ),
