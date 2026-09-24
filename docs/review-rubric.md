@@ -1,8 +1,13 @@
 # Pull request review rubric
 
 What a review of this repository is supposed to check, in priority order. The
-automated gates already cover formatting, lint, coverage and manifest validity —
-do not spend review on those. Spend it on what CI cannot see.
+automated gates already cover formatting, lint, coverage threshold, manifest
+validity, HACS metadata and requirements sync — do not spend review on those.
+Each is a required status check on master, so a pull request that fails one
+cannot merge. Requirements sync is the check that `manifest.json`
+`requirements` and `requirements_component.txt` agree. The test suite is
+required too, but whether a new test checks the right thing is not something
+CI can see; that is §6. Spend review on what CI cannot see.
 
 Use it as a human, or hand it to an assistant via
 [`.github/prompts/review.md`](../.github/prompts/review.md).
@@ -30,8 +35,6 @@ This has happened in this repository's history. It is the one category where
   duplicate set.
 - Does the config flow change shape, or the stored credential structure?
 - Does `manifest.json` `version` change by hand? The release workflow owns it.
-- Do `manifest.json` `requirements` and `requirements_component.txt` still
-  agree?
 
 If any of these are intended, the PR must say so in the *Risk* section. Silence
 is the defect.
@@ -102,7 +105,8 @@ The Sensi protocol is reverse engineered and undocumented. Ask:
 
 ## What not to do in review
 
-- Do not re-flag what `ruff` and the coverage gate already enforce.
+- Do not re-flag anything the automated gates at the top of this page cover.
+  A pull request that fails one of them cannot merge anyway.
 - Do not report a finding without a concrete failure case — "this could be
   fragile" is not reviewable. Say which input produces which wrong result.
 - Do not ask for hardware verification as a condition of merge. There is no
