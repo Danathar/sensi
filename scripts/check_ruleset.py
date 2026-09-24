@@ -275,8 +275,8 @@ def main(argv: list[str] | None = None) -> int:
             f"  gh api --method POST repos/{args.repo}/rulesets --input {args.definition}"
         )
         print()
-        print("Read docs/branch-protection.md first - there is an ordering")
-        print("dependency, and applying this before it is met breaks releases.")
+        print("Read docs/branch-protection.md first - it explains each rule and why")
+        print("bypass_actors must stay empty.")
         return 1
 
     problems = compare(definition, live)
