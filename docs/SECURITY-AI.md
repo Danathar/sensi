@@ -102,7 +102,11 @@ supply-chain concern.
   the working tree, its copy of the settings file, the hooks and the test
   wrapper included, so the hook refuses anything after the branch name. And
   `git add --pathspec-from-file` reads any file and prints the first line it
-  cannot match in its error, so the hook refuses that option too. The shell
+  cannot match in its error, so the hook refuses that option too. `git add
+  --force` stages a gitignored file, and `git diff --cached` then prints it
+  whole without naming it, so the hook refuses `--force` and any `git add`
+  operand shaped like a withheld file, and the ignore file lists every such
+  shape so `git add .` leaves them out. The shell
   can hand git a file as well: under `--stdin`, `git log`, `git show` and
   `git diff` read revisions from standard input and quote the first line that
   is not one in their error, so `git log --stdin <.env` printed the first

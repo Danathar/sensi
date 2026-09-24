@@ -120,6 +120,15 @@ three of their arguments do file I/O that has nothing to do with the repository:
   files`). Creating a file named after that line and running it again
   gives the next one, so the whole of `secrets.yaml` or `.env` is readable
   a line at a time past the `Read` deny rows.
+* `git add -f` stages a file `.gitignore` leaves out, and once a file is in
+  the index `git diff --cached` and `git show :PATH` print it whole, naming
+  nothing this hook could check. `git add -f secrets.yaml .env config`
+  followed by `git diff --cached` printed all three. So the file is stopped
+  where it enters the index: `git add` is refused `--force` (and its
+  abbreviations and any short cluster holding `f`) and any operand shaped
+  like a file the `Read` deny rows withhold; the other withheld shapes are
+  in `.gitignore`, so a plain `git add .` leaves them out; see
+  `_stages_a_withheld_file`.
 * git reads standard input too. Under `--stdin`, `git log`, `git show` and
   `git diff` take revisions from it, one per line, and the first line that
   is not a revision ends the run with `fatal: bad revision '<that line>'`,
@@ -419,6 +428,12 @@ _ALLOWED_GIT_PREFIXES = (
 # Compared the way `_REFUSED_LONG` is, so `--pathspec-fr` is refused too. Of the
 # allow-listed subcommands only `git add` takes the option (git 2.47.3).
 _PATHSPEC_FILE = "pathspec-from-file"
+
+# `git add --force` stages a gitignored file, and the index is readable by
+# `git diff --cached` and `git show :PATH`, which name no path at all. Compared
+# the way `_PATHSPEC_FILE` is, so `--fo` is refused too; git add has no short
+# option that takes an argument, so an `f` anywhere in a short cluster is -f.
+_FORCE = "force"
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
 # own. The words inside it are one word to any scan of the string, so a git
@@ -980,6 +995,33 @@ def _reads_a_pathspec_file(words: list[str]) -> str | None:
     return None
 
 
+def _stages_a_withheld_file(words: list[str]) -> str | None:
+    """Return the `git add` word that would put a withheld file in the index.
+
+    That is `--force` or `-f`, which stage what `.gitignore` leaves out, or
+    an operand shaped like a file the `Read` deny rows withhold. Once staged,
+    `git diff --cached` prints it whole and names nothing this hook can see.
+    """
+
+    options = True
+    for word in _after_git(words, ("add",)) or ():
+        if options and word == "--":
+            options = False
+            continue
+        if options and word.startswith("--"):
+            name = word[2:].split("=", 1)[0]
+            if name and _FORCE.startswith(name):
+                return word
+            continue
+        if options and word.startswith("-") and len(word) > 1:
+            if "f" in word[1:]:
+                return word
+            continue
+        if _denied_read_shape(word):
+            return word
+    return None
+
+
 def _has_substitution(segment: list[str]) -> bool:
     """Whether any word of `segment` is built by running another command.
 
@@ -1451,6 +1493,19 @@ def main() -> int:
                 "first line that matches nothing in its error - `git add "
                 "--pathspec-from-file=secrets.yaml` shows a line of a file the "
                 "Read deny rules withhold. Name the paths in the command instead.",
+                file=sys.stderr,
+            )
+            return 2
+        withheld = _stages_a_withheld_file(_command_words(segment)[0])
+        if withheld is not None:
+            print(
+                f"Blocked: `{withheld}` would make `git add` put a file the Read "
+                "deny rules withhold into the index - --force stages what "
+                ".gitignore leaves out - and from there `git diff --cached` and "
+                "`git show :PATH` print it whole: `git add -f secrets.yaml` then "
+                "`git diff --cached` shows every line of secrets.yaml. The allow "
+                "rule matches the command on its prefix, so nothing else would "
+                "prompt. Stage the files you changed by name, without --force.",
                 file=sys.stderr,
             )
             return 2
