@@ -2626,6 +2626,89 @@ def test_an_unreachable_shape_matches_no_allow_rule(
     )
 
 
+# The reserved words that open a compound command, and the two (`time`, `!`)
+# that may stand in front of one.
+_GROUP_OPENERS = (
+    "if",
+    "for",
+    "while",
+    "until",
+    "case",
+    "select",
+    "function",
+    "coproc",
+    "time",
+    "!",
+)
+
+# Allow-row patterns (the text inside `Bash(...)`) that can reach a grouped
+# command, and ones that cannot. They hold _reaches_a_group() to its job:
+# today's settings have none of the first kind, so a check against the
+# settings alone passes whatever it looks for.
+_GROUP_REACHING_PATTERNS = (
+    "",
+    "*",
+    ":*",
+    "{ git diff HEAD; } >out",
+    "(git diff HEAD) >out",
+    "if true; then git diff HEAD; fi >out",
+    "for f in a; do git diff HEAD; done >out",
+    "while false; do :; done >out",
+    "if true\nthen git diff HEAD\nfi >out",
+    "if true & then git diff HEAD & fi >out",
+    "if *",
+    "if:*",
+    "if true:*",
+    "for f in a:*",
+    "while *",
+    "i*",
+    "time *",
+    "! *",
+)
+_GROUP_PLAIN_PATTERNS = (
+    "git diff:*",
+    "git diff *",
+    "git status*",
+    "git diff HEAD >out",
+    "git diff HEAD 2>&1",
+    "git status && git diff HEAD",
+    "git diff HEAD &>out",
+    "git diff HEAD |& cat",
+    "ruff check",
+    "t:*",
+    "ifconfig:*",
+)
+
+
+def _reaches_a_group(pattern: str) -> bool:
+    """Whether a `Bash(...)` pattern can match a command that holds a grouped command.
+
+    An exact pattern that names one has a parenthesis or a brace in it, or, for
+    the keyword forms (`if ...; then ...; fi >f`), what ends each part: a `;`, a
+    newline or a lone `&` (`if true & then ... & fi >f` is the same `if`). The
+    `&` in `&&`, `2>&1`, `&>` and `|&` ends nothing and is not counted. A
+    pattern with a `*` can match one when the text before the `*` is empty or
+    could begin a compound: `Bash(*)`, `Bash(if *)`, `Bash(i*)`, `Bash(time:*)`.
+    """
+    if any(character in pattern for character in "(){};\n"):
+        return True
+    if re.search(r"(?<![&<>|])&(?![&>])", pattern) or not pattern.strip():
+        return True
+    if "*" not in pattern:
+        return False
+    if pattern.endswith(":*") and "*" not in pattern[:-2]:
+        head = pattern[:-2] + " "  # `:*` ends the word in front of it
+    else:
+        head = pattern.split("*", 1)[0]
+    words = head.split()
+    if not words:
+        return True
+    if len(words) == 1 and not head[-1].isspace():
+        # the `*` can finish the word: `Bash(i*)` matches `if ...`
+        return any(opener.startswith(words[0]) for opener in _GROUP_OPENERS)
+    return words[0] in _GROUP_OPENERS
+
+
 def test_no_allow_rule_reaches_a_redirection_written_after_a_group() -> None:
     """A redirection after a grouped command is Claude Code's to stop.
 
@@ -2643,24 +2726,17 @@ def test_no_allow_rule_reaches_a_redirection_written_after_a_group() -> None:
     function forms were asked the same way ("Contains if_statement" and so
     on). The only rows that let such a string run with no prompt were one that
     names the grouped string itself (`Bash({ git diff HEAD; } >out3.txt)` ran
-    exactly that string), a bare `Bash` and `Bash(*)`. This fails if a row
-    like that is added. A row naming a compound command has a parenthesis or a
-    brace in it, or, for the keyword forms (`if ...; then ...; fi >f`), what
-    ends each part: a `;`, a newline or a lone `&` (`if true & then ... & fi
-    >f` is the same `if`). Those are what it looks for; the `&` in `&&`,
-    `2>&1`, `&>` and `|&` ends nothing and is not counted
-    (aurora-zfs-simple#241).
+    exactly that string), a bare `Bash` and `Bash(*)`. A wildcard row whose
+    fixed part opens a compound (`Bash(if true:*)`) matches such a string the
+    same way. This fails if a row like that is added; `_reaches_a_group()`
+    says what counts (aurora-zfs-simple#241).
     """
 
     entries = json.loads(_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
     rules = _bash_allow_rules()
     assert rules
     reaching = [entry for entry in entries if entry == "Bash"] + [
-        f"Bash({rule})"
-        for rule in rules
-        if any(character in rule for character in "(){};\n")
-        or re.search(r"(?<![&<>|])&(?![&>])", rule)
-        or rule.removesuffix(":*").strip() in ("", "*")
+        f"Bash({rule})" for rule in rules if _reaches_a_group(rule)
     ]
     assert reaching == [], (
         f"{reaching} can let a command that contains a subshell, a brace group or "
@@ -2668,6 +2744,20 @@ def test_no_allow_rule_reaches_a_redirection_written_after_a_group() -> None:
         "a redirection written after the group to the command inside it. Teach the "
         "gate that before adding the row."
     )
+
+
+@pytest.mark.parametrize("pattern", _GROUP_REACHING_PATTERNS)
+def test_the_group_check_catches_a_row_that_reaches_a_group(pattern: str) -> None:
+    """A row that can match a grouped command is one the check reports."""
+
+    assert _reaches_a_group(pattern)
+
+
+@pytest.mark.parametrize("pattern", _GROUP_PLAIN_PATTERNS)
+def test_the_group_check_leaves_a_plain_row_alone(pattern: str) -> None:
+    """A plain row, `&&` and `2>&1` included, is not taken for a group."""
+
+    assert not _reaches_a_group(pattern)
 
 
 @pytest.mark.parametrize("mutation", _MUTATIONS, ids=lambda mutation: mutation[0])
