@@ -76,7 +76,7 @@ jobs:
 
           # --force creates the label or updates an existing one, so it always
           # ends up with the colour and description from
-          # .github/risk-tiers.yml rather than a random generated colour.
+          # .github/policies/risk-tiers.yml rather than a random generated colour.
           #
           # Not tolerant of failure on purpose: when this silently swallowed
           # errors, an over-long description produced an HTTP 422 here and then

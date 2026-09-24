@@ -2,7 +2,7 @@
 
 Every pull request gets one `tier/*` label and one `size/*` label, applied
 automatically by `.github/workflows/labeler.yml` from the rules in
-[`.github/risk-tiers.yml`](../.github/risk-tiers.yml).
+[`.github/policies/risk-tiers.yml`](../.github/policies/risk-tiers.yml).
 
 The tier answers one question: **what is the worst thing that happens if this
 change is wrong?** It is the highest tier whose paths the change touches — not a
@@ -97,7 +97,7 @@ git diff --name-only master... | python3 scripts/classify_pr.py --stdin --lines 
 
 ## Changing the rules
 
-Edit [`.github/risk-tiers.yml`](../.github/risk-tiers.yml) and this file
+Edit [`.github/policies/risk-tiers.yml`](../.github/policies/risk-tiers.yml) and this file
 together. Tiers are evaluated in file order, highest first, so a new path
 pattern must go in the tier that describes its worst outcome — not the one that
 is most convenient.

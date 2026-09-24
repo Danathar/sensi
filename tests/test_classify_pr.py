@@ -11,7 +11,7 @@ Three things the script gets to decide, and each is asserted here against the
 mutant that would break it:
 
 * which tier wins when a change touches more than one of them - the first
-  matching tier in `.github/risk-tiers.yml`, not the last and not a score;
+  matching tier in `.github/policies/risk-tiers.yml`, not the last and not a score;
 * what `**` means in a rule pattern - a prefix match on the directory, which
   `fnmatch` alone does not do;
 * whether a `label_description` is short enough for GitHub, which is checked
@@ -563,7 +563,7 @@ def test_pr_and_files_cannot_be_combined(monkeypatch, capsys):
     assert "not allowed with argument" in capsys.readouterr().err
 
 
-# --- the real .github/risk-tiers.yml ---------------------------------------
+# --- the real .github/policies/risk-tiers.yml ---------------------------------------
 
 
 def test_the_committed_rules_file_loads():

@@ -12,7 +12,7 @@ characters)` and the `|| true` on the end of that pipeline swallowed it, so the
 label never existed.
 
 **Rule** — GitHub rejects a label description over 100 characters. Keep label
-text short and put the prose somewhere a human reads it; `.github/risk-tiers.yml`
+text short and put the prose somewhere a human reads it; `.github/policies/risk-tiers.yml`
 carries a short `label_description` for the label and a long `description` for
 the file, and `scripts/classify_pr.py` rejects an over-long one at load time so
 the failure names the tier instead of arriving as an HTTP 422 in CI.

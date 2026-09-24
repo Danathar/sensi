@@ -75,7 +75,7 @@ _PR_TEMPLATE = _ROOT / ".github" / "pull_request_template.md"
 _ISSUE_TEMPLATE_DIR = _ROOT / ".github" / "ISSUE_TEMPLATE"
 _BUG_REPORT = _ISSUE_TEMPLATE_DIR / "bug_report.md"
 _ACMM = _ROOT / ".acmm.yml"
-_RISK_TIERS_YML = _ROOT / ".github" / "risk-tiers.yml"
+_RISK_TIERS_YML = _ROOT / ".github" / "policies" / "risk-tiers.yml"
 _SECURITY_AI = _ROOT / "docs" / "SECURITY-AI.md"
 _SYNC_SCRIPT = _ROOT / "scripts" / "check_requirements_sync.py"
 _CONST = _ROOT / "custom_components" / "sensi" / "const.py"
@@ -92,7 +92,7 @@ _PR_REQUIRED_MENTIONS = (
 )
 
 # The Risk section claims three kinds of change are breaking for existing
-# installs. Each maps to a module that `.github/risk-tiers.yml` must still
+# installs. Each maps to a module that `.github/policies/risk-tiers.yml` must still
 # classify as `tier/breaking` - if one is demoted, the template is promising
 # something the labeller no longer does.
 _BREAKING_CLAIMS = {
@@ -483,7 +483,7 @@ def test_the_requirements_pairing_matches_the_script_that_enforces_it() -> None:
 
 
 def test_the_tier_label_promise_matches_the_labeller_rules() -> None:
-    """`tier/*` is the prefix `.github/risk-tiers.yml` actually produces."""
+    """`tier/*` is the prefix `.github/policies/risk-tiers.yml` actually produces."""
     rules = yaml.safe_load(_read(_RISK_TIERS_YML))
     names = [tier["name"] for tier in rules["tiers"]]
     assert len(names) >= 3

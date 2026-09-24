@@ -1,7 +1,7 @@
 """The prose behind the risk tiers, `docs/risk-tiers.md`.
 
 This document is the human-readable model of three machine-readable things:
-the tier and size rows in `.github/risk-tiers.yml`, the ordering and bucketing
+the tier and size rows in `.github/policies/risk-tiers.yml`, the ordering and bucketing
 logic in `scripts/classify_pr.py`, and the label application in
 `.github/workflows/labeler.yml`. Until this module existed nothing opened it.
 
@@ -22,7 +22,7 @@ size bucket can move, with the labels on every pull request changing
 accordingly and the document that explains them saying the old thing.
 
 So every assertion below is derived, never restated: the tier names and their
-order come from `.github/risk-tiers.yml`, the platform modules come from
+order come from `.github/policies/risk-tiers.yml`, the platform modules come from
 `SUPPORTED_PLATFORMS` in `custom_components/sensi/__init__.py`, the size
 bounds are replayed through `classify_pr.classify()`, the documented commands
 are run through `classify_pr.main()`, and the default branch comes from what
@@ -45,7 +45,7 @@ from homeassistant.const import Platform
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DOC = _ROOT / "docs" / "risk-tiers.md"
-_RULES = _ROOT / ".github" / "risk-tiers.yml"
+_RULES = _ROOT / ".github" / "policies" / "risk-tiers.yml"
 _WORKFLOW = _ROOT / ".github" / "workflows" / "labeler.yml"
 _SCRIPT = _ROOT / "scripts" / "classify_pr.py"
 _COMPONENT = _ROOT / "custom_components" / "sensi"

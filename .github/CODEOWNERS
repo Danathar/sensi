@@ -51,7 +51,7 @@
 /scripts/run_tests.py                   @Danathar
 
 # Change classification feeds the labels a reviewer triages by.
-/.github/risk-tiers.yml                 @Danathar
+/.github/policies/risk-tiers.yml        @Danathar
 
 # --- credential handling ---------------------------------------------------
 # The token lives here. This repository has already had a credential committed
