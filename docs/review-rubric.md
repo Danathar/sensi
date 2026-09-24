@@ -14,10 +14,12 @@ is §6. Spend review on what CI cannot see.
 
 That holds only while the pull request leaves the gates alone. A gate is
 decided by its workflow in `.github/workflows/`, a script it runs from
-`scripts/`, its configuration (`ruff.toml`, `.coveragerc`, and the pins in
-`requirements_test.txt`) and `.github/rulesets/master.json`. If a pull request
-changes any of those, a green check proves nothing about that change: review
-the gate change itself, and check by hand what that gate covers.
+`scripts/`, its configuration (`ruff.toml`, `pytest.ini`, `.coveragerc`, and
+the pins in `requirements_test.txt`) and `.github/rulesets/master.json`. If a
+pull request changes any of those, a green check proves nothing about that
+change: review the gate change itself, and check by hand what that gate
+covers. A line added to `pytest.ini`, for example, can drop tests from the
+coverage run without turning it red.
 
 Use it as a human, or hand it to an assistant via
 [`.github/prompts/review.md`](../.github/prompts/review.md).
