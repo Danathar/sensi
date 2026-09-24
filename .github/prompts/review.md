@@ -11,8 +11,8 @@ The diff, plus the PR description. `gh pr diff <number>` and
 ## Do this
 
 1. **Do not re-check what CI already checks.** Formatting, lint, coverage
-   threshold, manifest validity and HACS metadata are gated. A review that
-   reports them has spent itself on nothing.
+   threshold, manifest validity, HACS metadata and requirements sync are gated.
+   A review that reports them has spent itself on nothing.
 
 2. **Work the rubric in priority order** and stop escalating once you have a
    blocking finding:
