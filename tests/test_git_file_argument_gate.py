@@ -2129,6 +2129,23 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
         "begins `git -c` and matches no row. --config-env and --exec-path "
         "are the same shape",
     ),
+    (
+        "options",
+        "bash -n -v ./cosign.key",
+        "-n stops bash running a script, not printing it, so -v prints the "
+        "whole key, and -o history and -i copy it into ~/.bash_history - the "
+        "shape aurora-zfs-simple#233 and arch-bootc#345 refuse in hooks whose "
+        "settings allow `bash -n`. No row here runs bash, so this prompts, "
+        "and this hook carries none of those rules: port them before adding "
+        "such a row",
+    ),
+    (
+        "redirection",
+        "bash -n - < .env",
+        "bash -n reads its script from stdin when no file is named and "
+        "prints the line a syntax error stands on, so a .env value holding "
+        "a ( comes back out; no row here runs bash, so this prompts",
+    ),
 )
 
 
