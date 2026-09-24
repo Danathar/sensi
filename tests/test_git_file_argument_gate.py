@@ -491,6 +491,114 @@ def test_bash_really_truncates_the_target_of_a_redirection_written_first(
 
 
 # --------------------------------------------------------------------------
+# A file on git's standard input (#273).
+# --------------------------------------------------------------------------
+
+
+def test_git_really_prints_the_first_line_of_a_file_on_standard_input(
+    tmp_path: Path,
+) -> None:
+    """The reach the stdin rule exists for, run for real.
+
+    Under --stdin, git log, show and diff read revisions from standard input
+    and quote the first line that is not one in their error, so a stand-in
+    `.env` comes back out through a redirection.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert _git(repo, "init", "-q").returncode == 0
+    assert _git(repo, "commit", "-q", "--allow-empty", "-m", "init").returncode == 0
+    (repo / ".env").write_text("STAND_IN=NOT-A-SECRET\n", encoding="utf-8")
+    for command in ("git log --stdin <.env", "<.env git show --stdin"):
+        shown = subprocess.run(
+            ["bash", "--norc", "--noprofile", "-c", command],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert "STAND_IN=NOT-A-SECRET" in shown.stderr, (
+            f"{command!r} no longer prints the first line of its standard "
+            "input; re-derive why the hook checks a < on git"
+        )
+        completed = _run(_payload(command))
+        assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log --stdin <.env",
+        "git log --stdin < .env",
+        "git show --stdin < ./cosign.key",
+        "<./cosign.key git show --stdin",
+        "git diff --stdin 0<.env.local",
+        "git log --stdin <secrets.yaml",
+        "git log --stdin <'secrets.yaml'",
+        "git log --stdin <config/configuration.yaml",
+        "git log --stdin <keys/server.pem",
+        "git log --stdin < /etc/shadow",
+        "git log --stdin < ~/.netrc",
+        "git log --stdin < ../sensi/.env",
+        "git log --stdin < .en?",
+        "git log --stdin 3<.env <&3",
+        "timeout 5 git log --stdin <.env",
+        "git -P log --stdin <.env",
+        "git status; git log --stdin <.env",
+        # The shell opens the file whatever git then does with it, so the
+        # other allow-listed subcommands are held to the same test.
+        "git diff HEAD <secrets.yaml",
+        "git status <.env",
+    ],
+)
+def test_a_denied_file_on_the_stdin_of_git_is_refused(command: str) -> None:
+    """The target of a `<` on git is held to the Read deny rows."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "hands git a file on standard input" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log --stdin <revs.txt",
+        "git log --stdin < ./custom_components/sensi/manifest.json",
+        "git log --stdin </dev/null",
+        "git diff HEAD </dev/null",
+        "git log --stdin <<<HEAD",
+        "git log --stdin <&0",
+        "git log --grep '<' .env",
+        "grep git <.env",
+        "git log -1 && cat <.env",
+    ],
+)
+def test_an_ordinary_input_redirection_on_git_is_left_alone(command: str) -> None:
+    """A revision list in the repository is what --stdin is for."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_every_read_deny_row_is_refused_on_the_stdin_of_git() -> None:
+    """A `Read(./...)` row added to the settings fails until the hook names it."""
+
+    settings = json.loads(_SETTINGS.read_text(encoding="utf-8"))
+    targets = [
+        rule[len("Read(./") : -1].replace("**", "stand-in")
+        for rule in settings["permissions"]["deny"]
+        if rule.startswith("Read(./")
+    ]
+    assert targets, "the settings carry no Read deny row to hold the hook to"
+    for target in targets:
+        command = f"git log --stdin <{target}"
+        completed = _run(_payload(command))
+        assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+# --------------------------------------------------------------------------
 # The same write, on the allow-listed commands that are not git.
 # --------------------------------------------------------------------------
 
@@ -1659,11 +1767,38 @@ _CORPUS: tuple[_Row, ...] = (
     _Row(
         "redirection",
         "git diff HEAD <secrets.yaml",
+        _REFUSED,
+        "bash opens the file for reading whatever git then does with it, and "
+        "under --stdin git diff, log and show quote the first line that is not "
+        "a revision in their error; the target is held to the Read deny rows",
+    ),
+    _Row(
+        "redirection",
+        "git log --stdin <.env",
+        _REFUSED,
+        "git log --stdin prints `fatal: bad revision '<first line>'`, so the "
+        "first line of .env comes back past Read(./.env) (#273)",
+    ),
+    _Row(
+        "redirection",
+        "<./cosign.key git show --stdin",
+        _REFUSED,
+        "bash accepts the redirection before the command name, and a key file "
+        "is refused by its shape though no Read row here names it yet",
+    ),
+    _Row(
+        "redirection",
+        "git log --stdin <revs.txt",
         _ALLOWED,
-        "an input redirection opens the path for reading, and none of the "
-        "allow-listed commands reads stdin and echoes it back: git diff, log "
-        "and show ignore it, the gh read verbs print their own query, and "
-        "scripts/run_tests.py forwards to pytest, which does not echo stdin",
+        "a revision list inside the repository with no denied name is what "
+        "--stdin is for, and it holds nothing the deny rows withhold",
+    ),
+    _Row(
+        "redirection",
+        "git log --stdin </dev/null",
+        _ALLOWED,
+        "/dev/null is the shell's target, not an operand of git, and has "
+        "nothing to print back; it was refused as an implicit --no-index",
     ),
     _Row(
         "redirection",
@@ -2197,6 +2332,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if _turns_on_allexport(segment):",
         "if False:",
         "set -a; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "the refusal of a denied file on git's stdin",
+        "if fed is not None and _allowed_git_prefix(_command_words(segment)[0]):",
+        "if False:",
+        "git log --stdin <.env",
+    ),
+    (
+        "a </dev/null target read as the shell's, not as an operand",
+        'if word == "/dev/null" and index and masked[index - 1] == "<":',
+        "if False:",
+        "git log --stdin </dev/null",
     ),
     (
         "the exact allow rows, gated like the :* rows",

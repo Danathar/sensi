@@ -102,7 +102,14 @@ supply-chain concern.
   the working tree, its copy of the settings file, the hooks and the test
   wrapper included, so the hook refuses anything after the branch name. And
   `git add --pathspec-from-file` reads any file and prints the first line it
-  cannot match in its error, so the hook refuses that option too.
+  cannot match in its error, so the hook refuses that option too. The shell
+  can hand git a file as well: under `--stdin`, `git log`, `git show` and
+  `git diff` read revisions from standard input and quote the first line that
+  is not one in their error, so `git log --stdin <.env` printed the first
+  line of that file. A `<` on an allow-listed git command must name a file
+  inside the repository that none of the `Read` deny rows (or the usual key
+  shapes) match; `git log --stdin </dev/null` and a revision list such as
+  `git log --stdin <revs.txt` are allowed.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.
