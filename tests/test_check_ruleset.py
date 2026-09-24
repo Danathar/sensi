@@ -341,8 +341,9 @@ def test_a_repository_with_no_ruleset_says_how_to_apply_it(
 ) -> None:
     """Say how to apply it, rather than reporting success.
 
-    This is the state the repository is in today: unprotected. Exit 1 keeps
-    that from reading as a pass for a branch nothing guards.
+    This was the repository's state until the ruleset was applied on
+    2026-09-08, and it is a fork's until the fork applies it. Exit 1 keeps that
+    from reading as a pass for a branch nothing guards.
     """
     with patch.object(check_ruleset, "fetch_live", return_value=None):
         exit_code = check_ruleset.main([])
