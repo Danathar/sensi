@@ -834,6 +834,7 @@ _GATED = {
     "coverage threshold": ("coverage-gate.yml", "--cov-fail-under"),
     "manifest validity": ("validate.yml", "hassfest"),
     "HACS metadata": ("validate.yml", "hacs/action"),
+    "requirements sync": ("validate.yml", "scripts/check_requirements_sync.py"),
 }
 
 
