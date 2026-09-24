@@ -79,6 +79,12 @@ supply-chain concern.
   pipes, `2>&1` and input redirections are untouched, and a command no rule
   covers prompts on its own. The gate's test file derives that list from the
   settings file, so a `:*` row added there fails until the hook lists it.
+  A redirection written after a subshell or a brace group
+  (`(git diff HEAD) >out`, `{ git log --stdin; } <.env`) is not charged to the
+  command inside, for git or for these rows: Claude Code asks before it runs
+  any command that contains a subshell or a brace group, whatever the allow
+  rows say, and the gate's test file fails if an allow row that could reach
+  one is added.
   The three rows with no `:*` (`ruff check .`, `ruff format --check .` and
   `python3 scripts/check_requirements_sync.py`) are refused a redirection the
   same way, and ruff its own `--output-file`/`-o`. `xargs` in front of any

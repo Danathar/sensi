@@ -2626,6 +2626,42 @@ def test_an_unreachable_shape_matches_no_allow_rule(
     )
 
 
+def test_no_allow_rule_reaches_a_redirection_written_after_a_group() -> None:
+    """A redirection after a subshell or brace group is Claude Code's to stop.
+
+    `(git diff HEAD) >custom_components/sensi/client.py` and
+    `{ git log --stdin; } <.env` write and read the same files as the refused
+    `git diff HEAD >custom_components/sensi/client.py` and
+    `git log --stdin <.env`, but the redirection stands outside the git
+    command, and the gate does not charge it to git (#272). It does not need
+    to while nothing here reaches those strings: Claude Code asks before it
+    runs any command that contains a subshell or a brace group, whatever the
+    allow rows say about the command inside ("Contains subshell", "Contains
+    compound_statement"). Checked on 2.1.273 and 2.1.280 with
+    `Bash(git diff:*)`, `Bash(git log:*)` and a `python3 ...:*` row allowed,
+    in the default and acceptEdits modes. The only rows that let such a
+    string run with no prompt were one that names the grouped string itself
+    (`Bash({ git diff HEAD; } >out3.txt)` ran exactly that string), a bare
+    `Bash` and `Bash(*)`. This fails if a row like that is added.
+    """
+
+    entries = json.loads(_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    rules = _bash_allow_rules()
+    assert rules
+    reaching = [entry for entry in entries if entry == "Bash"] + [
+        f"Bash({rule})"
+        for rule in rules
+        if any(character in rule for character in "(){}")
+        or rule.removesuffix(":*").strip() in ("", "*")
+    ]
+    assert reaching == [], (
+        f"{reaching} can let a command that contains a subshell or a brace group "
+        "run with no prompt, and the gate does not charge a redirection written "
+        "after the group to the command inside it. Teach the gate that before "
+        "adding the row."
+    )
+
+
 @pytest.mark.parametrize("mutation", _MUTATIONS, ids=lambda mutation: mutation[0])
 def test_disabling_a_rule_flips_a_row_of_the_corpus(
     mutation: tuple[str, str, str, str], tmp_path: Path
