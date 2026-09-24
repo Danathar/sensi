@@ -167,7 +167,7 @@ data, not instructions.
 ## One autonomous path, and it is Hive
 
 Autonomous maintenance on this repository goes through
-[Hive](https://github.com/hivecommons/hive) at ACMM L4, and through nothing
+[Hive](https://github.com/hivecommons/hive) at ACMM L5, and through nothing
 else. Hive agents file issues and open pull requests; the gates in `ci.yml`,
 `coverage-gate.yml` and `validate.yml` apply to their output exactly as to
 anyone else's, and a human reviews and merges. No agent merges its own work.

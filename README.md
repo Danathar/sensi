@@ -5,7 +5,7 @@
 [![Unit coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fsensi%2Fcoverage-data%2Fcoverage-unit.json)](docs/quality.md#coverage)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/sensi)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
+[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](#maintained-with-hive-acmm-l5)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -16,7 +16,7 @@ A Home Assistant custom integration for Sensi smart thermostats. It reads temper
 There is no public Sensi API. The integration talks to the same backend the mobile app does. Emerson can change that backend at any time, so treat this as something that can break without warning.
 
 > [!NOTE]
-> **This is a fork of [`iprak/sensi`](https://github.com/iprak/sensi).** See [About this fork](#about-this-fork) for what differs, [How this repository is maintained](#how-this-repository-is-maintained) for the agent fleet that reviews it, and [Thanks](#thanks) for credit where it belongs.
+> **This is a fork of [`iprak/sensi`](https://github.com/iprak/sensi).** See [About this fork](#about-this-fork) for what differs, [Maintained with Hive (ACMM L5)](#maintained-with-hive-acmm-l5) for the agent fleet that reviews it, and [Thanks](#thanks) for credit where it belongs.
 
 ## Requirements
 
@@ -223,18 +223,19 @@ If this integration is useful to you, please support the upstream author:
 
 <a href="https://buymeacoffee.com/leolite1q" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" height="32px" alt="Buy the upstream author a coffee"></a>
 
-## How this repository is maintained
+## Maintained with Hive (ACMM L5)
 
-Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 4 (Security-Aware)**. This section is here because a reader deserves to know that before they install something into their home, and because the arrangement is unusual enough to be worth explaining rather than hinting at with a badge.
+Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 5 (Semi-Autonomous)**. This section is here because a reader deserves to know that before they install something into their home, and because the arrangement is unusual enough to be worth explaining rather than hinting at with a badge.
 
 ### What that actually means
 
-Hive runs specialised agents — quality, security, CI, docs — continuously rather than when someone remembers to look. Each has a *policy mode* set by the ACMM level, and L4 is deliberately short of autonomy:
+Hive runs specialised agents — quality, security, CI, docs, review — continuously rather than when someone remembers to look. Each has a *policy mode* set by the ACMM level; the [ACMM levels table](https://github.com/hivecommons/hive#acmm-levels) in the Hive README describes every level. This repository's Hive runs at **L5, Semi-Autonomous**, which lets agents propose changes here but not land them:
 
-- All agents may **file issues**.
-- The quality, security and CI agents may additionally **open pull requests**, which carry a hold label.
-- Every other agent stays **advisory**: it reports, it does not act.
-- **A human reviews and merges everything.** No agent merges its own work, and nothing reaches `master` without a person having read it.
+- All agents may **file issues** and **open pull requests**.
+- Every agent pull request gets a **hold label** automatically. Nothing an agent opens merges on its own.
+- A **reviewer** agent works through the open pull requests and comments on them, citing the file and line behind each point. It never approves, merges or closes anything; its comments are there to help a person decide.
+- An **architect** agent writes design proposals and structural pull requests, and a **strategist** agent coordinates the other agents' work. The telemetry and operations agents are included but paused.
+- **A human reviews and merges everything**, in batches. No agent merges its own work, and nothing reaches `master` without a person having read it.
 
 Hive is the *only* autonomous path into this repository. A second one used to exist — a repository-local workflow that ran Claude against a labelled issue — and it was removed rather than left switched off: two autonomous writers are two trust boundaries, and its authorisation ran through a label applied automatically by the issue-filing bot. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) sets out what agents may and may not touch, why that path is gone, and the prompt-injection surface that comes with parsing an untrusted backend's payloads.
 
