@@ -28,6 +28,15 @@ share/*
 .vscode/*
 .env
 
+# Key and secret shapes the Bash gate treats as withheld, so `git add .`
+# cannot stage one dropped beside the checkout (git diff --cached would print it)
+.env.*
+*.pem
+*.p12
+cosign.key
+id_rsa
+id_ed25519
+
 # mypy
 /.mypy_cache/*
 /.dmypy.json

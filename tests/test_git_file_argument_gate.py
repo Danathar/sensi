@@ -1310,6 +1310,62 @@ def test_git_really_prints_a_line_of_a_pathspec_file(tmp_path: Path) -> None:
     assert completed.returncode == 2, "the command just shown was not blocked"
 
 
+def test_git_really_prints_a_file_staged_with_force(tmp_path: Path) -> None:
+    """The reach the git add rule exists for, run for real.
+
+    A gitignored file is left out of `git add .`, but `--force` stages it,
+    and `git diff --cached` then prints it without the command naming it.
+    """
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert _git(repo, "init", "-q").returncode == 0
+    (repo / ".gitignore").write_text("secrets.yaml\n", encoding="utf-8")
+    (repo / "secrets.yaml").write_text("STAND-IN-NOT-A-SECRET\n", encoding="utf-8")
+
+    _git(repo, "add", ".")
+    assert "STAND-IN" not in _git(repo, "diff", "--cached").stdout
+    assert _git(repo, "add", "-f", "secrets.yaml").returncode == 0
+    shown = _git(repo, "diff", "--cached")
+    assert "STAND-IN-NOT-A-SECRET" in shown.stdout, (
+        "git diff --cached no longer prints a file staged with --force; the "
+        "git add rule in the hook may be more than is needed"
+    )
+    completed = _run(_payload("git add -f secrets.yaml"))
+    assert completed.returncode == 2, "the command just shown was not blocked"
+
+
+def test_every_withheld_shape_is_gitignored() -> None:
+    """`git add .` must leave out each name the gate calls withheld.
+
+    The gate refuses --force and a withheld name typed out, so a file that
+    reaches the index anyway got there through a pathspec like `.`, which
+    only `.gitignore` stops.
+    """
+
+    withheld = (
+        "secrets.yaml",
+        ".env",
+        ".env.local",
+        "config/x.yaml",
+        "x.pem",
+        "x.p12",
+        "cosign.key",
+        "id_rsa",
+        "id_ed25519",
+    )
+    for name in withheld:
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", "--no-index", name],
+            cwd=_ROOT,
+            check=False,
+        )
+        assert ignored.returncode == 0, (
+            f"{name} is not gitignored, so `git add .` stages it and "
+            "`git diff --cached` prints it past the Read deny rows"
+        )
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -2271,6 +2327,41 @@ _CORPUS: tuple[_Row, ...] = (
         "--pathspec-file-nul only changes how a pathspec file would be split "
         "and names no file of its own",
     ),
+    _Row(
+        "options",
+        "git add -f secrets.yaml",
+        _REFUSED,
+        "stages a gitignored file the Read deny rows withhold, and git diff "
+        "--cached then prints it whole without naming it",
+    ),
+    _Row(
+        "options",
+        "git add --fo -A",
+        _REFUSED,
+        "git accepts an unambiguous abbreviation of --force, so the name is "
+        "compared the way --pathspec-from-file is",
+    ),
+    _Row(
+        "options",
+        "git add -Af",
+        _REFUSED,
+        "git add has no short option that takes an argument, so an f anywhere "
+        "in a short cluster is -f",
+    ),
+    _Row(
+        "options",
+        "git add key.pem",
+        _REFUSED,
+        "a key shape named outright is staged whether or not .gitignore lists "
+        "it, and the index is readable past the Read deny rows",
+    ),
+    _Row(
+        "options",
+        "git add -A",
+        _ALLOWED,
+        "without --force git leaves every gitignored file out, and the withheld "
+        "shapes are all in .gitignore",
+    ),
 )
 
 
@@ -2436,6 +2527,24 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if pathspec_file is not None:",
         "if False:",
         "git add --pathspec-from-file=secrets.yaml",
+    ),
+    (
+        "git add's --force",
+        "if name and _FORCE.startswith(name):",
+        "if False:",
+        "git add --fo -A",
+    ),
+    (
+        "an f in a short cluster of git add",
+        'if "f" in word[1:]:',
+        "if False:",
+        "git add -Af",
+    ),
+    (
+        "a withheld shape named to git add",
+        "        if _denied_read_shape(word):\n            return word\n    return None",
+        "    return None",
+        "git add key.pem",
     ),
     (
         "xargs in front of an allow-listed command",
