@@ -568,8 +568,8 @@ def test_what_not_to_do_points_back_to_the_list_rather_than_repeating_it() -> No
 # The configuration each gated tool reads without its job naming it. A change to
 # one of these moves a gate as surely as a change to the workflow does: the
 # coverage job runs a bare `pytest`, so `pytest.ini`'s `testpaths` and `addopts`
-# decide which tests it measures.
-_GATE_CONFIG = ("ruff.toml", "pytest.ini", ".coveragerc")
+# decide which tests it measures, and ruff skips any file `.gitignore` matches.
+_GATE_CONFIG = ("ruff.toml", "pytest.ini", ".coveragerc", ".gitignore")
 
 _GATE_CHANGE = "That holds only while the pull request leaves the gates alone."
 
