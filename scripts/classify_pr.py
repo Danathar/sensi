@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Classify a pull request into a risk tier and a size bucket.
 
-Rules live in `.github/risk-tiers.yml`; the prose behind them is in
+Rules live in `.github/policies/risk-tiers.yml`; the prose behind them is in
 `docs/risk-tiers.md`. The tier is the *highest* one whose paths the change
 touches - it is not additive and not a score.
 
@@ -26,7 +26,7 @@ import sys
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-RULES = ROOT / ".github" / "risk-tiers.yml"
+RULES = ROOT / ".github" / "policies" / "risk-tiers.yml"
 
 # GitHub rejects a label description longer than this with HTTP 422.
 MAX_LABEL_DESCRIPTION = 100

@@ -19,7 +19,7 @@ break are silent.
 Everything below is derived from the committed files rather than restated from
 them: the rules are parsed out of `.github/labeler.yml`, the paths they are
 replayed over come from `git ls-files`, and the risky paths in the cross-file
-join come from `.github/risk-tiers.yml`. A rule added to the config is
+join come from `.github/policies/risk-tiers.yml`. A rule added to the config is
 therefore covered by these tests the moment it is added.
 """
 
@@ -33,7 +33,7 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[1]
 _CONFIG = _ROOT / ".github" / "labeler.yml"
 _WORKFLOW = _ROOT / ".github" / "workflows" / "labeler.yml"
-_RISK_TIERS = _ROOT / ".github" / "risk-tiers.yml"
+_RISK_TIERS = _ROOT / ".github" / "policies" / "risk-tiers.yml"
 
 # The labels the assertions below name directly. Any other label the config
 # grows is still covered - every test that walks `_rules()` sees it - but
@@ -43,7 +43,7 @@ _TESTS = "tests"
 _E2E = "e2e"
 _CI = "ci"
 
-# The catch-all tier in `.github/risk-tiers.yml`. It matches every path by
+# The catch-all tier in `.github/policies/risk-tiers.yml`. It matches every path by
 # construction, so it says nothing about which paths are risky.
 _CATCH_ALL = "**"
 
@@ -395,7 +395,7 @@ def test_a_narrow_label_never_appears_without_its_wider_one(
 
 
 def test_every_risky_path_also_gets_a_location_label() -> None:
-    """The cross-file join to `.github/risk-tiers.yml`.
+    """The cross-file join to `.github/policies/risk-tiers.yml`.
 
     A path listed in `tier/breaking` or `tier/runtime` is, by that file's own
     description, one that can break an existing install or drive live state.

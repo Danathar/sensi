@@ -23,7 +23,7 @@ These tests close that the way `test_nightly_workflow.py`,
 with `gh` stubbed on `PATH`. The stub records every invocation, so the
 assertions are about what the step would actually have asked GitHub to do
 rather than about the text of the script. The `Classify` step is run against
-the committed `scripts/classify_pr.py` and `.github/risk-tiers.yml` instead of
+the committed `scripts/classify_pr.py` and `.github/policies/risk-tiers.yml` instead of
 a stub, because the thing worth checking there is that what the real script
 prints is what the real next step can parse.
 """
@@ -40,7 +40,7 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "labeler.yml"
-_RULES = _ROOT / ".github" / "risk-tiers.yml"
+_RULES = _ROOT / ".github" / "policies" / "risk-tiers.yml"
 
 _JOB = "classify"
 

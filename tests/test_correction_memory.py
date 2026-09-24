@@ -74,7 +74,7 @@ _CLIMATE = _COMPONENT / "climate.py"
 _E2E_CONFTEST = _ROOT / "tests" / "e2e" / "conftest.py"
 _METADATA_TEST = _ROOT / "tests" / "test_metadata.py"
 
-_RISK_TIERS = _ROOT / ".github" / "risk-tiers.yml"
+_RISK_TIERS = _ROOT / ".github" / "policies" / "risk-tiers.yml"
 _LABELER = _ROOT / ".github" / "workflows" / "labeler.yml"
 _RELEASE = _ROOT / ".github" / "workflows" / "release.yml"
 _CLASSIFY_PR = _ROOT / "scripts" / "classify_pr.py"
