@@ -352,7 +352,7 @@ def test_a_repository_with_no_ruleset_says_how_to_apply_it(
     assert exit_code == 1
     assert "no ruleset named" in output
     assert "gh api --method POST" in output
-    # The ordering dependency is the thing most likely to be skipped.
+    # The page explains each rule; point the reader at it before they apply.
     assert "docs/branch-protection.md" in output
 
 

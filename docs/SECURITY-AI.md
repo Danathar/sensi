@@ -37,10 +37,12 @@ supply-chain concern.
   constants it lists. `auth.py` exports `redact_token`; use it for anything token-shaped.
   This applies to values pasted into a conversation as much as to values found
   in the repository.
-- **Push to `master`.** Every change goes through a pull request. The branch is
-  unprotected today, which makes this a discipline rather than a mechanism —
-  treat it as the rule it is. `docs/branch-protection.md` is the plan for making
-  it mechanical, including the one thing that has to be merged first.
+- **Push to `master`.** Every change goes through a pull request. The
+  `protect master` ruleset refuses a direct push, a force push and deletion,
+  and requires the six checks; `docs/branch-protection.md` explains it, and
+  `python3 scripts/check_ruleset.py` verifies GitHub is still enforcing it.
+  Treat the rule as yours anyway: a ruleset is repository configuration and
+  can be switched off without a diff.
 - **Weaken a gate to make a change pass.** Lowering the coverage threshold,
   removing a `ruff` rule, deleting a failing test, or adding `continue-on-error`
   to a required job are all the same action. If a gate is wrong, that is a
