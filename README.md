@@ -172,7 +172,7 @@ The repository also ships a devcontainer, which installs all of that for you; th
 
 CI enforces the same checks on every pull request: the pytest suite (`ci.yml`), a line-coverage floor of 93% (`coverage-gate.yml`), and `ruff` + hassfest + HACS + requirements sync (`validate.yml`). A nightly run repeats the gate against the *latest* Home Assistant release as advance warning.
 
-Further reading in [docs/](docs/): [quality.md](docs/quality.md), [metrics.md](docs/metrics.md), [review-rubric.md](docs/review-rubric.md), [risk-tiers.md](docs/risk-tiers.md), and [SECURITY-AI.md](docs/SECURITY-AI.md) for how agent-assisted changes are handled.
+Further reading in [docs/](docs/): [quality.md](docs/quality.md), [metrics/](docs/metrics/README.md), [review-rubric.md](docs/review-rubric.md), [risk-tiers.md](docs/risk-tiers.md), and [SECURITY-AI.md](docs/SECURITY-AI.md) for how agent-assisted changes are handled.
 
 ## Breaking changes
 
@@ -251,7 +251,7 @@ The point is not the volume of agent output — it is that each pass leaves the 
 - **The gates ratchet.** Line coverage has a floor, currently 93%, enforced on every pull request. [`scripts/auto_qa_tuner.py`](scripts/auto_qa_tuner.py) *proposes* raising it when the suite genuinely improves, and deliberately never applies the change itself. The floor goes up as the tests get better and never quietly comes back down to let a change through.
 - **Risk is classified, not guessed.** Every pull request gets a [risk tier](docs/risk-tiers.md) from the paths it touches, so a change to `auth.py` or `config_flow.py` — the files that decide whether an existing install still loads — is held to a different standard than a change to a doc.
 - **Lessons are written down where the next pass will read them.** [`docs/reflections/`](docs/reflections/) holds what a piece of work taught about this codebase, and [AGENTS.md](AGENTS.md) is the standing brief. Agents and humans start from the same accumulated context instead of rediscovering the same constraint.
-- **The measurement is of outcomes, not activity.** [`scripts/pr_metrics.py`](scripts/pr_metrics.py) tracks acceptance rate, time to merge and review rounds — [not lines written or PRs opened](docs/metrics.md). An agent that opens twenty pull requests of which three merge is worse than one that opens four of which four merge, and only that measurement tells them apart.
+- **The measurement is of outcomes, not activity.** [`scripts/pr_metrics.py`](scripts/pr_metrics.py) tracks acceptance rate, time to merge and review rounds — [not lines written or PRs opened](docs/metrics/README.md). An agent that opens twenty pull requests of which three merge is worse than one that opens four of which four merge, and only that measurement tells them apart.
 
 The concrete result so far: an end-to-end test tier built against a scripted stand-in for the Sensi server, which took `client.py` — the connection, reconnect and token-refresh paths, the highest-risk module in the component — from 52% line coverage to 100%, and the repository from 85% to 98%. [docs/quality.md](docs/quality.md) is honest about what those numbers do *not* prove.
 

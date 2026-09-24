@@ -199,7 +199,7 @@ it belongs.
   priority order, and what it should not spend itself on
 - [`docs/quality.md`](docs/quality.md) — what each CI gate proves, and what is
   deliberately not covered
-- [`docs/metrics.md`](docs/metrics.md) — change acceptance, and how to read it
+- [`docs/metrics/`](docs/metrics/README.md) — change acceptance, and how to read it
   honestly on a single-maintainer repository
 - [`docs/risk-tiers.md`](docs/risk-tiers.md) — what the automatic `tier/*` label
   on your pull request means, and what each tier asks of you
