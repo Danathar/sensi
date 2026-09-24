@@ -78,9 +78,9 @@ three of their arguments do file I/O that has nothing to do with the repository:
   refusal list covers pytest options, never a redirection it is never
   passed. Those commands are named in `_GATED_PREFIXES`, and an output
   redirection in a segment that runs one of them is refused the way one on
-  a git segment is. Descriptor forms, input redirections, pipes and a
-  command no allow rule covers are left alone - that one prompts on its
-  own. The three rows with no `:*` (`ruff check .`, `ruff format --check .`,
+  a git segment is. Descriptor forms, input redirections on these commands,
+  pipes and a command no allow rule covers are left alone - that one prompts
+  on its own. The three rows with no `:*` (`ruff check .`, `ruff format --check .`,
   `python3 scripts/check_requirements_sync.py`) are gated the same way; see
   `_EXACT_ROWS`.
 * `xargs` hides the operands altogether. It appends the words it reads from
@@ -120,6 +120,16 @@ three of their arguments do file I/O that has nothing to do with the repository:
   files`). Creating a file named after that line and running it again
   gives the next one, so the whole of `secrets.yaml` or `.env` is readable
   a line at a time past the `Read` deny rows.
+* git reads standard input too. Under `--stdin`, `git log`, `git show` and
+  `git diff` take revisions from it, one per line, and the first line that
+  is not a revision ends the run with `fatal: bad revision '<that line>'`,
+  so `git log --stdin <.env` printed the first line of `.env` (issue #273).
+  The target of a bare `<` on an allow-listed git command must be inside the
+  repository, carry none of the names the `Read` deny rows withhold (plus
+  the secret shapes the sibling gates refuse on sight), and be spelled out.
+  `</dev/null`, here-strings, `<&N` and a revision list inside the
+  repository (`git log --stdin <revs.txt`) are left alone; see
+  `_reading_redirection`.
 
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
@@ -223,6 +233,16 @@ _REDIRECTION = re.compile(r"^[<>&|]*[<>][<>&|]*$")
 # `2>err`, or the `{name}` of `{fd}>file`, which allocates a descriptor into a
 # variable. Named so the refusal can quote the spelling as typed.
 _DESCRIPTOR = re.compile(r"^(?:[0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$")
+
+# What a `<` on git must not feed it. The names are the `Read` deny rows of
+# .claude/settings.json (`secrets.yaml`, `.env`, `config/**`) plus the secret
+# shapes the sibling repositories' gates refuse on sight, so a key dropped
+# beside the checkout is not readable the day before a deny row names it.
+_DENIED_READ_NAMES = frozenset(
+    {"secrets.yaml", ".env", "cosign.key", "id_rsa", "id_ed25519"}
+)
+_DENIED_READ_SUFFIXES = (".pem", ".p12")
+_DENIED_READ_DIRECTORY = "config"
 
 # The tokens that end one simple command and begin the next, so that a
 # redirection is charged to the command it is written in: `echo x >out; git
@@ -650,6 +670,75 @@ def _writing_redirection(segment: list[str]) -> str | None:
         )
         return f"{descriptor}{word}{target}"
     return None
+
+
+def _denied_read_shape(word: str) -> bool:
+    """Whether `word` names a file the `Read` deny rows withhold, or one shaped like it.
+
+    Judged on the name as typed and on the path it resolves to, so a link
+    inside the repository (`revs.txt -> .env`) is judged by what it opens.
+    """
+
+    base = Path.cwd()
+    if not base.is_relative_to(_REPO):
+        base = _REPO
+    try:
+        resolved = (base / word).resolve()
+    except ValueError, RuntimeError:
+        return True
+    for path in (Path(word), resolved):
+        name = path.name
+        if (
+            name in _DENIED_READ_NAMES
+            or name.startswith(".env.")
+            or name.endswith(_DENIED_READ_SUFFIXES)
+        ):
+            return True
+    return resolved.is_relative_to(_REPO / _DENIED_READ_DIRECTORY)
+
+
+def _reading_redirection(
+    segment: list[str], twins: list[str], moved: bool
+) -> str | None:
+    """Return the target of a bare `<` in `segment` that git could print back.
+
+    Only `<` opens a path for reading - with a descriptor before it (`0<`,
+    `3<`) it still arrives as `<` - and its twin must be the operator too, so
+    a quoted `'<'` is an argument, not a redirection. `<<` and `<<<` carry
+    content, `<&` duplicates a descriptor and `<>` is a write
+    (`_writing_redirection`). `/dev/null` has nothing to print back. Any other
+    target must be inside the repository, carry none of the denied shapes,
+    and be spelled out: a glob, a brace, a `$` or a backtick is a path bash
+    builds after this has read it. After a `cd` earlier in the string
+    (`moved`), the directory bash opens the target from is not the one this
+    resolves against, so every target but `/dev/null` is refused
+    (`cd config && git log --stdin <configuration.yaml`).
+    """
+
+    for index, twin in enumerate(twins):
+        if twin != "<":
+            continue
+        target = segment[index + 1] if index + 1 < len(segment) else ""
+        if target == "/dev/null":
+            continue
+        if (
+            moved
+            or not target
+            or any(char in target for char in _UNEXPANDED)
+            or _brace_would_expand(target)
+            or target.startswith(_PROCESS_SUBSTITUTION)
+            or _is_outside_repo(target)
+            or _denied_read_shape(target)
+        ):
+            return f"<{target}"
+    return None
+
+
+def _changes_directory(segment: list[str]) -> bool:
+    """Whether this segment is a `cd`, `pushd` or `popd`."""
+
+    words = _command_words(segment)[0]
+    return bool(words) and words[0] in {"cd", "pushd", "popd"}
 
 
 def _is_outside_repo(word: str) -> bool:
@@ -1125,11 +1214,14 @@ def main() -> int:
     # and truncates the file as surely as `git diff` would.
     exported = False
     allexport = False
+    # A `cd` earlier in the string moves where bash opens a relative `<`
+    # target, so a later git's redirection cannot be resolved here.
+    moved = False
     # The system's copies of the wrappers, where they lead a command. bash
     # runs them and git never receives them, so the operand scan below does
     # not read them as paths outside the repository.
     stepped_over: list[str] = []
-    for segment, _twins in _segments(words, masked):
+    for segment, twins in _segments(words, masked):
         if _splits_a_string(segment) and _GUARDED_NAME.search(" ".join(segment)):
             print(
                 "Blocked: `env -S` (--split-string) splits a quoted string into a "
@@ -1200,6 +1292,8 @@ def main() -> int:
             exported = True
         if _turns_on_allexport(segment):
             allexport = True
+        if _changes_directory(segment):
+            moved = True
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
             if prefix and (
@@ -1271,8 +1365,26 @@ def main() -> int:
                 "the same write --output makes, in the shell's own spelling, and "
                 "one bash accepts before the command name as readily as after it. "
                 "`git diff`, `git log` and `git show` print to stdout; read that "
-                "instead. 2>&1, >&2, an input redirection, and a redirection on "
-                "another command of the same string are not refused.",
+                "instead. 2>&1, >&2, an input redirection from a file inside "
+                "the repository, and a redirection on another command of the "
+                "same string are not refused.",
+                file=sys.stderr,
+            )
+            return 2
+        fed = _reading_redirection(segment, twins, moved)
+        if fed is not None and _allowed_git_prefix(_command_words(segment)[0]):
+            print(
+                f"Blocked: {fed} hands git a file on standard input. Under "
+                "--stdin, git log, git show and git diff read revisions from it "
+                "and quote the first line that is not one in their error "
+                "(`fatal: bad revision 'TOKEN=abc'`), so `git log --stdin <.env` "
+                "prints a line of a file the Read deny rows withhold. The target "
+                "of a < on git must be inside the repository, must not be "
+                "secrets.yaml, .env, .env.*, config/**, cosign.key, *.pem, *.p12, "
+                "id_rsa or id_ed25519, and must be spelled out. Put the revisions "
+                "in a file inside the repository or name them on the command "
+                "line. </dev/null, here-strings and <&N are not refused; after a "
+                "cd earlier in the command only </dev/null is.",
                 file=sys.stderr,
             )
             return 2
@@ -1344,9 +1456,14 @@ def main() -> int:
     if not _runs_gated_git(words):
         return 0
 
-    for word in words:
+    for index, word in enumerate(words):
         if word in stepped_over:
             stepped_over.remove(word)
+            continue
+        # `</dev/null` is the shell's, not an operand: git never sees the word,
+        # and the file has nothing to print back. Every other `<` target is
+        # judged by `_reading_redirection` above and still passes through here.
+        if word == "/dev/null" and index and masked[index - 1] == "<":
             continue
         if (
             any(char in word for char in _UNEXPANDED)
