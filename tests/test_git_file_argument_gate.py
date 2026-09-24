@@ -551,6 +551,11 @@ def test_git_really_prints_the_first_line_of_a_file_on_standard_input(
         # other allow-listed subcommands are held to the same test.
         "git diff HEAD <secrets.yaml",
         "git status <.env",
+        # After a cd, bash opens the target from a directory this cannot
+        # resolve, so only /dev/null is left alone.
+        "cd config && git log --stdin <configuration.yaml",
+        "cd config; git log --stdin <configuration.yaml",
+        "pushd config && git log --stdin <configuration.yaml",
     ],
 )
 def test_a_denied_file_on_the_stdin_of_git_is_refused(command: str) -> None:
@@ -573,6 +578,8 @@ def test_a_denied_file_on_the_stdin_of_git_is_refused(command: str) -> None:
         "git log --grep '<' .env",
         "grep git <.env",
         "git log -1 && cat <.env",
+        "cd config && git log --stdin </dev/null",
+        "git log --stdin <revs.txt; cd config",
     ],
 )
 def test_an_ordinary_input_redirection_on_git_is_left_alone(command: str) -> None:
@@ -1788,6 +1795,13 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "redirection",
+        "cd config && git log --stdin <configuration.yaml",
+        _REFUSED,
+        "bash opens the target from config/ after the cd, while a check that "
+        "resolved it from the repository root saw a harmless name (review on #277)",
+    ),
+    _Row(
+        "redirection",
         "git log --stdin <revs.txt",
         _ALLOWED,
         "a revision list inside the repository with no denied name is what "
@@ -2338,6 +2352,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if fed is not None and _allowed_git_prefix(_command_words(segment)[0]):",
         "if False:",
         "git log --stdin <.env",
+    ),
+    (
+        "a cd earlier in the string, after which a < target cannot be resolved",
+        "            moved = True\n",
+        "            pass\n",
+        "cd config && git log --stdin <configuration.yaml",
     ),
     (
         "a </dev/null target read as the shell's, not as an operand",

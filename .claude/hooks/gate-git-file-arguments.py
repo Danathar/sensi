@@ -697,7 +697,9 @@ def _denied_read_shape(word: str) -> bool:
     return resolved.is_relative_to(_REPO / _DENIED_READ_DIRECTORY)
 
 
-def _reading_redirection(segment: list[str], twins: list[str]) -> str | None:
+def _reading_redirection(
+    segment: list[str], twins: list[str], moved: bool
+) -> str | None:
     """Return the target of a bare `<` in `segment` that git could print back.
 
     Only `<` opens a path for reading - with a descriptor before it (`0<`,
@@ -707,7 +709,10 @@ def _reading_redirection(segment: list[str], twins: list[str]) -> str | None:
     (`_writing_redirection`). `/dev/null` has nothing to print back. Any other
     target must be inside the repository, carry none of the denied shapes,
     and be spelled out: a glob, a brace, a `$` or a backtick is a path bash
-    builds after this has read it.
+    builds after this has read it. After a `cd` earlier in the string
+    (`moved`), the directory bash opens the target from is not the one this
+    resolves against, so every target but `/dev/null` is refused
+    (`cd config && git log --stdin <configuration.yaml`).
     """
 
     for index, twin in enumerate(twins):
@@ -717,7 +722,8 @@ def _reading_redirection(segment: list[str], twins: list[str]) -> str | None:
         if target == "/dev/null":
             continue
         if (
-            not target
+            moved
+            or not target
             or any(char in target for char in _UNEXPANDED)
             or _brace_would_expand(target)
             or target.startswith(_PROCESS_SUBSTITUTION)
@@ -726,6 +732,13 @@ def _reading_redirection(segment: list[str], twins: list[str]) -> str | None:
         ):
             return f"<{target}"
     return None
+
+
+def _changes_directory(segment: list[str]) -> bool:
+    """Whether this segment is a `cd`, `pushd` or `popd`."""
+
+    words = _command_words(segment)[0]
+    return bool(words) and words[0] in {"cd", "pushd", "popd"}
 
 
 def _is_outside_repo(word: str) -> bool:
@@ -1201,6 +1214,9 @@ def main() -> int:
     # and truncates the file as surely as `git diff` would.
     exported = False
     allexport = False
+    # A `cd` earlier in the string moves where bash opens a relative `<`
+    # target, so a later git's redirection cannot be resolved here.
+    moved = False
     # The system's copies of the wrappers, where they lead a command. bash
     # runs them and git never receives them, so the operand scan below does
     # not read them as paths outside the repository.
@@ -1276,6 +1292,8 @@ def main() -> int:
             exported = True
         if _turns_on_allexport(segment):
             allexport = True
+        if _changes_directory(segment):
+            moved = True
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
             if prefix and (
@@ -1353,7 +1371,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        fed = _reading_redirection(segment, twins)
+        fed = _reading_redirection(segment, twins, moved)
         if fed is not None and _allowed_git_prefix(_command_words(segment)[0]):
             print(
                 f"Blocked: {fed} hands git a file on standard input. Under "
@@ -1365,7 +1383,8 @@ def main() -> int:
                 "secrets.yaml, .env, .env.*, config/**, cosign.key, *.pem, *.p12, "
                 "id_rsa or id_ed25519, and must be spelled out. Put the revisions "
                 "in a file inside the repository or name them on the command "
-                "line. </dev/null, here-strings and <&N are not refused.",
+                "line. </dev/null, here-strings and <&N are not refused; after a "
+                "cd earlier in the command only </dev/null is.",
                 file=sys.stderr,
             )
             return 2
