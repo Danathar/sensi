@@ -8,10 +8,9 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import MAX_CONSECUTIVE_CONNECTION_FAILURES, SENSI_DOMAIN
+from .const import MAX_CONSECUTIVE_CONNECTION_FAILURES
 from .coordinator import SensiConfigEntry, SensiDevice
 from .entity import SensiDescriptionEntity
 
@@ -54,12 +53,7 @@ class OnlineBinarySensorEntity(SensiDescriptionEntity, BinarySensorEntity):
         """Initialize the sensor."""
         super().__init__(device, description, entry)
 
-        # Note: self.hass is not set at this point
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def is_on(self) -> bool | None:

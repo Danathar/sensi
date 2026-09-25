@@ -1,6 +1,11 @@
 """Base Sensi entity."""
 
-from homeassistant.helpers.entity import DeviceInfo, EntityDescription
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import (
+    DeviceInfo,
+    EntityDescription,
+    async_generate_entity_id,
+)
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import MAX_CONSECUTIVE_CONNECTION_FAILURES, SENSI_ATTRIBUTION, SENSI_DOMAIN
@@ -32,6 +37,25 @@ class SensiEntity(CoordinatorEntity[SensiUpdateCoordinator]):
             manufacturer="Sensi",
             model=device.info.model_number,
             serial_number=device.info.serial_number,
+        )
+
+    def _set_entity_id(
+        self, hass: HomeAssistant, entity_id_format: str, key: str | None = None
+    ) -> None:
+        """Set the entity_id to `sensi_<device name>`, plus `_<key>` if given.
+
+        An entity_id is what automations and dashboards refer to, so every
+        platform builds it here rather than spelling out the pattern itself.
+        `self.hass` is not set until the entity is added, so the caller passes
+        it: `async_generate_entity_id` needs it to avoid an entity_id that is
+        already taken.
+        """
+        object_id = f"{SENSI_DOMAIN}_{self._device.name}"
+        if key is not None:
+            object_id = f"{object_id}_{key}"
+
+        self.entity_id = async_generate_entity_id(
+            entity_id_format, object_id, hass=hass
         )
 
     @property

@@ -14,7 +14,6 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.unit_conversion import TemperatureConverter
 
@@ -31,7 +30,6 @@ from .const import (
     DEFAULT_CONFIG_FAN_SUPPORT,
     FAN_CIRCULATE_DUTY_CYCLE_DEFAULT,
     LOGGER,
-    SENSI_DOMAIN,
     SENSI_FAN_AUTO,
     SENSI_FAN_CIRCULATE,
     SENSI_FAN_ON,
@@ -79,11 +77,7 @@ class SensiThermostat(SensiEntity, ClimateEntity):
 
         super().__init__(device, entry)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT)
 
         # The mobile device always uses whole numbers for C and F unit
         self._attr_target_temperature_step = PRECISION_WHOLE

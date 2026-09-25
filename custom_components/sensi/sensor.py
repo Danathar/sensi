@@ -14,11 +14,10 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
-from .const import ATTR_BATTERY_VOLTAGE, SENSI_DOMAIN
+from .const import ATTR_BATTERY_VOLTAGE
 from .coordinator import SensiConfigEntry, SensiDevice
 from .data import ActiveSavingsEventState
 from .entity import SensiDescriptionEntity, SensiEntity
@@ -168,12 +167,7 @@ class SensiSensorEntity(SensiDescriptionEntity, SensorEntity):
         """Initialize the sensor."""
         super().__init__(device, description, entry)
 
-        # Note: self.hass is not set at this point
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def native_value(self) -> StateType:
@@ -230,11 +224,7 @@ class ActiveSavingsEventEntity(SensiEntity, SensorEntity):
 
         self._update_state(None)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_active_savings",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, "active_savings")
 
     def _update_state(
         self, value: tuple[ActiveSavingsEventState, datetime | None, datetime | None]
