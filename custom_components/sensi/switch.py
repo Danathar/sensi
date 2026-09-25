@@ -10,7 +10,6 @@ from homeassistant.components.switch import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import get_config_option, set_config_option
@@ -20,7 +19,6 @@ from .const import (
     CONFIG_FAN_SUPPORT,
     DEFAULT_CONFIG_FAN_SUPPORT,
     FAN_CIRCULATE_DUTY_CYCLE_DEFAULT,
-    SENSI_DOMAIN,
 )
 from .coordinator import SensiConfigEntry, SensiDevice
 from .data import OperatingMode
@@ -123,11 +121,7 @@ class SensiCapabilitySettingSwitch(SensiDescriptionEntity, SwitchEntity):
         """Initialize the setting."""
         super().__init__(device, description, entry)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",  # Use same key as before
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def is_on(self) -> bool | None:
@@ -177,11 +171,7 @@ class SensiFanSupportSwitch(SensiDescriptionEntity, SwitchEntity):
         # Cache status to avoid querying ConfigEntry
         self._status: bool | None = None
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def is_on(self) -> bool | None:
@@ -249,11 +239,7 @@ class SensiAuxHeatSwitch(SensiDescriptionEntity, SwitchEntity):
 
         super().__init__(device, description, entry)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
         self._last_operating_mode_before_aux_heat = _mode_to_restore(
             device.state.operating_mode
@@ -324,11 +310,7 @@ class SensiHumidificationSwitch(SensiDescriptionEntity, SwitchEntity):
 
         super().__init__(device, description, entry)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def is_on(self) -> bool | None:
@@ -381,11 +363,7 @@ class SensiCirculatingFanSwitch(SensiDescriptionEntity, SwitchEntity):
 
         super().__init__(device, description, entry)
 
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def available(self) -> bool:

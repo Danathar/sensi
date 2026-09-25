@@ -12,11 +12,9 @@ from homeassistant.components.number import (
 )
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .client import ActionResponse, SensiClient, raise_if_error
-from .const import SENSI_DOMAIN
 from .coordinator import SensiConfigEntry, SensiDevice
 from .data import State
 from .entity import SensiDescriptionEntity
@@ -162,12 +160,7 @@ class SensiNumberEntity(SensiDescriptionEntity, NumberEntity):
         """Initialize the entity."""
         super().__init__(device, description, entry)
 
-        # Note: self.hass is not set at this point
-        self.entity_id = async_generate_entity_id(
-            ENTITY_ID_FORMAT,
-            f"{SENSI_DOMAIN}_{device.name}_{description.key}",
-            hass=hass,
-        )
+        self._set_entity_id(hass, ENTITY_ID_FORMAT, description.key)
 
     @property
     def native_value(self) -> float:

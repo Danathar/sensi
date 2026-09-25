@@ -69,6 +69,37 @@ class TestSensiEntity:
 
         assert entity.available is False
 
+    @pytest.mark.parametrize(
+        ("key", "expected_entity_id"),
+        [
+            (None, "sensor.sensi_living_room"),
+            ("battery", "sensor.sensi_living_room_battery"),
+            # async_generate_entity_id slugifies, so a capitalised key such as
+            # the humidification switch's still gives a lower-case entity_id.
+            ("Humidification", "sensor.sensi_living_room_humidification"),
+        ],
+    )
+    def test_set_entity_id_uses_the_device_name_and_key(
+        self, hass, mock_device, mock_coordinator, key, expected_entity_id
+    ):
+        """The entity_id is sensi_<device name>, plus _<key> when one is given."""
+        entity = SensiEntity(mock_device, mock_coordinator.config_entry)
+
+        entity._set_entity_id(hass, "sensor.{}", key)  # noqa: SLF001
+
+        assert entity.entity_id == expected_entity_id
+
+    async def test_set_entity_id_avoids_an_entity_id_already_in_use(
+        self, hass, mock_device, mock_coordinator
+    ):
+        """A taken entity_id gets a numeric suffix rather than being reused."""
+        hass.states.async_set("sensor.sensi_living_room_battery", "50")
+        entity = SensiEntity(mock_device, mock_coordinator.config_entry)
+
+        entity._set_entity_id(hass, "sensor.{}", "battery")  # noqa: SLF001
+
+        assert entity.entity_id == "sensor.sensi_living_room_battery_2"
+
 
 class TestSensiDescriptionEntity:
     """Test cases for SensiDescriptionEntity class."""
