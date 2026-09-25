@@ -140,7 +140,7 @@ On multi-stage systems (2-stage heat pumps, multi-stage auxiliary heat), `hvac_*
 
 Upstream is [`iprak/sensi`](https://github.com/iprak/sensi); this fork tracks it and adds:
 
-- **CI that runs on every pull request** — the pytest suite, a coverage floor, `ruff`, [hassfest](https://developers.home-assistant.io/blog/2020/04/16/hassfest/), HACS validation, and a nightly run against the latest Home Assistant release as advance warning.
+- **CI that runs on every pull request** — the pytest suite, a coverage floor, `ruff`, [hassfest](https://developers.home-assistant.io/blog/2020/04/16/hassfest/), HACS validation, requirements sync, and a nightly run against the latest Home Assistant release as advance warning.
 - **An end-to-end test tier** covering setup, connection lifecycle and control, on top of the existing unit tests, plus contributor and agent documentation ([CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), [docs/](docs/)).
 - **Correctness and lifecycle fixes** found by a full-component scan: swapped humidity capability defaults that produced `min_humidity > max_humidity`; a device class passed where a state class belongs on the WiFi sensor, which silently kept it out of long-term statistics; leaked socket.io clients on reconnect; an aux-heat switch that could not be turned off if Home Assistant started while the thermostat was already aux heating; reauth accepting a token for a different Sensi account; hardcoded Fahrenheit offset bounds applied to a Celsius scale; and several unhandled-value crashes.
 
@@ -170,7 +170,7 @@ python3 scripts/check_requirements_sync.py  # manifest vs requirements_component
 
 The repository also ships a devcontainer, which installs all of that for you; the site comes up on `localhost:9123` with the user `test`/`test`.
 
-CI enforces the same checks on every pull request: the pytest suite (`ci.yml`), a line-coverage floor of 93% (`coverage-gate.yml`), and `ruff` + hassfest + HACS + requirements sync (`validate.yml`). A nightly run repeats the gate against the *latest* Home Assistant release as advance warning.
+CI enforces the same checks on every pull request: the pytest suite (`ci.yml`), a line-coverage floor of 93% (`coverage-gate.yml`), and `ruff` + hassfest + HACS + requirements sync (`validate.yml`). A nightly run repeats `ruff`, requirements sync and the pytest suite against the pinned Home Assistant (not hassfest, HACS or the coverage floor), and runs the suite alone against the *latest* release as advance warning.
 
 Further reading in [docs/](docs/): [quality.md](docs/quality.md), [metrics/](docs/metrics/README.md), [review-rubric.md](docs/review-rubric.md), [risk-tiers.md](docs/risk-tiers.md), and [SECURITY-AI.md](docs/SECURITY-AI.md) for how agent-assisted changes are handled.
 
