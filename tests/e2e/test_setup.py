@@ -139,6 +139,49 @@ async def test_entities_are_created_from_the_sample_payload(
     assert climate.attributes["friendly_name"] == "Living Room"
 
 
+async def test_entity_ids_follow_the_device_name_and_key(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+) -> None:
+    """Every entity_id is ``<platform>.sensi_<device name>_<key>``.
+
+    The key is the part of the unique_id after the thermostat's ``icd_id``;
+    the climate entity has none. An entity_id is what a user's automations and
+    dashboards refer to, so the full set is pinned here rather than a sample
+    of it. The humidification switch is not in this payload;
+    ``tests/test_switch.py`` pins that one.
+    """
+    registry = er.async_get(hass)
+    entries = er.async_entries_for_config_entry(registry, sensi_entry.entry_id)
+
+    assert {entry.entity_id: entry.unique_id for entry in entries} == {
+        "binary_sensor.sensi_living_room_online": f"{ICD_ID}_online",
+        "climate.sensi_living_room": ICD_ID,
+        "number.sensi_living_room_circulating_duty_cycle": (
+            f"{ICD_ID}_circulating_duty_cycle"
+        ),
+        "number.sensi_living_room_humidity_offset": f"{ICD_ID}_humidity_offset",
+        "number.sensi_living_room_temperature_offset": f"{ICD_ID}_temperature_offset",
+        "sensor.sensi_living_room_active_savings": f"{ICD_ID}_active_savings",
+        "sensor.sensi_living_room_battery": f"{ICD_ID}_battery",
+        "sensor.sensi_living_room_cool_min_temp": f"{ICD_ID}_cool_min_temp",
+        "sensor.sensi_living_room_fan_speed": f"{ICD_ID}_fan_speed",
+        "sensor.sensi_living_room_heat_max_temp": f"{ICD_ID}_heat_max_temp",
+        "sensor.sensi_living_room_humidity": f"{ICD_ID}_humidity",
+        "sensor.sensi_living_room_temperature": f"{ICD_ID}_temperature",
+        "sensor.sensi_living_room_wifi_strength": f"{ICD_ID}_wifi_strength",
+        "switch.sensi_living_room_aux_heat": f"{ICD_ID}_aux_heat",
+        "switch.sensi_living_room_circulating_fan": f"{ICD_ID}_circulating_fan",
+        "switch.sensi_living_room_continuous_backlight": (
+            f"{ICD_ID}_continuous_backlight"
+        ),
+        "switch.sensi_living_room_display_humidity": f"{ICD_ID}_display_humidity",
+        "switch.sensi_living_room_display_time": f"{ICD_ID}_display_time",
+        "switch.sensi_living_room_fan_support": f"{ICD_ID}_fan_support",
+        "switch.sensi_living_room_keypad_lockout": f"{ICD_ID}_keypad_lockout",
+    }
+
+
 @pytest.mark.parametrize(
     ("entity_id", "friendly_name"),
     [

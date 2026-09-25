@@ -570,6 +570,10 @@ class TestSensiHumidificationSwitch:
         assert switch.entity_description.entity_category == EntityCategory.CONFIG
         assert switch.entity_description.icon == "mdi:air-humidifier"
         assert switch.entity_description.name == "Humidification"
+        # The key is capitalised, so the unique_id keeps the capital and the
+        # entity_id is slugified. Both are what existing installs registered.
+        assert switch.unique_id == f"{mock_device.identifier}_Humidification"
+        assert switch.entity_id == "switch.sensi_living_room_humidification"
 
     @pytest.mark.parametrize(
         ("expected"),
