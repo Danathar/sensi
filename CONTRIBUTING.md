@@ -50,7 +50,7 @@ CI runs the same things:
 | `.github/workflows/coverage-gate.yml` | line coverage stays at or above the threshold |
 | `.github/workflows/validate.yml` | `ruff`, hassfest, HACS, and requirements sync |
 | `.github/workflows/labeler.yml` | applies path, risk-tier and size labels |
-| `.github/workflows/nightly.yml` | the whole gate nightly, plus a run against the *latest* Home Assistant as advance warning |
+| `.github/workflows/nightly.yml` | `ruff`, requirements sync and the pytest suite nightly against the pinned Home Assistant (not hassfest, HACS or the coverage floor), plus the suite alone against the *latest* Home Assistant as advance warning |
 
 ## Layout
 
