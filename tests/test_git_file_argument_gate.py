@@ -3023,3 +3023,60 @@ def test_the_allowed_git_prefixes_are_exactly_the_settings_rows() -> None:
         if rule.startswith("Bash(git ") and rule.endswith(":*)")
     )
     assert _listed_rows("_ALLOWED_GIT_PREFIXES") == approved
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env -S@(git*)",
+        "env -S+(g*) HEAD",
+        "git log -1; ls *(x)",
+        "echo ''@(x)",
+    ],
+)
+def test_an_extglob_pattern_anywhere_in_the_command_is_refused(command: str) -> None:
+    """Under extglob the `(` would hide the command the pattern belongs to."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was let through"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo '@'(x)", "(git diff HEAD)", "git log --grep='@(' -1"],
+)
+def test_a_quoted_operator_or_a_subshell_is_not_an_extglob(command: str) -> None:
+    """A quoted `@` and a plain subshell open no pattern."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) -> None:
+    """The reach the extglob refusal exists for, run for real under -O extglob."""
+
+    _git(tmp_path, "init", "-q")
+    target = tmp_path / "cosign.pub"
+    target.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    _git(tmp_path, "add", "cosign.pub")
+    _git(tmp_path, "commit", "-qm", "x")
+    (tmp_path / "-Sgit diff --output=cosign.pub HEAD --").write_text(
+        "", encoding="utf-8"
+    )
+    target.write_text("ORIGINAL-CONTENT\nchanged\n", encoding="utf-8")
+    subprocess.run(
+        ["bash", "--norc", "--noprofile", "-O", "extglob", "-c", "env -S@(git*)"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "ORIGINAL-CONTENT\nchanged" not in target.read_text(encoding="utf-8"), (
+        "bash under extglob no longer runs git through the matched split string; "
+        "re-derive why the extglob refusal exists"
+    )
+    completed = _run(_payload("env -S@(git*)"))
+    assert completed.returncode == 2, (
+        "the command just shown to overwrite was not blocked"
+    )

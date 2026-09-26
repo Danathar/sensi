@@ -1295,6 +1295,29 @@ def main() -> int:
         )
         return 2
 
+    # An extglob pattern, `@(...)`, `+(...)`, `!(...)`, `?(...)` or `*(...)`,
+    # is one word to a bash with `shopt -s extglob` on (Fedora's
+    # bash-completion turns it on) and it matches files the way `*` does.
+    # The lexer ends a segment at the `(`, so the command the pattern belongs
+    # to can reach git with neither half read as git: beside a file named
+    # `-Sgit diff --output=cosign.pub HEAD --`, `env -S@(git*)` makes env run
+    # that git and truncate the file (reproduced under bash -O extglob; found
+    # on atomic-image-builder#480). A word whose masked twin ends in an
+    # unquoted `@ + ! ? *` before a `(` word is refused anywhere in the string;
+    # a quoted `'@'(x)` masks to `Q`, and `$(` is a substitution, not a pattern.
+    for index in range(len(words) - 1):
+        if masked[index + 1] == "(" and masked[index][-1:] in ("@", "+", "!", "?", "*"):
+            print(
+                f"Blocked: `{words[index]}(` starts an extglob pattern. With "
+                "`shopt -s extglob` on, bash reads it as one word and matches it "
+                "against the working directory, and the `(` hides the rest of the "
+                "command from this check - `env -S@(git*)` beside a file named "
+                "`-Sgit diff --output=cosign.pub HEAD --` runs that git and writes "
+                "over cosign.pub. Write the words out.",
+                file=sys.stderr,
+            )
+            return 2
+
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
     # and truncates the file as surely as `git diff` would.
