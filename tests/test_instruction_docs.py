@@ -258,6 +258,88 @@ def test_relative_markdown_links_resolve(doc: Path) -> None:
     assert not broken, f"{_rel(doc)} links to missing paths: {broken}"
 
 
+# A fenced code block opens and closes with a run of at least three backticks
+# or tildes; a `#` inside one is a shell comment, not a heading.
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+# An ATX heading: one to six `#`, the text, and an optional closing run of `#`.
+_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+
+
+def _heading_slug(text: str) -> str:
+    """Return the GitHub anchor slug for a heading's rendered text.
+
+    GitHub lowercases the text, drops everything that is not a word
+    character, space or hyphen, and turns spaces into hyphens - so
+    ``## Coming from `iprak/sensi``` becomes ``coming-from-ipraksensi``.
+    Inline code, links and emphasis are rendered to their text first, the
+    way a reader sees them, before the punctuation is stripped.
+    """
+    text = re.sub(r"`([^`]*)`", r"\1", text)  # `code` -> code
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # [text](url) -> text
+    text = re.sub(r"[*_]", "", text)  # **bold**/_em_ markers
+    text = re.sub(r"[^\w\s-]", "", text.strip().lower())
+    return re.sub(r"\s+", "-", text)
+
+
+def _heading_anchors(doc: Path) -> frozenset[str]:
+    """Return every ``#fragment`` a link can target in ``doc``.
+
+    Duplicate headings are disambiguated ``slug``, ``slug-1``, ``slug-2`` as
+    GitHub does, and headings inside fenced code blocks are ignored.
+    """
+    seen: dict[str, int] = {}
+    anchors: set[str] = set()
+    fence = ""
+    for line in _read(doc).splitlines():
+        opener = _FENCE.match(line)
+        if opener is not None:
+            marker = opener.group(1)
+            if not fence:
+                fence = marker
+            elif line.strip().startswith(fence):
+                fence = ""
+            continue
+        if fence:
+            continue
+        heading = _HEADING.match(line)
+        if heading is None:
+            continue
+        slug = _heading_slug(heading.group(2))
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    return frozenset(anchors)
+
+
+@pytest.mark.parametrize("doc", _PROSE_FILES, ids=_rel)
+def test_markdown_link_fragments_resolve_to_a_heading(doc: Path) -> None:
+    """A ``#anchor`` link must name a heading that still exists.
+
+    ``test_relative_markdown_links_resolve`` checks only that the *file* half
+    of a link exists - it strips the ``#fragment`` and skips a same-document
+    ``#anchor`` outright - so renaming a heading left every link to it dead
+    with nothing to notice. README.md's "Coming from `iprak/sensi`" section
+    links to it twice, and its own subheadings were renamed in one change; a
+    dead ``#coming-from-ipraksensi`` or a stale ``CONTRIBUTING.md#releases``
+    reads as a working link on GitHub and silently scrolls nowhere.
+    """
+    anchors: dict[Path, frozenset[str]] = {}
+    dead: list[str] = []
+    for match in _MARKDOWN_LINK.finditer(_read(doc)):
+        target = match.group(1)
+        if target.startswith(("http://", "https://", "mailto:")) or "#" not in target:
+            continue
+        path, _, fragment = target.partition("#")
+        resolved = (doc.parent / path).resolve() if path else doc.resolve()
+        if not resolved.exists():
+            continue  # the file half is this test's job, not ours
+        if resolved not in anchors:
+            anchors[resolved] = _heading_anchors(resolved)
+        if fragment not in anchors[resolved]:
+            dead.append(target)
+    assert not dead, f"{_rel(doc)} links to missing anchors: {sorted(dead)}"
+
+
 # --------------------------------------------------------------------------
 # Numbers the prose quotes
 # --------------------------------------------------------------------------
