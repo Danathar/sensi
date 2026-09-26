@@ -1008,6 +1008,7 @@ _NAMED_HELPERS = {
     "to_int": ("custom_components/sensi/utils.py", _ADD_ENTITY),
     "to_float": ("custom_components/sensi/utils.py", _ADD_ENTITY),
     "State": ("custom_components/sensi/data.py", _ADD_ENTITY),
+    "_set_entity_id": ("custom_components/sensi/entity.py", _ADD_ENTITY),
     "FakeSensiBackend": ("tests/e2e/conftest.py", _COVER),
     "mock_json": ("tests/conftest.py", _COVER),
     "mock_device": ("tests/conftest.py", _COVER),
@@ -1038,6 +1039,172 @@ def test_the_unique_id_rule_points_at_an_attribute_that_exists() -> None:
     assert "_attr_unique_id" in _defined_names("custom_components/sensi/entity.py"), (
         f"{_rel(_ADD_ENTITY)} ends with a rule about an entity's `unique_id`, "
         "but entity.py no longer sets one"
+    )
+
+
+# --------------------------------------------------------------------------
+# add-entity.md: every file a new entity forces a change in
+# --------------------------------------------------------------------------
+#
+# Following the procedure for a read-only sensor on a scratch tree, and then
+# running the suite, is how these were found: step 6 sent the end-to-end test
+# only to write-back entities, but `tests/e2e/test_setup.py` pins the whole
+# entity_id map, so the new sensor failed a test the procedure never named.
+# And `README.md` lists every entity by name under three headings that nothing
+# told an agent to update. These tests derive both from the tree.
+
+_README = _ROOT / "README.md"
+_README_SECTION = "Sensors and controls"
+# The three lists in that section, as the procedure must name them.
+_README_LISTS = ("enabled by default", "disabled by default", "configuration entities")
+
+# A map of at least this many entity_ids is the whole entity set, not a spot
+# check of one entity.
+_FULL_MAP_FLOOR = 10
+
+
+def _add_entity_step(number: int) -> str:
+    """Return one numbered step of `add-entity.md`, whitespace squashed."""
+    match = re.search(
+        rf"^{number}\. (.*?)(?=^\d+\. |^Finish |\Z)",
+        _read(_ADD_ENTITY),
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"{_rel(_ADD_ENTITY)} has no step {number}"
+    return " ".join(match.group(1).split())
+
+
+@functools.cache
+def _full_entity_id_maps() -> frozenset[str]:
+    """Return every test module holding a dict literal keyed by the entity set."""
+    platforms = "|".join(sorted(_supported_platforms()))
+    entity_id = re.compile(rf"^(?:{platforms})\.sensi_\w+$")
+    found = set()
+    for relpath in _TRACKED:
+        if not (relpath.startswith("tests/") and relpath.endswith(".py")):
+            continue
+        for node in ast.walk(_module_tree(relpath)):
+            if not isinstance(node, ast.Dict):
+                continue
+            keys = [
+                key.value
+                for key in node.keys
+                if isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and entity_id.match(key.value)
+            ]
+            if len(keys) >= _FULL_MAP_FLOOR:
+                found.add(relpath)
+    return frozenset(found)
+
+
+def test_the_entity_id_map_scan_finds_the_pinned_map() -> None:
+    """Guard the scan: an empty result would make the next test vacuous."""
+    assert "tests/e2e/test_setup.py" in _full_entity_id_maps(), (
+        f"found {sorted(_full_entity_id_maps())}; the scan no longer finds the "
+        "entity_id map pinned in tests/e2e/test_setup.py"
+    )
+
+
+@pytest.mark.parametrize("relpath", sorted(_full_entity_id_maps()))
+def test_add_entity_step_6_names_every_test_that_pins_the_entity_set(
+    relpath: str,
+) -> None:
+    """A new entity of any kind changes the pinned map, so step 6 must say so."""
+    assert f"`{relpath}`" in _add_entity_step(6), (
+        f"{relpath} pins every entity_id the integration registers, so every "
+        f"new entity fails it until it is added there, but step 6 of "
+        f"{_rel(_ADD_ENTITY)} does not name it"
+    )
+
+
+def test_add_entity_step_6_does_not_limit_the_map_to_write_back_entities() -> None:
+    """The pinned map holds read-only entities too; the step must say every one."""
+    step = _add_entity_step(6)
+    sentence = next(
+        (part for part in step.split(". ") if "`tests/e2e/test_setup.py`" in part),
+        "",
+    )
+    assert re.search(r"\bevery entity\b", sentence, re.IGNORECASE), (
+        f"step 6 of {_rel(_ADD_ENTITY)} must send EVERY new entity to "
+        f"tests/e2e/test_setup.py, read-only ones included; it says: {sentence!r}"
+    )
+
+
+def test_add_entity_step_7_names_the_readme_inventory() -> None:
+    """README.md lists every entity by name; step 7 must send an agent there."""
+    readme = _read(_README)
+    assert f"### {_README_SECTION}" in readme, (
+        f"README.md no longer has a {_README_SECTION!r} section; update "
+        f"{_rel(_ADD_ENTITY)} step 7 and this test together"
+    )
+    step = _add_entity_step(7)
+    assert "`README.md`" in step and _README_SECTION in step, (
+        f"step 7 of {_rel(_ADD_ENTITY)} does not send an agent to README.md's "
+        f"{_README_SECTION!r} list, which names every entity"
+    )
+    for name in _README_LISTS:
+        assert name in step.casefold(), (
+            f"step 7 of {_rel(_ADD_ENTITY)} does not name README.md's {name!r} list"
+        )
+        assert name in readme.casefold(), f"README.md has no {name!r} list"
+
+
+def _closing_rule() -> str:
+    """Return the procedure's closing prohibition, whitespace squashed.
+
+    Only the clause before the colon: the explanation after it names the
+    identifiers again, and a term found only there is not one the rule
+    forbids changing.
+    """
+    body = _read(_ADD_ENTITY)
+    start = body.find("Do not change")
+    assert start != -1, f"{_rel(_ADD_ENTITY)} no longer ends with its rule"
+    rule = " ".join(body[start:].split())
+    return rule.split(": ", 1)[0]
+
+
+@pytest.mark.parametrize("term", ["`unique_id`", "`entity_id`", "`key`"])
+def test_the_closing_rule_forbids_every_identifier_built_from_key(term: str) -> None:
+    """Renaming a description's key changes both identifiers a user depends on."""
+    assert term in _closing_rule(), (
+        f"{_rel(_ADD_ENTITY)}'s closing rule does not name {term}; "
+        "entity.py builds both the unique_id and the entity_id from the "
+        "description's key, so the rule must forbid changing all three"
+    )
+
+
+def test_entity_py_builds_both_identifiers_from_key() -> None:
+    """The closing rule's premise: both identifiers come from `key`."""
+    tree = _module_tree("custom_components/sensi/entity.py")
+    helper = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_set_entity_id"
+        ),
+        None,
+    )
+    assert helper is not None, "entity.py no longer defines _set_entity_id"
+    assert "key" in {arg.arg for arg in helper.args.args}, (
+        "_set_entity_id no longer takes a key, so the closing rule's premise "
+        "that the entity_id is built from it is stale"
+    )
+    unique_from_key = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(t, ast.Attribute) and t.attr == "_attr_unique_id"
+            for t in node.targets
+        )
+        and any(
+            isinstance(n, ast.Attribute) and n.attr == "key"
+            for n in ast.walk(node.value)
+        )
+    ]
+    assert unique_from_key, (
+        "entity.py no longer builds _attr_unique_id from a description's key"
     )
 
 
