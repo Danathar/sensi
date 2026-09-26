@@ -3043,7 +3043,7 @@ def test_an_extglob_pattern_anywhere_in_the_command_is_refused(command: str) -> 
 
 @pytest.mark.parametrize(
     "command",
-    ["echo '@'(x)", "(git diff HEAD)", "git log --grep='@(' -1"],
+    ["echo '@'(x)", "(git diff HEAD)", "git log --grep='@(' -1", "! (git diff HEAD)"],
 )
 def test_a_quoted_operator_or_a_subshell_is_not_an_extglob(command: str) -> None:
     """A quoted `@` and a plain subshell open no pattern."""

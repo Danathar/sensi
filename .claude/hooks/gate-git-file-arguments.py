@@ -269,6 +269,13 @@ _SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 # `_punctuation_pieces`.
 _PUNCTUATION = frozenset("();<>|&")
 
+# The start of an extglob pattern in the quote-masked command: a run of word
+# characters ending in an unquoted `@ + ! ? *` that touches a `(`. Group 1 is
+# the word typed before the `(`, so the refusal can name it. Read off the
+# masked string, not the lexed words, so `! (git diff HEAD)` - a negated
+# subshell, with a space the lexer drops - is not one.
+_EXTGLOB_START = re.compile(r"([^\s;&|()<>]*[@+!?*])\(")
+
 # The allow rows of `.claude/settings.json` that carry a trailing `:*`, other
 # than git's, which `_runs_git` covers: each is a command prefix the
 # permission layer approves with any arguments after it, and a shell output
@@ -1302,21 +1309,25 @@ def main() -> int:
     # to can reach git with neither half read as git: beside a file named
     # `-Sgit diff --output=cosign.pub HEAD --`, `env -S@(git*)` makes env run
     # that git and truncate the file (reproduced under bash -O extglob; found
-    # on atomic-image-builder#480). A word whose masked twin ends in an
-    # unquoted `@ + ! ? *` before a `(` word is refused anywhere in the string;
-    # a quoted `'@'(x)` masks to `Q`, and `$(` is a substitution, not a pattern.
-    for index in range(len(words) - 1):
-        if masked[index + 1] == "(" and masked[index][-1:] in ("@", "+", "!", "?", "*"):
-            print(
-                f"Blocked: `{words[index]}(` starts an extglob pattern. With "
-                "`shopt -s extglob` on, bash reads it as one word and matches it "
-                "against the working directory, and the `(` hides the rest of the "
-                "command from this check - `env -S@(git*)` beside a file named "
-                "`-Sgit diff --output=cosign.pub HEAD --` runs that git and writes "
-                "over cosign.pub. Write the words out.",
-                file=sys.stderr,
-            )
-            return 2
+    # on atomic-image-builder#480). The operator has to touch the `(` in the
+    # source: the lexer drops the space in `! (git diff HEAD)`, bash's negated
+    # subshell, and hands back the same `!` and `(` words, so the test reads
+    # the quote-masked command itself rather than the words (Codex on #299).
+    # A quoted `'@'(x)` masks to `Q`, and `$(` is a substitution, not a pattern.
+    masked_command = _mask_quotes(command)
+    extglob = _EXTGLOB_START.search(masked_command)
+    if extglob is not None:
+        start, end = extglob.span(1)
+        print(
+            f"Blocked: `{command[start:end]}(` starts an extglob pattern. With "
+            "`shopt -s extglob` on, bash reads it as one word and matches it "
+            "against the working directory, and the `(` hides the rest of the "
+            "command from this check - `env -S@(git*)` beside a file named "
+            "`-Sgit diff --output=cosign.pub HEAD --` runs that git and writes "
+            "over cosign.pub. Write the words out.",
+            file=sys.stderr,
+        )
+        return 2
 
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
