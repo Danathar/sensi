@@ -16,9 +16,12 @@ refused. And the options that create, truncate or delete a path of their own
 (`--junitxml`, `--log-file`, `--basetemp` and the rest of `REFUSED_WRITE`,
 `--cov-config`, and the `--cov-report` destination forms such as `xml:DEST`)
 are refused too, because an option's path is not a target and does not have
-to be inside the repository. Running agent-written code is still possible,
-because that is what a test suite is. The point is that the code has to be a
-file in the tree, where `git status` shows it and review reaches it.
+to be inside the repository. Before any of that, an argument starting with `@`
+is refused: pytest replaces it with the lines of the file it names, so every
+argument in that file would reach pytest without passing the three rules.
+Running agent-written code is still possible, because that is what a test
+suite is. The point is that the code has to be a file in the tree, where
+`git status` shows it and review reaches it.
 """
 
 from pathlib import Path
@@ -75,6 +78,18 @@ REFUSED_CONFIG = frozenset({"--cov-config"})
 VALUED_WRITE = frozenset({"--cov-report"})
 TERMINAL_REPORTS = frozenset({"term", "term-missing"})
 
+# pytest builds its parser with `fromfile_prefix_chars="@"`, so argparse
+# replaces any argument that starts with `@` by the lines of the file it names,
+# one argument per line, before a single option is parsed. The checks below
+# see only the `@name` word, which is neither an option nor an existing path,
+# so everything in the file - `--junitxml=.claude/settings.json`, a target
+# outside `tests/` - was forwarded unread. It is also a read: pytest reports
+# the first line that is not a target as "file or directory not found", so
+# `@.env` printed the first line of a file the Read deny rules withhold.
+# argparse expands the prefix wherever the argument sits, an option's value
+# included, so the refusal does not care what comes before it.
+FROMFILE_PREFIX = "@"
+
 # pytest defaults `confcutdir` to the directory holding the ini file, which is
 # ROOT here - but that is a default, and the wrapper's guarantee should not rest
 # on one. Pinning it means a conftest.py above the repository is never imported
@@ -121,6 +136,14 @@ def refusals(argv: list[str]) -> list[str]:
     problems = []
     pending = ""
     for arg in argv:
+        if arg.startswith(FROMFILE_PREFIX):
+            problems.append(
+                f"{arg}: pytest reads more arguments from that file, "
+                "where these checks cannot see them"
+            )
+            pending = ""
+            continue
+
         # A `--cov-report` value arrives either attached with `=` or as the
         # next argument. A `:` after a file type is a destination; after a
         # terminal type it is a display modifier and writes nothing.

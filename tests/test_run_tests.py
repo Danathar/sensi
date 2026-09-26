@@ -175,6 +175,38 @@ def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["@.env"],
+        ["@notes.txt"],
+        ["tests", "@args.txt"],
+        ["-k", "@args.txt"],
+        ["--cov-report", "@args.txt"],
+    ],
+    ids=[
+        "a read-denied file",
+        "a file that does not exist yet",
+        "after a target inside the suite",
+        "as an option's value",
+        "as the value of the one valued write option",
+    ],
+)
+def test_an_argument_file_is_refused(argv: list[str]) -> None:
+    """An `@FILE` argument becomes the file's lines before pytest parses any.
+
+    Every other check here reads the words it is handed, and `@notes.txt` is
+    neither an option nor an existing path, so a file holding
+    `--junitxml=.claude/settings.json` or a target outside `tests/` reached
+    pytest unread. `@.env` was a read as well: pytest reports the first line
+    that is not a target as "file or directory not found", which printed the
+    first line of a file the Read deny rules withhold. argparse expands the
+    prefix wherever the argument sits, so the value position is refused too.
+    """
+
+    assert run_tests.refusals(argv), f"{argv} hands pytest arguments nobody checked"
+
+
 def test_a_directory_above_the_repository_is_refused() -> None:
     """Spelled relatively, so the check has to resolve before it compares."""
 

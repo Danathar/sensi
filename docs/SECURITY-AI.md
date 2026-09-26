@@ -139,8 +139,11 @@ supply-chain concern.
   options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are
   refused, and so are the options that write or delete a path of their own
   (`--junitxml`, `--log-file`, `--basetemp`, `--cov-config`, and a
-  `--cov-report` destination such as `xml:DEST`). The full list, with the
-  reason for each entry, is at the top of `scripts/run_tests.py`.
+  `--cov-report` destination such as `xml:DEST`). An argument starting with
+  `@` is refused before any of the three, because pytest replaces it with
+  the lines of the file it names, and none of those lines is checked. The
+  full list, with the reason for each entry, is at the top of
+  `scripts/run_tests.py`.
 - Say what could not be verified. There is no thermostat in CI and the protocol
   is undocumented; "unverified against hardware" is an acceptable outcome and
   a silent omission is not.
