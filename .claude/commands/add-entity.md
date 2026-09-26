@@ -32,11 +32,20 @@ Work in this order.
 6. **Test both tiers.** A unit test in `tests/test_<platform>.py`, and — if the
    entity writes back to the thermostat — an end-to-end test in
    `tests/e2e/test_control.py` asserting on the emitted event payload, not just
-   on the resulting entity state.
+   on the resulting entity state. Every entity, read-only or not, also goes
+   into the full entity_id map pinned in `tests/e2e/test_setup.py`; an entity
+   that `tests/sample.json` does not produce is pinned in its platform's unit
+   test instead, the way `tests/test_switch.py` pins the humidification switch.
 
 7. **Check the naming.** New entities need an entry in `strings.json` and
    `translations/en.json` if they are user-facing. No literal URLs there.
+   Add the name to the matching list under **Sensors and controls** in
+   `README.md` too: enabled by default, disabled by default, or configuration
+   entities.
 
 Finish by running `/check`.
 
-Do not change any existing entity's `unique_id` — that breaks existing installs.
+Do not change any existing entity's `unique_id` or `entity_id`, and so do not
+rename an existing description's `key`: `entity.py` builds both from it, the
+entity_id in `_set_entity_id`. A changed `unique_id` breaks existing installs; a
+changed `entity_id` breaks every automation and dashboard that refers to it.
