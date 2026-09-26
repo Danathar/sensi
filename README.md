@@ -150,7 +150,7 @@ Full detail is in the commit history.
 
 ## Coming from `iprak/sensi`
 
-This section is for someone running upstream's Sensi integration today: what switching gets you, how to switch without setting the integration up again, and why this fork is not in the HACS default list.
+This section is for someone running upstream's Sensi integration today: what switching gets you, how to switch without setting the integration up again, and where this fork stands on HACS default listing.
 
 ### Why switch
 
@@ -182,14 +182,14 @@ After the restart, the integration's page under **Settings → Devices & service
 
 Reverse the steps: remove this fork's download in HACS, download upstream's, restart. The config entry and entities carry over the same way.
 
-### Why this fork is not in the HACS default list
+### HACS default listing
 
-It stays a custom repository while upstream is maintained, and will not be submitted to [hacs/default](https://github.com/hacs/default). Two reasons:
+This fork is not in the HACS default list, and no submission to [hacs/default](https://github.com/hacs/default) is open. Only the repository owner can open one, so that is the maintainer's call. Two things weigh against it while upstream is maintained:
 
-- **HACS installs by domain, and has no rule against two listings sharing one.** A second default-listed **Sensi** would sit next to upstream's in HACS search with nothing to say which is which, and downloading either would overwrite the other's files without warning. Adding a custom repository is a deliberate step, which is the right amount of friction for choosing a fork over the original.
-- **This fork tracks upstream** ([CONTRIBUTING.md](CONTRIBUTING.md#syncing-with-upstream)). It exists as a set of fixes on top of the original, not as a replacement for it, and a custom repository is what HACS provides for exactly that.
+- **HACS installs by domain, and nothing stops two listings sharing one.** A second default-listed **Sensi** would sit next to upstream's in HACS search with nothing to say which is which, and downloading either would overwrite the other's files without warning. Adding a custom repository is a deliberate step, which is the right amount of friction for choosing a fork over the original.
+- **This fork tracks upstream** ([CONTRIBUTING.md](CONTRIBUTING.md#syncing-with-upstream)). It is a set of fixes on top of the original, not a replacement for it, and a custom repository is what HACS provides for exactly that.
 
-If upstream is archived or stops releasing, that reasoning changes, and this section should change with it.
+If that changes — upstream is archived, or a listing is submitted — this section changes with it.
 
 ## Security
 
