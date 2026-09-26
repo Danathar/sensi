@@ -34,7 +34,7 @@ This fork is not in the default HACS listing, so add it as a custom repository:
 2. Add `https://github.com/Danathar/sensi` with type **Integration**.
 3. Download **Sensi** from HACS, then restart Home Assistant.
 
-If you want the upstream version instead, install [HACS](https://hacs.xyz/) and search for Sensi normally.
+Already running upstream's Sensi from HACS? [Coming from `iprak/sensi`](#coming-from-ipraksensi) says how to switch without setting the integration up again. If you want the upstream version instead, install [HACS](https://hacs.xyz/) and search for Sensi normally.
 
 ### Manual
 
@@ -146,7 +146,50 @@ Upstream is [`iprak/sensi`](https://github.com/iprak/sensi); this fork tracks it
 
 Full detail is in the commit history.
 
-**Version numbers do not line up with upstream's, on purpose.** This fork releases on CalVer — `2026.9.0`, tagged without a `v` — while upstream continues its `v2.x` semver line. Sharing the numbering would mean two different releases both called `v2.1.7`. Because `2026.x` compares as newer than `2.1.x`, upgrading from an upstream install works normally. [CONTRIBUTING.md](CONTRIBUTING.md#releases) has the details.
+**Version numbers do not line up with upstream's, on purpose.** This fork releases on CalVer — `2026.9.0`, tagged without a `v` — while upstream continues its `v2.x` semver line. Sharing the numbering would mean two different releases both called `v2.1.7`. Because `2026.x` compares as newer than `2.1.x`, upgrading from an upstream install works normally; [Coming from `iprak/sensi`](#coming-from-ipraksensi) has the steps. [CONTRIBUTING.md](CONTRIBUTING.md#releases) has the details.
+
+## Coming from `iprak/sensi`
+
+This section is for someone running upstream's Sensi integration today: what switching gets you, how to switch without setting the integration up again, and where this fork stands on HACS default listing.
+
+### Why switch
+
+Every fix in [About this fork](#about-this-fork) is user-visible on an upstream install. Three are worth naming because nothing on an upstream install tells you they are happening:
+
+- **Reauth accepted a token for a different Sensi account** and silently repointed the integration at it. This fork refuses the token as `wrong_account` ([#35](https://github.com/Danathar/sensi/pull/35)).
+- **The Auxiliary Heating switch could not be turned off** if Home Assistant started while the thermostat was already aux heating ([#35](https://github.com/Danathar/sensi/pull/35)).
+- **Every reconnect could leave a socket.io client behind.** On a flaky link they accumulate, each still handling events ([#35](https://github.com/Danathar/sensi/pull/35)).
+
+These fixes reach you only through this repository. They are not proposed upstream: this fork's changes are GPL-3.0 and upstream is MIT (see [License](#license)).
+
+### How to switch
+
+Nothing needs to be set up again. Both integrations use the domain `sensi`, the same entity unique IDs and the same credential store, so your config entry, device, entities, history and refresh token carry over. That includes config entries created by upstream releases before v1.4.2, which keyed the entry differently ([#232](https://github.com/Danathar/sensi/pull/232)).
+
+Through HACS:
+
+1. In HACS, open **Sensi** (the `iprak/sensi` one) and **Remove** it. This deletes `custom_components/sensi/` and nothing else; the integration's configuration lives in Home Assistant's own storage and stays. Do **not** remove the integration from **Settings → Devices & services** — that is what would delete it.
+2. Add `https://github.com/Danathar/sensi` as a custom repository, type **Integration**, and download **Sensi** from it, as in [Installation](#hacs).
+3. Restart Home Assistant.
+
+Removing upstream's download first matters. HACS keeps its own record of what each repository has installed and has no check for two repositories that ship the same domain: if both are downloaded, whichever you update last overwrites the other's files, and upstream's next release is offered as an update that would overwrite this fork again.
+
+By hand: replace the contents of `<config directory>/custom_components/sensi/` with this repository's `custom_components/sensi/` and restart Home Assistant. Do this only if upstream was installed by hand too; if it came from HACS, use the steps above, or HACS's record of the upstream download will keep offering updates over your copy.
+
+After the restart, the integration's page under **Settings → Devices & services** shows version `2026.x`.
+
+### Going back
+
+Reverse the steps: remove this fork's download in HACS, download upstream's, restart. The config entry and entities carry over the same way.
+
+### HACS default listing
+
+This fork is not in the HACS default list, and no submission to [hacs/default](https://github.com/hacs/default) is open. Only the repository owner can open one, so that is the maintainer's call. Two things weigh against it while upstream is maintained:
+
+- **HACS installs by domain, and nothing stops two listings sharing one.** A second default-listed **Sensi** would sit next to upstream's in HACS search with nothing to say which is which, and downloading either would overwrite the other's files without warning. Adding a custom repository is a deliberate step, which is the right amount of friction for choosing a fork over the original.
+- **This fork tracks upstream** ([CONTRIBUTING.md](CONTRIBUTING.md#syncing-with-upstream)). It is a set of fixes on top of the original, not a replacement for it, and a custom repository is what HACS provides for exactly that.
+
+If that changes — upstream is archived, or a listing is submitted — this section changes with it.
 
 ## Security
 
