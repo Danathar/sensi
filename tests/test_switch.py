@@ -666,3 +666,70 @@ class TestModeToRestore:
             mock_set_operating_mode.assert_called_once_with(
                 mock_device, OperatingMode.HEAT
             )
+
+
+class TestCapabilitySettingNames:
+    """One setting is named four times, and the names are joined only by convention.
+
+    A `SWITCH_TYPES` entry's `key` is read as an attribute of `Capabilities`
+    (whether to create the switch) and of `State` (`is_on`). Its `setting` is
+    the event sent to the backend, and `async_set_bool_setting` records a
+    success by dropping the event's `set_` prefix and writing the attribute of
+    that name back onto `State`. None of those four names is derived from
+    another, so they have to agree for every entry.
+    """
+
+    @pytest.mark.parametrize("description", SWITCH_TYPES, ids=lambda d: d.key)
+    def test_the_event_names_the_key(
+        self, description: SensiCapabilityEntityDescription
+    ) -> None:
+        """The attribute the client writes on success is the one `is_on` reads."""
+        assert description.setting.value == f"set_{description.key}"
+
+    @pytest.mark.parametrize("description", SWITCH_TYPES, ids=lambda d: d.key)
+    def test_the_key_is_a_state_and_capability_attribute(
+        self, description: SensiCapabilityEntityDescription, mock_device
+    ) -> None:
+        """`getattr` would raise at setup, or read a stale value, on a missing name.
+
+        Checked against a real parsed device so an attribute that only exists
+        on a mock cannot pass.
+        """
+        assert isinstance(getattr(mock_device.state, description.key), bool)
+        assert isinstance(getattr(mock_device.capabilities, description.key), bool)
+
+    @pytest.mark.parametrize("description", SWITCH_TYPES, ids=lambda d: d.key)
+    async def test_a_write_through_the_real_client_moves_is_on(
+        self,
+        hass: HomeAssistant,
+        mock_device,
+        mock_coordinator,
+        description: SensiCapabilityEntityDescription,
+    ) -> None:
+        """Turning a switch on and off changes what it reports, for every entry.
+
+        Only the transport is patched: `async_set_bool_setting` runs for real,
+        so a key it does not write back would leave `is_on` unchanged, and an
+        attribute name it made up would appear on `State` as a new attribute.
+        """
+        switch = SensiCapabilitySettingSwitch(
+            hass, mock_device, description, mock_coordinator.config_entry
+        )
+        attributes_before = set(vars(mock_device.state))
+
+        with (
+            patch.object(
+                mock_coordinator.client,
+                "_async_invoke_setter",
+                return_value=ActionResponse(None, {}),
+            ) as mock_invoke_setter,
+            patch.object(switch, "async_write_ha_state"),
+        ):
+            await switch.async_turn_off()
+            assert switch.is_on is False
+
+            await switch.async_turn_on()
+            assert switch.is_on is True
+
+        assert mock_invoke_setter.call_args.args[0] == description.setting.value
+        assert set(vars(mock_device.state)) == attributes_before
