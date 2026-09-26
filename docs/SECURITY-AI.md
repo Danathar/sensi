@@ -199,10 +199,11 @@ input includes untrusted text arguing the opposite. A boundary is something
 that holds when the agent is wrong.
 
 What remains after the removal is the same set of rules with fewer places to
-enforce them: Hive's own gating, this policy, the CI gates, and a human on the
-merge button. Enforcing "no direct push to `master`" mechanically is a
-repository ruleset — see the note under **Push to `master`** above, which is
-still a discipline rather than a mechanism here.
+enforce them: Hive's own gating, this policy, the CI gates, the
+`protect master` ruleset, and a human on the merge button. "No direct push to
+`master`" is enforced mechanically by that ruleset — see **Push to `master`**
+above for what it refuses, and for `python3 scripts/check_ruleset.py`, which
+confirms GitHub is still applying it.
 
 ## If a credential is exposed
 
