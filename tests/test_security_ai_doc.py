@@ -277,15 +277,6 @@ def test_the_guard_can_see_the_sentence_it_guards_against() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#287: docs/SECURITY-AI.md:201-205 still calls the master rule 'a "
-        "discipline rather than a mechanism'. The page is Edit-denied to "
-        "agents; the replacement text is in the issue. Remove this marker in "
-        "the diff that applies it."
-    ),
-)
 def test_no_sentence_calls_the_master_rule_unenforced() -> None:
     """While the ruleset is active, the page must not say nothing enforces it."""
     assert _ruleset()["enforcement"] == "active"
