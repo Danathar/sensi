@@ -522,6 +522,50 @@ def _mask_quotes(command: str) -> str:
     return "".join(masked)
 
 
+def _join_continuations(command: str) -> str:
+    r"""Return the command with every backslash-newline removed as bash removes it.
+
+    bash drops an unquoted `\<newline>` pair, and one inside double quotes, as
+    it reads the line - before any word exists, before `_newlines_to_separators`
+    would see a newline. shlex keeps the pair inside the word, so
+    `git diff HEAD --outp\<newline>ut=cosign.pub` arrived here as two segments
+    (`--outp` and `ut=cosign.pub`), neither a refused option, while bash handed
+    git `--output=cosign.pub` and truncated the file (found on
+    atomic-image-builder#481). Inside single quotes the pair is two literal
+    characters and stays; the quote state is walked here rather than read off
+    `_mask_quotes`, which masks the pair to `QQ` in every quoting.
+    """
+
+    kept: list[str] = []
+    quote = ""
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = ""
+            kept.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length:
+            if command[index + 1] == "\n":
+                index += 2
+                continue
+            kept.append(char)
+            kept.append(command[index + 1])
+            index += 2
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        kept.append(char)
+        index += 1
+    return "".join(kept)
+
+
 def _strip_comments(command: str) -> str:
     """Return the command with every shell comment removed.
 
@@ -1228,7 +1272,7 @@ def main() -> int:
         return 0
 
     try:
-        command = _newlines_to_separators(_strip_comments(command))
+        command = _newlines_to_separators(_strip_comments(_join_continuations(command)))
         words = _lex(command)
         masked = _lex(_mask_quotes(command))
     except ValueError:

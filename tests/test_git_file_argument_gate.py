@@ -1029,6 +1029,60 @@ def test_a_newline_that_is_not_a_boundary_is_left_alone(command: str) -> None:
     assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr}"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # bash removes the pair before it reads the word, so this is --output.
+        "git diff HEAD --outp\\\nut=cosign.pub",
+        # Inside double quotes the pair is removed too.
+        'git diff HEAD "--outp\\\nut=cosign.pub"',
+        # The same split of --no-index.
+        "git diff --no-in\\\ndex /dev/null ./cosign.key",
+    ],
+)
+def test_a_backslash_newline_inside_a_word_is_joined_before_the_word_is_read(
+    command: str,
+) -> None:
+    """A refused option split by a continuation is still that option to git."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was let through"
+
+
+def test_a_single_quoted_backslash_newline_is_two_literal_characters() -> None:
+    """Inside single quotes bash keeps the pair, so no option is rebuilt."""
+
+    completed = _run(_payload("git diff HEAD '--outp\\\nut=x'"))
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_bash_really_joins_a_continuation_into_a_refused_option(tmp_path: Path) -> None:
+    """The reach the join exists for, run for real: a split --output truncates."""
+
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "f").write_text("a\n", encoding="utf-8")
+    _git(tmp_path, "add", "f")
+    _git(tmp_path, "commit", "-qm", "x")
+    victim = tmp_path / "victim"
+    victim.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", "git diff HEAD --outp\\\nut=victim"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "ORIGINAL-CONTENT" not in victim.read_text(encoding="utf-8"), (
+        "bash no longer joins a backslash-newline inside a word; re-derive why "
+        "_join_continuations exists"
+    )
+    completed = _run(_payload("git diff HEAD --outp\\\nut=victim"))
+    assert completed.returncode == 2, (
+        "the command just shown to truncate was not blocked"
+    )
+
+
 def test_every_spelling_really_reaches_the_external_diff_program(
     tmp_path: Path,
 ) -> None:
