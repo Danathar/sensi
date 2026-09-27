@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.components.climate import (
+    ATTR_HVAC_MODE,
     ATTR_TARGET_TEMP_HIGH,
     ATTR_TARGET_TEMP_LOW,
     ENTITY_ID_FORMAT,
@@ -14,6 +15,7 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.unit_conversion import TemperatureConverter
 
@@ -479,13 +481,23 @@ class SensiThermostat(SensiEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
 
-        state = self._state
+        # The framework ensures that the temperatures are within min_temp and
+        # max_temp. It checks them against the current mode, even when the
+        # call carries an hvac_mode.
 
-        # The framework ensures that the temperatures are within min_temp and max_temp.
+        # A call can name the mode its setpoint is for. Switch to it first so
+        # the setpoint lands on that mode, as the core climate integrations
+        # do. The current mode is compared as Home Assistant shows it, so
+        # hvac_mode heat leaves AUX (shown as heat) alone.
+        operating_mode = self._state.operating_mode
+        hvac_mode = kwargs.pop(ATTR_HVAC_MODE, None)
+        if hvac_mode is not None and hvac_mode != self.hvac_mode:
+            operating_mode = self._check_setpoint_arguments(hvac_mode, kwargs)
+            await self.async_set_hvac_mode(hvac_mode)
 
         # ATTR_TEMPERATURE => ClimateEntityFeature.TARGET_TEMPERATURE
         # ATTR_TARGET_TEMP_LOW/ATTR_TARGET_TEMP_HIGH => TARGET_TEMPERATURE_RANGE
-        if state.operating_mode == OperatingMode.AUTO:
+        if operating_mode == OperatingMode.AUTO:
             temperature_low = kwargs.get(ATTR_TARGET_TEMP_LOW)
             temperature_high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
 
@@ -509,7 +521,7 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             # payload on; the client maps the accepted AUX setpoint onto the
             # heat setpoint locally.
             response = await self.coordinator.client.async_set_temperature(
-                self._device, state.operating_mode, temperature
+                self._device, operating_mode, temperature
             )
 
             raise_if_error(response, "temperature", temperature)
@@ -518,6 +530,36 @@ class SensiThermostat(SensiEntity, ClimateEntity):
 
         # Refresh entities relying on temperatures
         self.coordinator.async_update_listeners()
+
+    def _check_setpoint_arguments(
+        self, hvac_mode: HVACMode, kwargs: dict[str, Any]
+    ) -> OperatingMode:
+        """Return the mode set_temperature switches to, if its arguments fit it.
+
+        Home Assistant checked the arguments against the current mode, not
+        against hvac_mode. This refuses the call before the mode changes when
+        the new mode cannot take them: AUTO needs a low and a high, HEAT and
+        COOL need a single temperature, and OFF has no setpoint at all.
+        """
+
+        operating_mode = get_operating_mode_from_hvac_mode(hvac_mode)
+        if operating_mode is None or hvac_mode not in self.hvac_modes:
+            raise ServiceValidationError(f"Unsupported HVAC mode: {hvac_mode}")
+
+        if operating_mode == OperatingMode.OFF:
+            raise ServiceValidationError(
+                "A temperature cannot be set with hvac_mode off."
+            )
+
+        if operating_mode == OperatingMode.AUTO:
+            if kwargs.get(ATTR_TARGET_TEMP_LOW) is None:
+                raise ServiceValidationError(
+                    "hvac_mode auto needs target_temp_low and target_temp_high."
+                )
+        elif kwargs.get(ATTR_TEMPERATURE) is None:
+            raise ServiceValidationError(f"hvac_mode {hvac_mode} needs temperature.")
+
+        return operating_mode
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new hvac mode."""

@@ -30,7 +30,7 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 
 async def test_setup_platform(
@@ -317,6 +317,109 @@ async def test_set_temperature_auto(
 
         mock_async_write_ha_state.assert_called_once()
         mock_async_update_listeners.assert_called_once()
+
+
+async def test_set_temperature_with_hvac_mode_auto_switches_then_sets_both(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """hvac_mode auto from HEAT switches to AUTO, then sets low and high (#315)."""
+
+    order = []
+
+    async def fake_set_operating_mode(device, mode):
+        order.append(("mode", mode))
+        device.state.operating_mode = mode
+        return ActionResponse(None, None)
+
+    async def fake_set_temperature(device, mode, value):
+        order.append(("temperature", mode, value))
+        return ActionResponse(None, None)
+
+    assert mock_device.state.operating_mode == OperatingMode.HEAT
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_coordinator.client,
+            "async_set_operating_mode",
+            new=fake_set_operating_mode,
+        ),
+        patch.object(
+            mock_coordinator.client, "async_set_temperature", new=fake_set_temperature
+        ),
+    ):
+        await mock_thermostat.async_set_temperature(
+            hvac_mode=HVACMode.AUTO, target_temp_low=66, target_temp_high=75
+        )
+
+    assert order == [
+        ("mode", OperatingMode.AUTO),
+        ("temperature", OperatingMode.HEAT, 66),
+        ("temperature", OperatingMode.COOL, 75),
+    ]
+
+
+async def test_set_temperature_with_the_current_hvac_mode_keeps_the_mode(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """hvac_mode heat in AUX (shown as heat) does not change the mode."""
+
+    mock_device.state.operating_mode = OperatingMode.AUX
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_coordinator.client, "async_set_operating_mode"
+        ) as mock_set_operating_mode,
+        patch.object(
+            mock_coordinator.client, "async_set_temperature"
+        ) as mock_async_set_temperature,
+    ):
+        mock_async_set_temperature.return_value = ActionResponse(None, None)
+
+        await mock_thermostat.async_set_temperature(
+            hvac_mode=HVACMode.HEAT, temperature=70
+        )
+
+    mock_set_operating_mode.assert_not_called()
+    mock_async_set_temperature.assert_called_once_with(
+        mock_device, OperatingMode.AUX, 70
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        # OFF has no setpoint to take the temperature.
+        {"hvac_mode": HVACMode.OFF, "temperature": 70},
+        # AUTO runs on a low and a high, not a single temperature.
+        {"hvac_mode": HVACMode.AUTO, "temperature": 70},
+        # COOL runs on a single temperature, not a range.
+        {"hvac_mode": HVACMode.COOL, "target_temp_low": 66, "target_temp_high": 75},
+        # HEAT_COOL is not a Sensi mode.
+        {"hvac_mode": HVACMode.HEAT_COOL, "temperature": 70},
+    ],
+)
+async def test_set_temperature_refuses_arguments_the_new_mode_cannot_take(
+    hass: HomeAssistant, mock_thermostat, mock_coordinator, kwargs
+) -> None:
+    """A mismatched call is refused before the mode changes."""
+
+    with (
+        patch.object(
+            mock_coordinator.client, "async_set_operating_mode"
+        ) as mock_set_operating_mode,
+        patch.object(
+            mock_coordinator.client, "async_set_temperature"
+        ) as mock_async_set_temperature,
+        pytest.raises(ServiceValidationError),
+    ):
+        await mock_thermostat.async_set_temperature(**kwargs)
+
+    mock_set_operating_mode.assert_not_called()
+    mock_async_set_temperature.assert_not_called()
 
 
 async def test_set_fan_mode_invalid(
