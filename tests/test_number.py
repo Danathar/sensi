@@ -153,6 +153,37 @@ async def test_set_value(hass: HomeAssistant, mock_device, mock_coordinator) -> 
         mock_async_refresh.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    ("key", "setter", "requested", "expected"),
+    [
+        ("temperature_offset", "async_set_temperature_offset", 2.7, 3),
+        ("temperature_offset", "async_set_temperature_offset", -2.7, -3),
+        ("humidity_offset", "async_set_humidity_offset", -0.9, -1),
+        ("humidity_offset", "async_set_humidity_offset", 4.2, 4),
+    ],
+)
+async def test_set_value_rounds_a_fraction(
+    hass: HomeAssistant, mock_device, mock_coordinator, key, setter, requested, expected
+) -> None:
+    """A fractional value is rounded to the nearest whole step, not truncated."""
+
+    description = next(s for s in NUMBER_TYPES if s.key == key)
+    entity = SensiNumberEntity(
+        hass, mock_device, description, mock_coordinator.config_entry
+    )
+
+    with (
+        patch.object(entity, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_refresh"),
+        patch.object(mock_coordinator.client, setter) as mock_setter,
+    ):
+        mock_setter.return_value = ActionResponse(None, {})
+
+        await entity.async_set_native_value(requested)
+
+        mock_setter.assert_called_once_with(mock_device, expected)
+
+
 async def test_set_value_names_the_setting_in_the_error(
     hass: HomeAssistant, mock_device, mock_coordinator
 ) -> None:
@@ -297,6 +328,28 @@ class TestCirculatingFanDutyCycle:
             )
             mock_async_write_ha_state.assert_called_once()
             mock_async_refresh.assert_called_once()
+
+    async def test_set_value_rounds_before_the_client_snaps_to_the_step(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """12.9 reaches the client as 13, which then snaps to 15, not 10."""
+
+        entity = self._create_entity(hass, mock_device, mock_coordinator)
+
+        with (
+            patch.object(entity, "async_write_ha_state"),
+            patch.object(mock_coordinator, "async_refresh"),
+            patch.object(
+                mock_coordinator.client, "async_set_circulating_fan_mode"
+            ) as mock_async_set_circulating_fan_mode,
+        ):
+            mock_async_set_circulating_fan_mode.return_value = ActionResponse(None, {})
+
+            await entity.async_set_native_value(12.9)
+
+            mock_async_set_circulating_fan_mode.assert_called_once_with(
+                mock_device, mock_device.state.circulating_fan.enabled, 13
+            )
 
 
 class TestTemperatureOffsetIsADelta:
