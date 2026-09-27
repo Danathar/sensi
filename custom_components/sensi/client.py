@@ -325,23 +325,54 @@ class SensiClient:
         # Under _reconnect_lock: a refused setter's recovery runs this same
         # pair, and a tick landing in the middle of one left the recovery
         # taking the tick's half-connected socket. See _async_invoke_setter.
+        #
+        # The per-device waiters are registered before connecting, for the
+        # reason wait_for_devices gives: a `state` packet right behind the
+        # handshake can reach _update_state before _connect() returns, and a
+        # waiter created after that only ever times out. Refresh does not
+        # create new devices, so the devices known now are the ones to wait on.
         LOGGER.info("Updating devices - reconnecting and updating")
         async with self._reconnect_lock:
             await self._async_disconnect()
-            await self._connect()
-
-        # Refresh does no create new devices so let us just wait for device states. We don't
-        # care the order in which state event is received. It can come before or after connected.
-        async def _wait_for_device_states() -> None:
-            tasks = [
-                await self._create_event_future("state", icd_id)
+            state_futures = {
+                icd_id: await self._create_event_future("state", icd_id)
                 for icd_id in self._devices
-            ]
+            }
+            try:
+                await self._connect()
+            except BaseException:
+                for future in state_futures.values():
+                    future.cancel()
+                raise
 
-            await asyncio.wait_for(asyncio.gather(*tasks), PREPARE_DEVICES_TIMEOUT)
+        if not state_futures:
+            return
 
-        with contextlib.suppress(asyncio.exceptions.TimeoutError):
-            await _wait_for_device_states()
+        done, pending = await asyncio.wait(
+            state_futures.values(), timeout=PREPARE_DEVICES_TIMEOUT
+        )
+        for future in pending:
+            future.cancel()
+
+        # A connection that delivers no state for any device leaves every
+        # entity showing the values from the last refresh that did. Counting
+        # it as a successful update kept those values looking current
+        # indefinitely; a failed one lets the coordinator mark the entities
+        # unavailable, as it does for a connection that could not be made.
+        # One silent device among several is not a failed update: the others
+        # did refresh.
+        if not done:
+            raise SensiConnectionError(
+                f"No device state within {PREPARE_DEVICES_TIMEOUT} seconds of reconnecting"
+            )
+        if pending:
+            stale = sorted(
+                icd_id for icd_id, future in state_futures.items() if future in pending
+            )
+            LOGGER.debug(
+                "No state from device(s) %s on this refresh",
+                ", ".join(redact_identifier(icd_id) for icd_id in stale),
+            )
 
     async def async_set_temperature(
         self, device: SensiDevice, mode: OperatingMode, value: int

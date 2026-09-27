@@ -10,6 +10,7 @@ rest of ``tests/e2e/`` uses, rather than reaching into its private state.
 """
 
 import asyncio
+import copy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -311,4 +312,35 @@ async def test_a_connection_error_while_retrying_device_info_is_not_ready(
 
     assert sends > 2, "the retry never ran"
 
+    await sensi_backend.shutdown()
+
+
+async def test_one_silent_device_is_not_a_failed_refresh(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """A refresh fails only when no device at all sent state.
+
+    With two thermostats on the account and only one of them in the `state`
+    event, the other one did refresh, so the update succeeds. Only when
+    neither sends state is it a failed update, which is what lets the
+    coordinator mark the entities unavailable instead of showing old values
+    as current.
+    """
+    first = next(iter(sensi_backend.devices.values()))
+    second = copy.deepcopy(first)
+    second["icd_id"] = "aa-bb-cc-dd-ee-ff-00-02"
+    sensi_backend.devices[second["icd_id"]] = second
+
+    await client.wait_for_devices()
+    assert len(client.get_devices()) == 2
+
+    sensi_backend.state_override = [copy.deepcopy(first)]
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        await client.async_update_devices()
+
+        sensi_backend.withhold_state = True
+        with pytest.raises(SensiConnectionError, match="No device state"):
+            await client.async_update_devices()
+
+    await client.stop()
     await sensi_backend.shutdown()

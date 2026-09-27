@@ -291,6 +291,65 @@ async def test_coordinator_refresh_reconnects_and_picks_up_new_state(
     assert after.attributes["current_humidity"] == 33
 
 
+async def test_a_refresh_that_brings_no_state_is_a_failed_update(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A reconnect that delivers no `state` does not count as fresh data.
+
+    The refresh used to swallow the timeout on its state wait, so a backend
+    that accepted the connection and then sent nothing was a successful
+    update: the failure count stayed at zero and every entity kept showing
+    the values from the last refresh that did bring state, as if current.
+    Setup already treats the same silence as a failure. Now a refresh does
+    too, and counts toward MAX_CONSECUTIVE_CONNECTION_FAILURES the same way
+    a connection that could not be made does.
+    """
+    coordinator = sensi_entry.runtime_data
+
+    sensi_backend.withhold_state = True
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        for _ in range(2):
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+
+    assert not coordinator.last_update_success
+    assert coordinator.consecutive_connection_failures == 2
+
+    # The next refresh that does bring state counts as an update again.
+    sensi_backend.withhold_state = False
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.last_update_success
+    assert coordinator.consecutive_connection_failures == 0
+
+
+async def test_a_refresh_does_not_wait_out_state_delivered_inside_connect(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A `state` event that lands before `connect()` returns is not missed.
+
+    The refresh registered its per-device waiters only after reconnecting,
+    so a `state` packet right behind the handshake - which the real library
+    can dispatch before `connect()` returns - resolved nothing, and every
+    such refresh sat out the whole PREPARE_DEVICES_TIMEOUT. The waiters are
+    registered before connecting now, as they are for setup.
+    """
+    sensi_backend.state_before_connect_returns = True
+    sensi_backend.devices[ICD_ID]["state"]["display_temp"] = 62
+
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 5):
+        await asyncio.wait_for(sensi_entry.runtime_data.async_refresh(), 2)
+    await hass.async_block_till_done()
+
+    assert sensi_entry.runtime_data.last_update_success
+    assert hass.states.get(CLIMATE).attributes["current_temperature"] == 62
+
+
 async def test_a_setter_that_timed_out_is_not_replayed_on_reconnect(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
