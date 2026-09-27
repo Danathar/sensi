@@ -449,6 +449,41 @@ class TestState:
         assert state.display_scale == "c"
         assert state.temperature_unit == UnitOfTemperature.CELSIUS
 
+    @pytest.mark.parametrize("value", [None, "missing"])
+    def test_null_limits_fall_back_to_the_app_limits_in_fahrenheit(self, value):
+        """A °F thermostat keeps the Sensi app's limits as they are."""
+        data = {"display_scale": "f"}
+        if value != "missing":
+            data |= {"cool_min_temp": value, "heat_max_temp": value}
+
+        state = State(data)
+
+        assert state.cool_min_temp == 45
+        assert state.heat_max_temp == 99
+
+    @pytest.mark.parametrize("value", [None, "missing"])
+    def test_null_limits_fall_back_to_the_app_limits_in_celsius(self, value):
+        """The fields are in the thermostat's scale, so the °F fallback is converted.
+
+        Left in °F, a cooling floor of 45 sat above the 37.2 ceiling and Home
+        Assistant refused every cooling setpoint.
+        """
+        data = {"display_scale": "c"}
+        if value != "missing":
+            data |= {"cool_min_temp": value, "heat_max_temp": value}
+
+        state = State(data)
+
+        assert state.cool_min_temp == pytest.approx(7.2222, abs=1e-3)
+        assert state.heat_max_temp == pytest.approx(37.2222, abs=1e-3)
+
+    def test_reported_limits_are_used_as_sent_in_celsius(self):
+        """Only the fallback is converted; a reported value is already °C."""
+        state = State({"display_scale": "c", "cool_min_temp": 18, "heat_max_temp": 30})
+
+        assert state.cool_min_temp == 18
+        assert state.heat_max_temp == 30
+
     def test_state_temperature_values(self, mock_json):
         """Test State temperature values."""
         state_dict = mock_json.get("state", {})

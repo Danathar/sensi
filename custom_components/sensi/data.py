@@ -9,6 +9,7 @@ from homeassistant.components.climate import HVACMode
 from homeassistant.const import UnitOfTemperature
 from homeassistant.util import dt as dt_util
 from homeassistant.util.enum import try_parse_enum
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .capabilities import Capabilities
 from .const import (
@@ -257,7 +258,6 @@ class State:
         self.battery_voltage = to_float(data.get("battery_voltage"), None)
         self.circulating_fan = CirculatingFan(data.get("circulating_fan", {}))
         self.continuous_backlight = to_bool(data.get("continuous_backlight"))
-        self.cool_min_temp = to_int(data.get("cool_min_temp"), TEMPERATURE_LOWER_LIMIT)
         self.current_cool_temp = to_int(data.get("current_cool_temp"), None)
         self.current_heat_temp = to_int(data.get("current_heat_temp"), None)
 
@@ -273,7 +273,6 @@ class State:
         self.display_temp = to_float(data.get("display_temp"), None)
         self.display_time = to_bool(data.get("display_time"))
         self.fan_mode = try_parse_enum(FanMode, data.get("fan_mode")) or FanMode.UNKNOWN
-        self.heat_max_temp = to_int(data.get("heat_max_temp"), TEMPERATURE_UPPER_LIMIT)
         self.humidity = to_int(data.get("humidity"), None)
         self.humidity_control = HumidityControl(data.get("humidity_control", {}))
         self.humidity_offset = to_int(data.get("humidity_offset"), 0)
@@ -294,6 +293,23 @@ class State:
             UnitOfTemperature.CELSIUS
             if self.display_scale.lower() == "c"
             else UnitOfTemperature.FAHRENHEIT
+        )
+
+        # The fallbacks are the Sensi app's limits, which are in °F; the fields
+        # are in the thermostat's own scale, so convert them for a °C one.
+        self.cool_min_temp = to_int(
+            data.get("cool_min_temp"), self._app_limit(TEMPERATURE_LOWER_LIMIT)
+        )
+        self.heat_max_temp = to_int(
+            data.get("heat_max_temp"), self._app_limit(TEMPERATURE_UPPER_LIMIT)
+        )
+
+    def _app_limit(self, fahrenheit: int) -> float:
+        """Return one of the app's °F limits in this thermostat's scale."""
+        if self.temperature_unit == UnitOfTemperature.FAHRENHEIT:
+            return fahrenheit
+        return TemperatureConverter.convert(
+            fahrenheit, UnitOfTemperature.FAHRENHEIT, self.temperature_unit
         )
 
     @property
