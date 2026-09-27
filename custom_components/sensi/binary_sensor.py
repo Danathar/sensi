@@ -10,7 +10,6 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import MAX_CONSECUTIVE_CONNECTION_FAILURES
 from .coordinator import SensiConfigEntry, SensiDevice
 from .entity import SensiDescriptionEntity
 
@@ -65,7 +64,4 @@ class OnlineBinarySensorEntity(SensiDescriptionEntity, BinarySensorEntity):
         """Return if the data is available."""
 
         # The super class checks device online status so we check update failures on the coordinator
-        return (
-            self.coordinator.consecutive_connection_failures
-            <= MAX_CONSECUTIVE_CONNECTION_FAILURES
-        )
+        return self._updates_ok
