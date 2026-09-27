@@ -493,7 +493,13 @@ class TestSensiAuxHeatSwitch:
                 mock_coordinator.client, "async_set_operating_mode"
             ) as mock_async_set_operating_mode,
         ):
-            mock_async_set_operating_mode.return_value = ActionResponse(None, {})
+            # Record the mode on success, as the real client does, so the
+            # switch sees AUX when it is turned off.
+            async def set_operating_mode(device, mode):
+                device.state.operating_mode = mode
+                return ActionResponse(None, {})
+
+            mock_async_set_operating_mode.side_effect = set_operating_mode
             initial_operating_mode = mock_device.state.operating_mode
 
             expected_calls = [
@@ -508,6 +514,78 @@ class TestSensiAuxHeatSwitch:
 
             assert mock_async_write_ha_state.call_count == 2
             assert mock_async_update_listeners.call_count == 2
+
+
+class TestAuxHeatRestoreMode:
+    """The aux heating switch restores the mode in use just before AUX."""
+
+    @staticmethod
+    async def _run(switch, mock_coordinator, steps) -> list[OperatingMode]:
+        """Run the steps and return the modes sent to the thermostat."""
+
+        sent: list[OperatingMode] = []
+
+        async def set_operating_mode(device, mode):
+            sent.append(mode)
+            device.state.operating_mode = mode
+            return ActionResponse(None, {})
+
+        with (
+            patch.object(switch, "async_write_ha_state"),
+            patch.object(mock_coordinator, "async_update_listeners"),
+            patch.object(
+                mock_coordinator.client, "async_set_operating_mode", set_operating_mode
+            ),
+        ):
+            for step in steps:
+                await step()
+        return sent
+
+    @staticmethod
+    def _change_mode(switch, mock_device, mode: OperatingMode) -> None:
+        """Change the mode outside the switch and notify it like the coordinator."""
+
+        mock_device.state.operating_mode = mode
+        with patch.object(switch, "async_write_ha_state"):
+            switch._handle_coordinator_update()  # noqa: SLF001
+
+    async def test_turn_off_when_already_off_sends_nothing(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """Turning off a switch that is already off must not change the mode."""
+
+        mock_device.state.operating_mode = OperatingMode.COOL
+        switch = SensiAuxHeatSwitch(hass, mock_device, mock_coordinator.config_entry)
+        self._change_mode(switch, mock_device, OperatingMode.HEAT)
+        assert switch.is_on is False
+
+        assert await self._run(switch, mock_coordinator, [switch.async_turn_off]) == []
+        assert mock_device.state.operating_mode == OperatingMode.HEAT
+
+    async def test_turn_off_restores_mode_seen_before_aux(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """AUX set outside HA restores the mode before AUX, not the one at creation."""
+
+        mock_device.state.operating_mode = OperatingMode.COOL
+        switch = SensiAuxHeatSwitch(hass, mock_device, mock_coordinator.config_entry)
+        self._change_mode(switch, mock_device, OperatingMode.HEAT)
+        self._change_mode(switch, mock_device, OperatingMode.AUX)
+
+        sent = await self._run(switch, mock_coordinator, [switch.async_turn_off])
+        assert sent == [OperatingMode.HEAT]
+
+    async def test_turn_on_twice_keeps_mode_before_aux(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """A second turn_on while already in AUX must not forget the earlier mode."""
+
+        mock_device.state.operating_mode = OperatingMode.AUTO
+        switch = SensiAuxHeatSwitch(hass, mock_device, mock_coordinator.config_entry)
+        steps = [switch.async_turn_on, switch.async_turn_on, switch.async_turn_off]
+
+        sent = await self._run(switch, mock_coordinator, steps)
+        assert sent == [OperatingMode.AUX, OperatingMode.AUTO]
 
 
 class TestSensiFanSupportSwitch:
