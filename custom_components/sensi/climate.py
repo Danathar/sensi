@@ -260,9 +260,13 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         if operating_mode == OperatingMode.OFF:
             return HVACAction.OFF
 
-        # Treat Aux as Heating
+        # Aux is heating only while there is demand: the Aux sample above has
+        # 'aux': 100, the HP1 state=aux sample below has all demand at 0.
         if operating_mode == OperatingMode.AUX:
-            return HVACAction.HEATING
+            demand_status = self._state.demand_status
+            if demand_status.aux > 0 or demand_status.heat > 0:
+                return HVACAction.HEATING
+            return HVACAction.IDLE
 
         # https://sensi.copeland.com/en-us/support/how-do-i-configure-my-thermostat
         # HP1 = heat pump
