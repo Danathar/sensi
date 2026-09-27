@@ -482,6 +482,100 @@ async def test_a_refresh_does_not_wait_out_state_delivered_inside_connect(
             pytest.fail("the refresh waited for state that had already arrived")
 
 
+async def test_a_refresh_waits_for_a_setter_whose_ack_is_in_flight(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """The 30-second reconnect does not drop the ack of a setter it overtakes.
+
+    python-socketio drops pending ack callbacks on disconnect. A refresh tick
+    landing between a setter's emit and its ack tore the socket down, and the
+    setter timed out with "Future not done" although the thermostat had
+    accepted the command - the new value went unshown, and a ``mode: single``
+    automation stopped at that step.
+    """
+    client = sensi_entry.runtime_data.client
+    socket = sensi_backend.sockets[-1]
+    original_emit = socket.emit
+    setter_emitted = asyncio.Event()
+
+    async def emit_with_slow_ack(name, data=None, namespace=None, callback=None):
+        if name != "set_temperature":
+            await original_emit(name, data, namespace, callback)
+            return
+        sensi_backend.emitted.append((name, data))
+        ack = sensi_backend.ack_for(name, data)
+
+        async def late_ack() -> None:
+            # The backend's round trip before it acknowledges.
+            await asyncio.sleep(0.2)
+            if socket.connected:
+                callback(*ack)
+
+        sensi_backend.schedule(late_ack())
+        setter_emitted.set()
+
+    socket.emit = emit_with_slow_ack
+    connections_before = len(sensi_backend.connections)
+
+    with (
+        patch("custom_components.sensi.client.SET_EVENT_TIMEOUT", 1),
+        patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 1),
+    ):
+        call = hass.async_create_task(
+            hass.services.async_call(
+                CLIMATE_DOMAIN,
+                SERVICE_SET_TEMPERATURE,
+                {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 72},
+                blocking=True,
+            )
+        )
+        await asyncio.wait_for(setter_emitted.wait(), 3)
+
+        # The tick lands while the setter's ack is still on its way.
+        await client.async_update_devices()
+        await call
+
+    # Emitted once and acknowledged, and the refresh still reconnected.
+    assert sensi_backend.emitted_names().count("set_temperature") == 1
+    assert len(sensi_backend.connections) == connections_before + 1
+
+
+async def test_a_refresh_does_not_wait_for_a_setter_still_queued(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A setter that never reached the wire is carried by the new connection.
+
+    The refresh waits only for acks a disconnect would drop. A setter queued
+    while the socket is down has none on the wire, and the reconnect is what
+    gets it there - waiting for its ack first would only let it time out.
+    """
+    client = sensi_entry.runtime_data.client
+    sensi_backend.sockets[-1].connected = False
+
+    with patch("custom_components.sensi.client.SET_EVENT_TIMEOUT", 3):
+        call = hass.async_create_task(
+            hass.services.async_call(
+                CLIMATE_DOMAIN,
+                SERVICE_SET_TEMPERATURE,
+                {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 71},
+                blocking=True,
+            )
+        )
+        async with asyncio.timeout(1):
+            while client._event_queue.empty():
+                await asyncio.sleep(0.01)
+
+        # Well inside the setter's timeout: the refresh must not wait it out.
+        await asyncio.wait_for(client.async_update_devices(), 2)
+        await call
+
+    assert sensi_backend.last_emitted("set_temperature")["target_temp"] == 71
+
+
 async def test_entities_go_unavailable_after_repeated_failed_refreshes(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
