@@ -509,6 +509,35 @@ class TestSensiAuxHeatSwitch:
             assert mock_async_write_ha_state.call_count == 2
             assert mock_async_update_listeners.call_count == 2
 
+    async def test_aux_heat_switch_turns_off_after_dict_mode_ack(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """Aux heating can be turned off after a dict-shaped operating mode ack.
+
+        Only the transport is patched, so the mode the client stores from
+        `{"mode": "cool"}` is the one the switch later restores.
+        """
+
+        mock_device.capabilities.operating_mode_settings.aux = True
+        mock_device.state.operating_mode = OperatingMode.HEAT
+        switch = SensiAuxHeatSwitch(hass, mock_device, mock_coordinator.config_entry)
+        client = mock_coordinator.client
+
+        with (
+            patch.object(switch, "async_write_ha_state"),
+            patch.object(mock_coordinator, "async_update_listeners"),
+            patch.object(client, "_async_invoke_setter") as mock_invoke_setter,
+        ):
+            mock_invoke_setter.return_value = ActionResponse(None, {"mode": "cool"})
+            await client.async_set_operating_mode(mock_device, OperatingMode.COOL)
+
+            mock_invoke_setter.return_value = ActionResponse(None, "accepted")
+            await switch.async_turn_on()
+            await switch.async_turn_off()
+
+        assert mock_device.state.operating_mode == OperatingMode.COOL
+        assert mock_invoke_setter.call_args.args[1]["value"] == "cool"
+
 
 class TestSensiFanSupportSwitch:
     """Test cases for SensiFanSupportSwitch."""

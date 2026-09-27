@@ -474,7 +474,13 @@ class SensiClient:
         if response:
             try:
                 parsed_response = SetOperatingModeEventSuccess(**response)
-                device.state.operating_mode = parsed_response.mode
+                # The ack carries the mode as a plain string. Store an
+                # OperatingMode, as State parsing does, because callers read
+                # `.value` from it. The backend accepted the request, so a mode
+                # the enum does not know falls back to the one asked for.
+                device.state.operating_mode = (
+                    try_parse_enum(OperatingMode, parsed_response.mode) or value
+                )
                 return ActionResponse(None, None)
             except ValueError, TypeError:
                 return ActionResponse(f"Failed to parse `{response}`", None)

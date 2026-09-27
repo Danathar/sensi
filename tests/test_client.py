@@ -825,6 +825,39 @@ class TestSetters:
                 assert mock_device.state.operating_mode == OperatingMode.HEAT
 
     @pytest.mark.parametrize(
+        ("ack_mode", "expected"),
+        [
+            ("cool", OperatingMode.COOL),
+            # A mode the enum does not know: the backend still accepted the
+            # request, so fall back to the mode that was asked for.
+            ("not_a_mode", OperatingMode.HEAT),
+        ],
+    )
+    async def test_async_set_operating_mode_dict_ack_stores_enum(
+        self, mock_device, mock_coordinator, ack_mode, expected
+    ) -> None:
+        """A dict-shaped ack stores an OperatingMode, never the raw string.
+
+        The aux heating switch later calls `.value` on the stored mode, so a
+        plain `str` here makes turning aux heating off raise AttributeError.
+        """
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(
+                None, {"mode": ack_mode}
+            )
+
+            response = await mock_coordinator.client.async_set_operating_mode(
+                mock_device, OperatingMode.HEAT
+            )
+
+            assert response.error is None
+            assert type(mock_device.state.operating_mode) is OperatingMode
+            assert mock_device.state.operating_mode == expected
+
+    @pytest.mark.parametrize(
         ("value", "should_succeed"),
         [(0, True), (5, True), (-5, True)],
     )
