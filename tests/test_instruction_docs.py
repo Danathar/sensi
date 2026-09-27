@@ -297,10 +297,15 @@ def _github_anchor(heading: str) -> str:
 def _heading_anchors(doc: Path) -> set[str]:
     """Return every anchor `doc` has, headings in fenced code blocks excluded.
 
-    A repeated heading gets `-1`, `-2`, ... appended, as GitHub does.
+    Duplicates are resolved the way github-slugger does: a heading whose
+    anchor is already taken gets `-1`, `-2`, ... appended, counting per base
+    text, and the candidate is retried until it collides with nothing that
+    was assigned before it. So `## Foo`, `## Foo`, `## Foo-1` yield `foo`,
+    `foo-1`, `foo-1-1` -- the third cannot take `foo-1`, which the second
+    already holds.
     """
-    anchors: set[str] = set()
-    seen: dict[str, int] = {}
+    # anchor already assigned -> how many suffixes have been tried for it as a base
+    assigned: dict[str, int] = {}
     fence: str | None = None
     for line in _read(doc).splitlines():
         marker = _FENCE.match(line)
@@ -315,17 +320,21 @@ def _heading_anchors(doc: Path) -> set[str]:
         if not heading:
             continue
         base = _github_anchor(heading.group(1))
-        count = seen.get(base, 0)
-        seen[base] = count + 1
-        anchors.add(base if count == 0 else f"{base}-{count}")
-    return anchors
+        anchor = base
+        while anchor in assigned:
+            assigned[base] += 1
+            anchor = f"{base}-{assigned[base]}"
+        assigned[anchor] = 0
+    return set(assigned)
 
 
 def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
     """Pin the slug rules the fragment test below depends on.
 
     The live docs exercise the character rules, but none has a repeated
-    heading or a `#` inside a code block, so those two are checked here.
+    heading or a `#` inside a code block, so those are checked here, along
+    with the collision github-slugger resolves by retrying: `Twice-1` after
+    two `Twice` headings cannot take `twice-1`, so it becomes `twice-1-1`.
     """
     doc = tmp_path / "doc.md"
     doc.write_text(
@@ -337,6 +346,7 @@ def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
         "```\n"
         "## Twice\n"
         "## Twice\n"
+        "## Twice-1\n"
         "~~~\n"
         "## also not a heading\n"
         "~~~\n"
@@ -349,6 +359,7 @@ def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
         "see-the-rubric",
         "twice",
         "twice-1",
+        "twice-1-1",
     }
 
 
