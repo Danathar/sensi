@@ -88,13 +88,13 @@ def test_writes_badge_and_appends_trend(tmp_path):
     ]
 
 
-def _run(tmp_path, percent, sha, trend):
+def _run(tmp_path, percent, sha, trend, date="2026-09-05"):
     """Invoke the script once against the given trend file."""
     return coverage_badge.main(
         [
             percent,
             "--date",
-            "2026-09-05",
+            date,
             "--sha",
             sha,
             "--badge-out",
@@ -105,7 +105,13 @@ def _run(tmp_path, percent, sha, trend):
     )
 
 
-def test_rerunning_the_same_commit_replaces_rather_than_appends(tmp_path):
+def _badge_message(tmp_path):
+    """Return the message the last written badge carries."""
+    badge = tmp_path / "coverage-unit.json"
+    return json.loads(badge.read_text(encoding="utf-8"))["message"]
+
+
+def test_rerunning_the_same_commit_changes_nothing(tmp_path):
     """A workflow re-run publishes the same SHA twice; that is one row, not two.
 
     If it appended, the trend file would always differ and the publish job's
@@ -125,29 +131,53 @@ def test_rerunning_the_same_commit_replaces_rather_than_appends(tmp_path):
     ]
 
 
-def test_rerun_with_a_changed_number_corrects_the_row_in_place(tmp_path):
-    """A re-run that measures differently corrects the row, not duplicates it."""
+def test_rerunning_a_commit_on_a_later_day_keeps_its_original_row(tmp_path):
+    """The row records when the commit was first measured, not the re-run date.
+
+    Rewriting the date would change the file, so a re-run would push a commit
+    that records nothing new.
+    """
+    trend = tmp_path / "coverage-trend.csv"
+    _run(tmp_path, "99.95", "aaaaaaaa", trend, date="2026-09-08")
+    before = trend.read_bytes()
+
+    _run(tmp_path, "99.95", "aaaaaaaa", trend, date="2026-09-09")
+
+    assert trend.read_bytes() == before
+
+
+def test_rerunning_a_commit_with_a_different_number_keeps_the_first(tmp_path):
+    """A commit already in the history is not re-measured by a re-run.
+
+    The row and the badge both keep what was first published for it.
+    """
     trend = tmp_path / "coverage-trend.csv"
     _run(tmp_path, "97.84", "aaaaaaaa", trend)
     _run(tmp_path, "98.25", "aaaaaaaa", trend)
 
     assert trend.read_text(encoding="utf-8").splitlines() == [
-        "2026-09-05,aaaaaaaa,98.25"
+        "2026-09-05,aaaaaaaa,97.84"
     ]
+    assert _badge_message(tmp_path) == "97.8%"
 
 
-def test_an_earlier_sha_recurring_still_appends(tmp_path):
-    """Only the *last* row is replaced - history further back is never rewritten."""
+def test_rerunning_an_older_commit_does_not_rewrite_history_or_the_badge(tmp_path):
+    """Re-running `aaa` after `bbb` published leaves `bbb` as the latest.
+
+    Appending a second `aaa` row would record one commit twice, and writing
+    its badge would show an older number than the newest row.
+    """
     trend = tmp_path / "coverage-trend.csv"
-    _run(tmp_path, "97.00", "aaaaaaaa", trend)
-    _run(tmp_path, "98.00", "bbbbbbbb", trend)
-    _run(tmp_path, "97.50", "aaaaaaaa", trend)
+    _run(tmp_path, "99.95", "aaaaaaaa", trend)
+    _run(tmp_path, "98.50", "bbbbbbbb", trend)
+
+    _run(tmp_path, "99.95", "aaaaaaaa", trend, date="2026-09-06")
 
     assert trend.read_text(encoding="utf-8").splitlines() == [
-        "2026-09-05,aaaaaaaa,97.00",
-        "2026-09-05,bbbbbbbb,98.00",
-        "2026-09-05,aaaaaaaa,97.50",
+        "2026-09-05,aaaaaaaa,99.95",
+        "2026-09-05,bbbbbbbb,98.50",
     ]
+    assert _badge_message(tmp_path) == "98.5%"
 
 
 def test_creates_the_trend_file_when_it_does_not_exist(tmp_path):

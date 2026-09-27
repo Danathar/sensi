@@ -9,9 +9,14 @@ on:
 permissions:
   contents: read
 
+# A newer commit on a pull request cancels the superseded run; nothing
+# publishes from one. Anything else - above all a push to master - runs to
+# completion, because every master commit owes the trend a row (#333). Those
+# runs get a group per commit: runs sharing a group keep one pending slot, so
+# a third push would cancel the second while it waited.
 concurrency:
-  group: coverage-gate-${{ github.ref }}
-  cancel-in-progress: true
+  group: coverage-gate-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Line coverage of custom_components/sensi must not fall below this.
@@ -108,10 +113,13 @@ jobs:
     permissions:
       contents: write
     # Serialised, and deliberately not cancel-in-progress: two pushes landing
-    # together must append two trend rows, not race and drop one.
+    # together must append two trend rows, not race and drop one. `queue:
+    # max` keeps every waiting publish; the default keeps one and cancels the
+    # rest.
     concurrency:
       group: coverage-data
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
