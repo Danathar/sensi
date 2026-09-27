@@ -293,6 +293,31 @@ async def test_coordinator_refresh_reconnects_and_picks_up_new_state(
     assert after.attributes["current_humidity"] == 33
 
 
+async def test_a_refresh_does_not_wait_out_state_delivered_inside_connect(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A ``state`` event that lands inside ``connect()`` ends the refresh wait.
+
+    The real library dispatches events from its read loop while ``connect()``
+    is still waiting to be woken, so the ``state`` pushes right behind the
+    handshake can reach the client before ``connect()`` returns. The refresh
+    created its per-device waiters only afterwards. That state resolved
+    nothing, and every such refresh sat out PREPARE_DEVICES_TIMEOUT - 20
+    seconds late, stretching the 30-second poll to about 50.
+    """
+    client = sensi_entry.runtime_data.client
+    sensi_backend.state_before_connect_returns = True
+
+    # A timeout far above the bound below, so waiting it out fails the test.
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 30):
+        try:
+            await asyncio.wait_for(client.async_update_devices(), 2)
+        except TimeoutError:
+            pytest.fail("the refresh waited for state that had already arrived")
+
+
 async def test_entities_go_unavailable_after_repeated_failed_refreshes(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
