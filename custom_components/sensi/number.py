@@ -209,8 +209,10 @@ class SensiNumberEntity(SensiDescriptionEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the setting."""
+        # number.set_value checks only min and max, so an automation can send
+        # a fraction; round it rather than truncating toward zero (-2.7 -> -3).
         response = await self.entity_description.update_fn(
-            self.coordinator.client, self._device, int(value)
+            self.coordinator.client, self._device, round(value)
         )
         # The display name lives in translations now, so the key names the
         # setting in the error: "Unable to set temperature offset to 6".
