@@ -1,5 +1,6 @@
 """Tests for Sensi config flow."""
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -12,6 +13,7 @@ from custom_components.sensi.auth import (
     AuthenticationConfig,
     AuthenticationError,
     SensiConnectionError,
+    get_stored_config,
 )
 from custom_components.sensi.config_flow import (
     AUTH_DATA_SCHEMA,
@@ -20,7 +22,7 @@ from custom_components.sensi.config_flow import (
 )
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN, SENSI_NAME
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 STRINGS_FILES = (
@@ -849,6 +851,97 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
         assert result["reason"] == "single_instance_allowed"
         mock_validate.assert_not_called()
         mock_save.assert_not_called()
+
+    async def test_an_entry_added_mid_validation_blocks_the_save(
+        self, hass: HomeAssistant
+    ):
+        """A form opened before the only entry existed must not commit (#325).
+
+        single_config_entry only stops the form opening. A flow whose form was
+        already open when another flow created the entry still reaches the
+        save, and the store is shared, so it would overwrite that entry's
+        credentials with another account's.
+        """
+        result = await hass.config_entries.flow.async_init(
+            SENSI_DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={CONFIG_REFRESH_TOKEN: "a_rotated"},
+            unique_id="user123",
+            title=SENSI_NAME,
+        ).add_to_hass(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_B,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_b"}
+            )
+
+        assert result2["type"] == FlowResultType.ABORT
+        assert result2["reason"] == "single_instance_allowed"
+        # The same reason and domain Home Assistant uses for this abort, so
+        # the user sees its translated message rather than a bare key.
+        assert result2["translation_domain"] == HOMEASSISTANT_DOMAIN
+        mock_save.assert_not_called()
+
+    async def test_a_flow_aborted_mid_validation_leaves_the_store_alone(
+        self, hass: HomeAssistant, hass_storage
+    ):
+        """Two add-integration dialogs submitted together (#325).
+
+        Flow A creates the only allowed entry while flow B is still waiting
+        on its token exchange. Home Assistant aborts B, but B's step resumes
+        afterwards; it must not write B's tokens over A's.
+        """
+        user = {"source": config_entries.SOURCE_USER}
+        flow_a = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
+        flow_b = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
+        b_answered = asyncio.Event()
+
+        async def validate(_hass, token):
+            if token == "typed_b":
+                await b_answered.wait()  # token round-trip still in flight
+                return self._VALIDATED_B
+            return self._VALIDATED_A
+
+        with (
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+            patch("custom_components.sensi.async_unload_entry", return_value=True),
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                side_effect=validate,
+            ),
+        ):
+            task_b = hass.async_create_task(
+                hass.config_entries.flow.async_configure(
+                    flow_b["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_b"}
+                )
+            )
+            await asyncio.sleep(0)
+            result_a = await hass.config_entries.flow.async_configure(
+                flow_a["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_a"}
+            )
+            assert result_a["type"] == FlowResultType.CREATE_ENTRY
+            assert flow_b["flow_id"] not in {
+                flow["flow_id"] for flow in hass.config_entries.flow.async_progress()
+            }
+            b_answered.set()
+            # Held rather than raised, so the store is checked first.
+            (result_b,) = await asyncio.gather(task_b, return_exceptions=True)
+            (entry,) = hass.config_entries.async_entries(SENSI_DOMAIN)
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert entry.unique_id == "user123"
+        assert hass_storage[SENSI_DOMAIN]["data"]["user_id"] == "user123"
+        assert (await get_stored_config(hass, entry.unique_id)) == self._VALIDATED_A
+        assert result_b["type"] == FlowResultType.ABORT
+        assert result_b["reason"] == "single_instance_allowed"
 
 
 @pytest.mark.parametrize("path", STRINGS_FILES, ids=lambda p: p.name)
