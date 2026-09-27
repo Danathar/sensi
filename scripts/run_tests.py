@@ -11,14 +11,15 @@ repository, which leaves nothing in the diff for a reviewer to see.
 This wrapper forwards to pytest with three rules. Every target it is given
 must resolve inside `tests/`, and conftest discovery is pinned to the repository
 so nothing above it is imported either. The options that load code by a route
-the target check cannot see (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are
-refused. And the options that create, truncate or delete a path of their own
-(`--junitxml`, `--log-file`, `--basetemp` and the rest of `REFUSED_WRITE`,
-`--cov-config`, and the `--cov-report` destination forms such as `xml:DEST`)
-are refused too, because an option's path is not a target and does not have
-to be inside the repository. Before any of that, an argument starting with `@`
-is refused: pytest replaces it with the lines of the file it names, so every
-argument in that file would reach pytest without passing the three rules.
+the target check cannot see (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`,
+`--tx`, `--px`) are refused. And the options that create, truncate or delete a
+path of their own (`--junitxml`, `--log-file`, `--basetemp` and the rest of
+`REFUSED_WRITE`, `--cov-config`, and the `--cov-report` destination forms such
+as `xml:DEST`) are refused too, because an option's path is not a target and
+does not have to be inside the repository. Before any of that, an argument
+starting with `@` is refused: pytest replaces it with the lines of the file it
+names, so every argument in that file would reach pytest without passing the
+three rules.
 Running agent-written code is still possible, because that is what a test
 suite is. The point is that the code has to be a file in the tree, where
 `git status` shows it and review reaches it.
@@ -40,10 +41,28 @@ TESTS = ROOT / "tests"
 # from - `--confcutdir=/` reaches a conftest in any ancestor of the repository.
 # None of them names a path the target check below would see.
 #
+# `--tx` is not pytest's own; it is pytest-xdist's, and pytest-xdist arrives
+# as a pinned dependency of pytest-homeassistant-custom-component, so it is
+# always installed when the suite runs. `--tx` names the gateway a distributed
+# worker runs under, and `--tx popen//python=PROG` makes that worker's
+# interpreter PROG - any program on disk - which pytest-xdist then executes
+# once distributed mode is on (`-d`, `--dist`). `python3 scripts/run_tests.py
+# -d --tx popen//python=PROG tests` therefore runs PROG with no path on the
+# command line the target check could see and no permission prompt. The value
+# is not a path this check inspects, so the option itself has to be refused;
+# refusing it leaves the default gateway, which runs this same interpreter.
+#
+# `--px` is the same option under another name. It adds a proxy gateway, and
+# pytest-xdist makes every proxy gateway the moment it sets up distribution -
+# before any worker, whether or not a `--tx` ever names it with `via=`. So
+# `--px id=p//popen//python=PROG` runs PROG too, and it does not need `--tx` to
+# turn distribution on: `-n 1` does that by itself. `python3 scripts/run_tests.py
+# -n 1 --px id=p//popen//python=PROG tests` ran PROG and then the suite, exit 0.
+#
 # Keep this list short and keep the reason with each entry. An option that
 # reaches code and is not here is a bug in the list, not in the target check.
 REFUSED_LONG = frozenset(
-    {"--pyargs", "--config-file", "--override-ini", "--confcutdir"}
+    {"--pyargs", "--config-file", "--override-ini", "--confcutdir", "--tx", "--px"}
 )
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
 
