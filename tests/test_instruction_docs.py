@@ -19,7 +19,8 @@ This module is the join. Each test takes a claim the prose makes and checks it
 against the artefact that actually decides it: `coverage-gate.yml` for the
 coverage gate, `ruff.toml` for the line length, `ci.yml` for the interpreter,
 `.github/rulesets/master.json` for the required checks, the committed tree for
-every path and symbol named, and `release.yml` for how a version is chosen.
+every path and symbol named, the linked document's headings for every
+`#anchor`, and `release.yml` for how a version is chosen.
 
 `.claude/checkpoint.md` is here for the same reason with one twist: it states
 *current state*, and a state file is read before anything else, so a wrong
@@ -241,21 +242,160 @@ def test_pyproject_is_gitignored_as_four_instruction_files_claim() -> None:
         )
 
 
-_MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+# A markdown link, including the `[![badge](image)](target)` form README's
+# badge row uses. Without the image alternative the outer link's target is
+# never captured, and the badges that point at a heading go unchecked.
+_MARKDOWN_LINK = re.compile(r"\[(?:!\[[^\]]*\]\([^)\s]*\)|[^\]]*)\]\(([^)\s]+)\)")
+
+
+def _local_link_targets(doc: Path) -> list[str]:
+    """Return every link target in `doc` that points into this tree.
+
+    External links are left out: nothing here can check them. A same-document
+    `#anchor` is kept, because its heading is in this tree.
+    """
+    return [
+        match.group(1)
+        for match in _MARKDOWN_LINK.finditer(_read(doc))
+        if not match.group(1).startswith(("http://", "https://", "mailto:"))
+    ]
 
 
 @pytest.mark.parametrize("doc", _PROSE_FILES, ids=_rel)
 def test_relative_markdown_links_resolve(doc: Path) -> None:
     """A moved document must not leave a dead link in the instructions."""
-    targets = [
-        match.group(1)
-        for match in _MARKDOWN_LINK.finditer(_read(doc))
-        if not match.group(1).startswith(("http://", "https://", "mailto:", "#"))
-    ]
     broken = sorted(
-        target for target in targets if not (doc.parent / target.split("#")[0]).exists()
+        target
+        for target in _local_link_targets(doc)
+        if not target.startswith("#")
+        and not (doc.parent / target.split("#")[0]).exists()
     )
     assert not broken, f"{_rel(doc)} links to missing paths: {broken}"
+
+
+# A fenced code block opens and closes on a run of three or more backticks or
+# tildes. A `#` inside one is a shell comment, not a heading.
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
+# `[text](url)` renders as `text`, and only the rendered text is slugged.
+_INLINE_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# What GitHub keeps of a heading: letters, digits, `_`, `-` and spaces.
+_NOT_ANCHOR_CHAR = re.compile(r"[^\w\- ]")
+
+
+def _github_anchor(heading: str) -> str:
+    """Return the anchor GitHub generates for one heading's text.
+
+    Lower-case, everything but letters, digits, `_`, `-` and spaces dropped,
+    spaces to hyphens.
+    So ``Coming from `iprak/sensi` `` becomes `coming-from-ipraksensi`.
+    """
+    text = _INLINE_LINK.sub(r"\1", heading)
+    return _NOT_ANCHOR_CHAR.sub("", text.lower()).replace(" ", "-")
+
+
+def _heading_anchors(doc: Path) -> set[str]:
+    """Return every anchor `doc` has, headings in fenced code blocks excluded.
+
+    Duplicates are resolved the way github-slugger does: a heading whose
+    anchor is already taken gets `-1`, `-2`, ... appended, counting per base
+    text, and the candidate is retried until it collides with nothing that
+    was assigned before it. So `## Foo`, `## Foo`, `## Foo-1` yield `foo`,
+    `foo-1`, `foo-1-1` -- the third cannot take `foo-1`, which the second
+    already holds.
+    """
+    # anchor already assigned -> how many suffixes have been tried for it as a base
+    assigned: dict[str, int] = {}
+    fence: str | None = None
+    for line in _read(doc).splitlines():
+        marker = _FENCE.match(line)
+        if fence is not None:
+            if marker and marker.group(1).startswith(fence):
+                fence = None
+            continue
+        if marker:
+            fence = marker.group(1)
+            continue
+        heading = _ATX_HEADING.match(line)
+        if not heading:
+            continue
+        base = _github_anchor(heading.group(1))
+        anchor = base
+        while anchor in assigned:
+            assigned[base] += 1
+            anchor = f"{base}-{assigned[base]}"
+        assigned[anchor] = 0
+    return set(assigned)
+
+
+def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
+    """Pin the slug rules the fragment test below depends on.
+
+    The live docs exercise the character rules, but none has a repeated
+    heading or a `#` inside a code block, so those are checked here, along
+    with the collision github-slugger resolves by retrying: `Twice-1` after
+    two `Twice` headings cannot take `twice-1`, so it becomes `twice-1-1`.
+    """
+    doc = tmp_path / "doc.md"
+    doc.write_text(
+        "# Coming from `iprak/sensi`\n"
+        "## Maintained with Hive (ACMM L5) ##\n"
+        "## See [the rubric](docs/review-rubric.md)\n"
+        "```bash\n"
+        "# not a heading\n"
+        "```\n"
+        "## Twice\n"
+        "## Twice\n"
+        "## Twice-1\n"
+        "~~~\n"
+        "## also not a heading\n"
+        "~~~\n"
+        "#no space, not a heading\n",
+        encoding="utf-8",
+    )
+    assert _heading_anchors(doc) == {
+        "coming-from-ipraksensi",
+        "maintained-with-hive-acmm-l5",
+        "see-the-rubric",
+        "twice",
+        "twice-1",
+        "twice-1-1",
+    }
+
+
+def test_the_fragment_link_scan_finds_both_link_shapes() -> None:
+    """Guard the scan below: a regex that stops matching passes every file."""
+    fragments = [
+        target
+        for doc in _PROSE_FILES
+        for target in _local_link_targets(doc)
+        if "#" in target
+    ]
+    assert len(fragments) >= 12
+    assert any(target.startswith("#") for target in fragments), "no same-document link"
+    assert any(not target.startswith("#") for target in fragments), (
+        "no cross-document link"
+    )
+
+
+@pytest.mark.parametrize("doc", _PROSE_FILES, ids=_rel)
+def test_markdown_fragment_links_name_a_heading(doc: Path) -> None:
+    """A renamed heading must not leave a `#anchor` that scrolls nowhere.
+
+    GitHub renders a link to a missing anchor exactly like a live one, so
+    nothing else notices. The file half of a link is
+    `test_relative_markdown_links_resolve`'s job; a target that does not exist
+    is skipped here rather than reported twice.
+    """
+    dead = []
+    for target in _local_link_targets(doc):
+        path, _, fragment = target.partition("#")
+        target_doc = doc.parent / path if path else doc
+        if not fragment or not target_doc.exists():
+            continue
+        if fragment not in _heading_anchors(target_doc):
+            dead.append(target)
+    assert not dead, f"{_rel(doc)} links to headings that do not exist: {sorted(dead)}"
 
 
 # --------------------------------------------------------------------------
