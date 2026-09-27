@@ -11,12 +11,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.enum import try_parse_enum
 
 from .capabilities import Capabilities
-from .const import (
-    DEFAULT_MIN_HUMIDITY,
-    LOGGER,
-    TEMPERATURE_LOWER_LIMIT,
-    TEMPERATURE_UPPER_LIMIT,
-)
+from .const import DEFAULT_MIN_HUMIDITY, LOGGER
 from .utils import redact_identifier, to_bool, to_dict, to_float, to_int
 
 # Refresh the access token this many seconds before its real expiry so the
@@ -257,7 +252,10 @@ class State:
         self.battery_voltage = to_float(data.get("battery_voltage"), None)
         self.circulating_fan = CirculatingFan(data.get("circulating_fan", {}))
         self.continuous_backlight = to_bool(data.get("continuous_backlight"))
-        self.cool_min_temp = to_int(data.get("cool_min_temp"), TEMPERATURE_LOWER_LIMIT)
+        # No default: the app's fallback limits are in °F, and this value is in
+        # the thermostat's own scale. The climate entity converts the fallback
+        # into temperature_unit when the thermostat does not report one.
+        self.cool_min_temp = to_int(data.get("cool_min_temp"), None)
         self.current_cool_temp = to_int(data.get("current_cool_temp"), None)
         self.current_heat_temp = to_int(data.get("current_heat_temp"), None)
 
@@ -273,7 +271,8 @@ class State:
         self.display_temp = to_float(data.get("display_temp"), None)
         self.display_time = to_bool(data.get("display_time"))
         self.fan_mode = try_parse_enum(FanMode, data.get("fan_mode")) or FanMode.UNKNOWN
-        self.heat_max_temp = to_int(data.get("heat_max_temp"), TEMPERATURE_UPPER_LIMIT)
+        # No default, for the same reason as cool_min_temp.
+        self.heat_max_temp = to_int(data.get("heat_max_temp"), None)
         self.humidity = to_int(data.get("humidity"), None)
         self.humidity_control = HumidityControl(data.get("humidity_control", {}))
         self.humidity_offset = to_int(data.get("humidity_offset"), 0)

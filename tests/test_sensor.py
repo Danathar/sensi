@@ -366,6 +366,20 @@ class TestSensorTypes:
         assert heat_max.device_class == SensorDeviceClass.TEMPERATURE
         assert heat_max.entity_registry_enabled_default is False
 
+    @pytest.mark.parametrize("key", ["cool_min_temp", "heat_max_temp"])
+    def test_setpoint_limit_sensor_is_unknown_when_not_reported(self, mock_json, key):
+        """An unreported limit reads unknown, not the app's °F fallback.
+
+        The sensor's unit is the thermostat's scale, so 45 or 99 would be
+        wrong on a Celsius thermostat.
+        """
+        mock_json["state"]["display_scale"] = "c"
+        mock_json["state"][key] = None
+        _have_state, device = SensiDevice.create(mock_json)
+        limit = next(s for s in SENSOR_TYPES if s.key == key)
+
+        assert limit.value_fn(device) is None
+
     def test_sensors_with_icons(self):
         """Test sensors that have icons defined."""
         icons_expected = {

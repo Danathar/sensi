@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from socketio.exceptions import ConnectionError as SocketIOConnectionError
 
 from custom_components.sensi.client import EMIT_LOOP_DELAY
+from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
 from homeassistant.components.climate import (
     ATTR_FAN_MODE,
     ATTR_HVAC_MODE,
@@ -39,6 +40,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from .conftest import FakeSensiBackend
 
@@ -560,3 +562,52 @@ async def test_a_setter_still_in_flight_when_the_socket_returns_is_emitted(
     await hass.async_block_till_done()
 
     assert sensi_backend.last_emitted("set_temperature")["target_temp"] == 71
+
+
+async def test_a_celsius_thermostat_without_a_cool_limit_accepts_a_cooling_setpoint(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """A null cool_min_temp must not leave COOL with an empty valid range.
+
+    This sets up its own entry rather than using `sensi_entry`, because the
+    bug needs a Celsius thermostat on a metric instance. The null limit used
+    to fall back to 45 - the app's °F limit - read as 45 °C, above max_temp,
+    so Home Assistant refused every cooling setpoint.
+    """
+    hass.config.units = METRIC_SYSTEM
+    sensi_backend.devices[ICD_ID]["state"].update(
+        display_scale="c",
+        operating_mode="cool",
+        current_cool_temp=24,
+        current_heat_temp=20,
+        display_temp=23.5,
+        cool_min_temp=None,
+    )
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 25},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    emitted = sensi_backend.last_emitted("set_temperature")
+    assert emitted["mode"] == "cool"
+    assert emitted["target_temp"] == 25
+    assert emitted["scale"] == "c"
+
+    await sensi_backend.shutdown()

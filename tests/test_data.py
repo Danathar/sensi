@@ -682,6 +682,25 @@ class TestNullContainers:
         assert state.status == ""
         assert state.is_online is False
 
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"display_scale": "c", "cool_min_temp": None, "heat_max_temp": None},
+            {"display_scale": "c"},
+        ],
+        ids=["null", "missing"],
+    )
+    def test_absent_setpoint_limits_are_unknown(self, data):
+        """A null or missing limit is unknown, not a Fahrenheit number.
+
+        The old fallbacks were the app's °F limits (45 and 99). Stored as-is
+        on a Celsius thermostat, they made every cooling setpoint invalid.
+        """
+        state = State(data)
+
+        assert state.cool_min_temp is None
+        assert state.heat_max_temp is None
+
     def test_state_from_a_null_object(self):
         """A null `state` container yields defaults, not AttributeError."""
         state = State(None)
