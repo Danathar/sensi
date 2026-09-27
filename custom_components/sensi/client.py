@@ -360,7 +360,7 @@ class SensiClient:
 
         if state.operating_mode == OperatingMode.OFF:
             return ActionResponse(
-                f"Cannot set {mode} temperature whern thermostat is OFF.",
+                f"Cannot set {mode} temperature when thermostat is OFF.",
                 None,
             )
 

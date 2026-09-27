@@ -72,6 +72,72 @@ async def test_set_temperature_reaches_the_wire_and_updates_state(
     assert hass.states.get(CLIMATE).attributes["temperature"] == 72
 
 
+async def test_set_temperature_with_hvac_mode_switches_mode_first(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """hvac_mode in set_temperature changes the mode, then sets its setpoint (#315).
+
+    The sample thermostat is in HEAT. Without the switch the 70 went to the
+    heat setpoint and the thermostat stayed in HEAT.
+    """
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_HVAC_MODE: HVACMode.COOL, ATTR_TEMPERATURE: 70},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.emitted_names()[-2:] == [
+        "set_operating_mode",
+        "set_temperature",
+    ]
+    assert sensi_backend.last_emitted("set_operating_mode") == {
+        "icd_id": ICD_ID,
+        "value": "cool",
+    }
+    emitted = sensi_backend.last_emitted("set_temperature")
+    assert emitted["mode"] == "cool"
+    assert emitted["target_temp"] == 70
+
+    state = hass.states.get(CLIMATE)
+    assert state.state == HVACMode.COOL
+    assert state.attributes["temperature"] == 70
+
+
+async def test_set_temperature_with_hvac_mode_turns_an_off_thermostat_on(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """From OFF, hvac_mode heat with a temperature heats to it (#315)."""
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_HVAC_MODE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_HVAC_MODE: HVACMode.OFF},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_HVAC_MODE: HVACMode.HEAT, ATTR_TEMPERATURE: 70},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    emitted = sensi_backend.last_emitted("set_temperature")
+    assert emitted["mode"] == "heat"
+    assert emitted["target_temp"] == 70
+
+    state = hass.states.get(CLIMATE)
+    assert state.state == HVACMode.HEAT
+    assert state.attributes["temperature"] == 70
+
+
 async def test_set_hvac_mode_reaches_the_wire_and_updates_state(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
