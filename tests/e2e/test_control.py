@@ -47,6 +47,7 @@ DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
 CIRCULATING_FAN = "switch.sensi_living_room_circulating_fan"
 CIRCULATING_DUTY_CYCLE = "number.sensi_living_room_circulating_duty_cycle"
+FAN_SUPPORT = "switch.sensi_living_room_fan_support"
 ONLINE = "binary_sensor.sensi_living_room_online"
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
@@ -92,6 +93,72 @@ async def test_set_hvac_mode_reaches_the_wire_and_updates_state(
     assert emitted == {"icd_id": ICD_ID, "value": "cool"}
 
     assert hass.states.get(CLIMATE).state == HVACMode.COOL
+
+
+async def _climate_call(hass: HomeAssistant, service: str, **data) -> None:
+    """Call a climate service on the sample thermostat and let it settle."""
+    await hass.services.async_call(
+        CLIMATE_DOMAIN, service, {ATTR_ENTITY_ID: CLIMATE, **data}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+
+async def test_turn_on_keeps_the_current_mode(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """turn_on on a thermostat that is already cooling leaves it cooling (#316)."""
+    await _climate_call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+    await _climate_call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "on"})
+    sensi_backend.emitted.clear()
+
+    await _climate_call(hass, SERVICE_TURN_ON)
+
+    assert "set_operating_mode" not in sensi_backend.emitted_names()
+    assert hass.states.get(CLIMATE).state == HVACMode.COOL
+    # The fan still goes back to auto, as turn_on has always done.
+    assert sensi_backend.last_emitted("set_fan_mode") == {
+        "icd_id": ICD_ID,
+        "value": "auto",
+    }
+
+
+async def test_turn_on_restores_the_mode_it_was_turned_off_from(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """COOL, turn_off, turn_on comes back in COOL rather than HEAT (#316)."""
+    await _climate_call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+    await _climate_call(hass, SERVICE_TURN_OFF)
+    assert hass.states.get(CLIMATE).state == HVACMode.OFF
+
+    await _climate_call(hass, SERVICE_TURN_ON)
+
+    assert sensi_backend.last_emitted("set_operating_mode") == {
+        "icd_id": ICD_ID,
+        "value": "cool",
+    }
+    assert hass.states.get(CLIMATE).state == HVACMode.COOL
+
+
+async def test_turn_on_with_fan_support_off_sends_no_fan_mode(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """With the Fan support switch off, turn_on leaves the fan alone (#316)."""
+    await hass.services.async_call(
+        "switch", SERVICE_TURN_OFF, {ATTR_ENTITY_ID: FAN_SUPPORT}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(CLIMATE).attributes.get("fan_modes") is None
+    sensi_backend.emitted.clear()
+
+    await _climate_call(hass, SERVICE_TURN_ON)
+
+    assert "set_fan_mode" not in sensi_backend.emitted_names()
 
 
 async def test_switch_round_trip(

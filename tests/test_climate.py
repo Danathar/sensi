@@ -927,7 +927,7 @@ class TestSensiThermostatHumidityWithoutState:
 
 
 class TestSensiThermostatTurnOn:
-    """async_turn_on sets an operating mode and then restores the auto fan."""
+    """async_turn_on brings an OFF thermostat back and restores the auto fan."""
 
     async def test_turn_on_sets_fan_mode_to_auto(
         self, hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
@@ -949,9 +949,129 @@ class TestSensiThermostatTurnOn:
 
             await mock_thermostat.async_turn_on()
 
-            # The base class picks the hvac mode; this class owns the fan.
-            assert mock_set_operating_mode.called
+            # The sample thermostat is already heating, so its mode is left
+            # alone (#316); only the fan is reset.
+            mock_set_operating_mode.assert_not_called()
             mock_set_fan_mode.assert_called_once_with(mock_device, FanMode.AUTO.value)
+
+    @pytest.mark.parametrize(
+        ("last_mode", "expected"),
+        [
+            (OperatingMode.COOL, OperatingMode.COOL),
+            (OperatingMode.AUTO, OperatingMode.AUTO),
+            # AUX is shown as HEAT, and HEAT is what comes back.
+            (OperatingMode.AUX, OperatingMode.HEAT),
+        ],
+    )
+    async def test_turn_on_from_off_restores_the_last_mode(
+        self,
+        hass: HomeAssistant,
+        mock_device,
+        mock_coordinator,
+        last_mode,
+        expected,
+    ) -> None:
+        """An OFF thermostat comes back in the last mode it was seen in (#316)."""
+
+        mock_device.state.operating_mode = last_mode
+        thermostat = SensiThermostat(hass, mock_device, mock_coordinator.config_entry)
+        mock_device.state.operating_mode = OperatingMode.OFF
+
+        with (
+            patch.object(thermostat, "async_write_ha_state"),
+            patch.object(
+                thermostat.coordinator.client, "async_set_operating_mode"
+            ) as mock_set_operating_mode,
+            patch.object(
+                thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_operating_mode.return_value = ActionResponse(None, "")
+            mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+            await thermostat.async_turn_on()
+
+            mock_set_operating_mode.assert_called_once_with(mock_device, expected)
+
+    async def test_turn_on_from_off_falls_back_to_heat(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """A thermostat never seen on comes back in HEAT."""
+
+        mock_device.state.operating_mode = OperatingMode.OFF
+        thermostat = SensiThermostat(hass, mock_device, mock_coordinator.config_entry)
+
+        with (
+            patch.object(thermostat, "async_write_ha_state"),
+            patch.object(
+                thermostat.coordinator.client, "async_set_operating_mode"
+            ) as mock_set_operating_mode,
+            patch.object(
+                thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_operating_mode.return_value = ActionResponse(None, "")
+            mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+            await thermostat.async_turn_on()
+
+            mock_set_operating_mode.assert_called_once_with(
+                mock_device, OperatingMode.HEAT
+            )
+
+    async def test_turn_on_remembers_a_mode_seen_in_a_coordinator_update(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ) -> None:
+        """A mode changed outside Home Assistant is the one turn_on restores."""
+
+        mock_device.state.operating_mode = OperatingMode.OFF
+        thermostat = SensiThermostat(hass, mock_device, mock_coordinator.config_entry)
+
+        with (
+            patch.object(thermostat, "async_write_ha_state"),
+            patch.object(
+                thermostat.coordinator.client, "async_set_operating_mode"
+            ) as mock_set_operating_mode,
+            patch.object(
+                thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+            patch.object(mock_coordinator, "async_update_listeners"),
+        ):
+            mock_set_operating_mode.return_value = ActionResponse(None, "")
+            mock_set_fan_mode.return_value = ActionResponse(None, "")
+
+            # Cooled from the app, then turned off from the app.
+            mock_device.state.operating_mode = OperatingMode.COOL
+            thermostat._handle_coordinator_update()
+            mock_device.state.operating_mode = OperatingMode.OFF
+            thermostat._handle_coordinator_update()
+
+            await thermostat.async_turn_on()
+
+            mock_set_operating_mode.assert_called_once_with(
+                mock_device, OperatingMode.COOL
+            )
+
+    async def test_turn_on_with_fan_support_off_leaves_the_fan_alone(
+        self, hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+    ) -> None:
+        """No fan mode is written when the entry has fan support turned off."""
+
+        set_config_option(
+            hass, mock_device, mock_coordinator.config_entry, CONFIG_FAN_SUPPORT, False
+        )
+
+        with (
+            patch.object(mock_thermostat, "async_write_ha_state"),
+            patch.object(
+                mock_thermostat.coordinator.client, "async_set_fan_mode"
+            ) as mock_set_fan_mode,
+        ):
+            await mock_thermostat.async_turn_on()
+
+            mock_set_fan_mode.assert_not_called()
 
     async def test_turn_on_raises_when_the_fan_call_fails(
         self, hass: HomeAssistant, mock_thermostat, mock_coordinator
