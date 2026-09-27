@@ -136,10 +136,13 @@ supply-chain concern.
   `ruff format --check .`, and report the real numbers rather than an
   assurance. The wrapper is pytest with three rules, because it is what runs
   without a permission prompt: every target must be inside `tests/`, the
-  options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are
+  options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`, `--tx`) are
   refused, and so are the options that write or delete a path of their own
   (`--junitxml`, `--log-file`, `--basetemp`, `--cov-config`, and a
-  `--cov-report` destination such as `xml:DEST`). An argument starting with
+  `--cov-report` destination such as `xml:DEST`). `--tx` is pytest-xdist's, and
+  pytest-xdist ships as a pinned dependency of the test harness, so `--tx` would
+  otherwise let a distributed worker run any program on disk as its interpreter.
+  An argument starting with
   `@` is refused before any of the three, because pytest replaces it with
   the lines of the file it names, and none of those lines is checked. The
   full list, with the reason for each entry, is at the top of

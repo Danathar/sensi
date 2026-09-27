@@ -43,7 +43,7 @@ write form asks first. You should rarely need it: the PostToolUse hook formats
 each `.py` file as you edit it. The
 wrapper is `pytest` with three rules, because `.claude/settings.json` runs it
 without a permission prompt: every target must be inside `tests/`; the options
-that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`) are refused; and
+that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`, `--tx`) are refused; and
 so are the options that write or delete a path of their own (`--junitxml`,
 `--log-file`, `--basetemp`, `--cov-config`, and `--cov-report` with a
 destination such as `xml:DEST`). `--cov-report=term-missing`, with or without

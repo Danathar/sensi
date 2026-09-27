@@ -40,10 +40,21 @@ TESTS = ROOT / "tests"
 # from - `--confcutdir=/` reaches a conftest in any ancestor of the repository.
 # None of them names a path the target check below would see.
 #
+# `--tx` is not pytest's own; it is pytest-xdist's, and pytest-xdist arrives
+# as a pinned dependency of pytest-homeassistant-custom-component, so it is
+# always installed when the suite runs. `--tx` names the gateway a distributed
+# worker runs under, and `--tx popen//python=PROG` makes that worker's
+# interpreter PROG - any program on disk - which pytest-xdist then executes
+# once distributed mode is on (`-d`, `--dist`). `python3 scripts/run_tests.py
+# -d --tx popen//python=PROG tests` therefore runs PROG with no path on the
+# command line the target check could see and no permission prompt. The value
+# is not a path this check inspects, so the option itself has to be refused;
+# refusing it leaves the default gateway, which runs this same interpreter.
+#
 # Keep this list short and keep the reason with each entry. An option that
 # reaches code and is not here is a bug in the list, not in the target check.
 REFUSED_LONG = frozenset(
-    {"--pyargs", "--config-file", "--override-ini", "--confcutdir"}
+    {"--pyargs", "--config-file", "--override-ini", "--confcutdir", "--tx"}
 )
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
 

@@ -106,6 +106,11 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         ["-xpevil"],
         ["-xc", "/tmp/evil.ini"],
         ["-sxo", "addopts=-p evil"],
+        # pytest-xdist's `--tx popen//python=PROG` runs PROG as a distributed
+        # worker's interpreter; the value is not a path the target check sees.
+        ["--tx", "popen//python=/tmp/evil"],
+        ["--tx=popen//python=/tmp/evil"],
+        ["-d", "--tx", "popen//python=/tmp/evil", "tests"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
