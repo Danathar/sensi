@@ -143,6 +143,46 @@ def test_every_difference_is_annotated_in_sorted_order(files, capsys):
     assert annotations[1].endswith("in manifest.json only: bbb==2")
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "python-socketio==5.16.4  # CVE fix, see #113",
+        "python-socketio == 5.16.4",
+        "Python-SocketIO==5.16.4",
+        "python_socketio==5.16.4",
+        "python.socketio==5.16.4",
+    ],
+    ids=["inline comment", "spaced operator", "name case", "underscore", "dot"],
+)
+def test_an_equivalent_spelling_is_in_sync(files, capsys, line):
+    """Each of these is the manifest's pin to pip, so none of them is drift."""
+    files(["python-socketio==5.16.4"], f"# Keep in sync with manifest.json.\n{line}\n")
+
+    assert check_requirements_sync.main() == 0
+    assert "OK: 1 requirement(s) in sync" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("manifest_line", "file_line"),
+    [
+        ("python-socketio[client]==5.16.4", "python-socketio[asyncio_client]==5.16.4"),
+        ("python-socketio==5.16.4", "python-socketio==5.16.4; python_version<'3'"),
+        ("python-socketio>=5.16,<6", "python-socketio>=5.16"),
+    ],
+    ids=["extras", "marker", "specifier"],
+)
+def test_normalising_spelling_still_reports_real_drift(
+    files, capsys, manifest_line, file_line
+):
+    """Only the spelling is forgiven; a different extra, marker or range is not."""
+    files([manifest_line], f"{file_line}\n")
+
+    assert check_requirements_sync.main() == 1
+    out = capsys.readouterr().out
+    assert f"in manifest.json only: {manifest_line}" in out
+    assert f"in requirements_component.txt only: {file_line}" in out
+
+
 def test_the_shipped_files_are_in_sync():
     """The check the nightly runs, run here against the real pair.
 
