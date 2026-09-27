@@ -320,6 +320,86 @@ def test_a_widened_ref_condition_is_drift(agreed: dict) -> None:
     assert any("ref_name.include" in p for p in check_ruleset.compare(agreed, live))
 
 
+def test_a_live_ref_exclusion_of_the_default_branch_is_drift(
+    agreed: dict, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`include` still names master; an `exclude` entry takes it back out."""
+    live = _live(agreed)
+    live["conditions"]["ref_name"]["exclude"] = ["~DEFAULT_BRANCH"]
+
+    problems = check_ruleset.compare(agreed, live)
+    with patch.object(check_ruleset, "fetch_live", return_value=live):
+        exit_code = check_ruleset.main([])
+
+    assert any("ref_name.exclude" in p and "~DEFAULT_BRANCH" in p for p in problems)
+    assert exit_code == 1
+    assert "weaker than agreed" in capsys.readouterr().out
+
+
+def test_a_live_ref_exclusion_dropped_is_not_drift(agreed: dict) -> None:
+    """Excluding fewer branches than agreed protects more, not less."""
+    agreed["conditions"]["ref_name"]["exclude"] = ["refs/heads/scratch"]
+    live = _live(agreed)
+    live["conditions"]["ref_name"]["exclude"] = []
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_a_changed_target_is_drift(agreed: dict) -> None:
+    """A ruleset retargeted at tags no longer applies to any branch."""
+    problems = check_ruleset.compare(agreed, _live(agreed, target="tag"))
+
+    assert any("target" in p and "'tag'" in p for p in problems)
+
+
+def _required_status_checks(document: dict) -> list[dict]:
+    for rule in document["rules"]:
+        if rule["type"] == "required_status_checks":
+            return rule["parameters"]["required_status_checks"]
+    raise AssertionError("no required_status_checks rule")
+
+
+def test_an_unpinned_required_check_is_drift(
+    agreed: dict, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without `integration_id`, a status from any source satisfies the check."""
+    live = _live(agreed)
+    for check in _required_status_checks(live):
+        check.pop("integration_id")
+
+    problems = check_ruleset.compare(agreed, live)
+    with patch.object(check_ruleset, "fetch_live", return_value=live):
+        exit_code = check_ruleset.main([])
+
+    assert any("ruff" in p and "integration_id" in p for p in problems)
+    assert exit_code == 1
+    assert "weaker than agreed" in capsys.readouterr().out
+
+
+def test_a_required_check_repinned_to_another_app_is_drift(agreed: dict) -> None:
+    """Only the agreed app may satisfy the check, not a different one."""
+    live = _live(agreed)
+    for check in _required_status_checks(live):
+        if check["context"] == "ruff":
+            check["integration_id"] = 1
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert len(problems) == 1
+    assert "'ruff'" in problems[0]
+
+
+def test_a_live_pin_on_an_unpinned_agreed_check_is_not_drift(agreed: dict) -> None:
+    """Agreeing no source accepts any; pinning one live is stricter."""
+    for check in _required_status_checks(agreed):
+        check.pop("integration_id")
+    live = _live(agreed)
+    for check in _required_status_checks(live):
+        check["integration_id"] = 15368
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
 # --------------------------------------------------------------------------
 # End to end.
 # --------------------------------------------------------------------------
@@ -491,7 +571,7 @@ def test_fetch_live_asks_for_the_named_ruleset_by_its_id(gh) -> None:
 
     assert live == {"id": 7, "name": "protect master"}
     assert calls() == [
-        ["api", "repos/Danathar/sensi/rulesets"],
+        ["api", "--paginate", "repos/Danathar/sensi/rulesets"],
         ["api", "repos/Danathar/sensi/rulesets/7"],
     ]
 
@@ -512,7 +592,29 @@ def test_fetch_live_matches_on_name_not_on_being_first(gh) -> None:
     )
 
     assert check_ruleset.fetch_live("Danathar/sensi", "protect master") is None
-    assert calls() == [["api", "repos/Danathar/sensi/rulesets"]]
+    assert calls() == [["api", "--paginate", "repos/Danathar/sensi/rulesets"]]
+
+
+def test_fetch_live_lists_every_page_of_rulesets(gh) -> None:
+    """GitHub returns 30 rulesets a page; the agreed one can be on page two.
+
+    Reading only the first page would report a protected branch as having no
+    ruleset at all.
+    """
+    set_replies, calls = gh
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": json.dumps(
+                    [{"id": i, "name": f"other {i}"} for i in range(30)]
+                )
+            }
+        }
+    )
+
+    check_ruleset.fetch_live("Danathar/sensi", "protect master")
+
+    assert "--paginate" in calls()[0]
 
 
 def test_fetch_live_takes_the_repository_it_is_given(gh) -> None:
@@ -521,7 +623,7 @@ def test_fetch_live_takes_the_repository_it_is_given(gh) -> None:
     set_replies({"repos/other/fork/rulesets": {"stdout": "[]"}})
 
     assert check_ruleset.fetch_live("other/fork", "protect master") is None
-    assert calls() == [["api", "repos/other/fork/rulesets"]]
+    assert calls() == [["api", "--paginate", "repos/other/fork/rulesets"]]
 
 
 def test_an_empty_listing_is_no_ruleset_rather_than_a_crash(gh) -> None:
@@ -608,7 +710,7 @@ def test_online_mode_runs_end_to_end_against_a_live_ruleset(
     assert exit_code == 0
     assert "matches the committed definition" in capsys.readouterr().out
     assert calls() == [
-        ["api", "repos/Danathar/sensi/rulesets"],
+        ["api", "--paginate", "repos/Danathar/sensi/rulesets"],
         ["api", "repos/Danathar/sensi/rulesets/42"],
     ]
 
@@ -640,7 +742,7 @@ def test_repo_reaches_the_api_call(agreed: dict, gh) -> None:
     set_replies({"repos/someone/sensi/rulesets": {"stdout": "[]"}})
 
     assert check_ruleset.main(["--repo", "someone/sensi"]) == 1
-    assert calls() == [["api", "repos/someone/sensi/rulesets"]]
+    assert calls() == [["api", "--paginate", "repos/someone/sensi/rulesets"]]
 
 
 # --------------------------------------------------------------------------

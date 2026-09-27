@@ -9,10 +9,11 @@ does not.
 It is deliberately asymmetric. Extra rules are fine, and so is a parameter set
 stricter than agreed -- somebody tightening the branch is not drift worth
 failing on. What it fails on is *weakening*: a bypass actor that was not
-agreed, enforcement switched off, a rule removed, a required check dropped, or
-a parameter relaxed below what was agreed. Those are the changes that quietly
-return the branch to the state issue #109 was opened about, and none of them
-shows up in a diff.
+agreed, enforcement switched off, the target or an excluded ref changed so the
+rule stops covering master, a rule removed, a required check dropped or no
+longer pinned to the app agreed to report it, or a parameter relaxed below
+what was agreed. Those are the changes that quietly return the branch to the
+state issue #109 was opened about, and none of them shows up in a diff.
 
 Two modes:
 
@@ -143,20 +144,32 @@ def _rule(document: dict, rule_type: str) -> dict | None:
     return None
 
 
-def _required_checks(document: dict) -> set[str]:
+def _required_status_checks(document: dict) -> list[dict]:
     rule = _rule(document, "required_status_checks")
     if rule is None:
-        return set()
-    return {
-        check.get("context")
-        for check in rule.get("parameters", {}).get("required_status_checks", [])
-    }
+        return []
+    return rule.get("parameters", {}).get("required_status_checks", [])
+
+
+def _required_checks(document: dict) -> set[str]:
+    return {check.get("context") for check in _required_status_checks(document)}
+
+
+def _required_check_sources(document: dict) -> dict[str, set[int | None]]:
+    """Map each required check's context to the apps allowed to satisfy it.
+
+    `None` means no `integration_id`: a status from any source will do.
+    """
+    sources: dict[str, set[int | None]] = {}
+    for check in _required_status_checks(document):
+        sources.setdefault(check.get("context"), set()).add(check.get("integration_id"))
+    return sources
 
 
 def fetch_live(repo: str, name: str) -> dict | None:
     """Return the live ruleset called `name`, or None if there is not one."""
     listing = subprocess.run(  # noqa: S603
-        ["gh", "api", f"repos/{repo}/rulesets"],
+        ["gh", "api", "--paginate", f"repos/{repo}/rulesets"],
         capture_output=True,
         text=True,
         check=False,
@@ -199,12 +212,28 @@ def compare(definition: dict, live: dict) -> list[str]:
             f"live {live.get('bypass_actors')}"
         )
 
-    live_include = live.get("conditions", {}).get("ref_name", {}).get("include")
+    if live.get("target") != definition["target"]:
+        problems.append(
+            f"target is {live.get('target')!r}, not {definition['target']!r} - "
+            "the ruleset no longer applies to branches"
+        )
+
+    live_ref_name = live.get("conditions", {}).get("ref_name", {})
+    live_include = live_ref_name.get("include")
     agreed_include = definition["conditions"]["ref_name"]["include"]
     if live_include != agreed_include:
         problems.append(
             f"ref_name.include differs: agreed {agreed_include}, live {live_include}"
         )
+
+    # Excluding fewer refs than agreed protects more; excluding one that was
+    # not agreed - `~DEFAULT_BRANCH` above all - takes master back out.
+    agreed_exclude = definition["conditions"]["ref_name"].get("exclude", [])
+    extra_exclude = [
+        ref for ref in live_ref_name.get("exclude") or [] if ref not in agreed_exclude
+    ]
+    if extra_exclude:
+        problems.append(f"ref_name.exclude adds refs not agreed: {extra_exclude}")
 
     for rule in definition.get("rules", []):
         rule_type = rule["type"]
@@ -225,9 +254,24 @@ def compare(definition: dict, live: dict) -> list[str]:
                     f"{rule_type}.{key}: agreed {agreed!r}, live {actual!r}"
                 )
 
-    missing_checks = _required_checks(definition) - _required_checks(live)
+    live_sources = _required_check_sources(live)
+    missing_checks = set(_required_check_sources(definition)) - set(live_sources)
     if missing_checks:
         problems.append(f"required checks no longer required: {sorted(missing_checks)}")
+
+    # A check pinned to an app can only be satisfied by that app. Unpinned or
+    # pinned to another app, a status from someone else passes it. An agreed
+    # check with no pin accepts any source, so a live pin is only stricter.
+    for context, agreed_ids in sorted(_required_check_sources(definition).items()):
+        live_ids = live_sources.get(context)
+        if live_ids is None or None in agreed_ids:
+            continue
+        loose = sorted(live_ids - agreed_ids, key=str)
+        if loose:
+            problems.append(
+                f"required check {context!r}: agreed integration_id "
+                f"{sorted(agreed_ids)}, live also accepts {loose}"
+            )
 
     return problems
 
