@@ -111,6 +111,11 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         ["--tx", "popen//python=/tmp/evil"],
         ["--tx=popen//python=/tmp/evil"],
         ["-d", "--tx", "popen//python=/tmp/evil", "tests"],
+        # `--px` adds a proxy gateway, which pytest-xdist makes before any
+        # worker and whether or not a `--tx` names it; `-n 1` turns
+        # distribution on without `--tx`, so this ran PROG and then the suite.
+        ["-n", "1", "--px", "id=p//popen//python=/tmp/evil", "tests"],
+        ["--px=id=p//popen//python=/tmp/evil"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
