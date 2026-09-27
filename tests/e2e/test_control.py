@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from socketio.exceptions import ConnectionError as SocketIOConnectionError
 
 from custom_components.sensi.client import EMIT_LOOP_DELAY
 from homeassistant.components.climate import (
@@ -44,6 +45,7 @@ DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
 CIRCULATING_FAN = "switch.sensi_living_room_circulating_fan"
 CIRCULATING_DUTY_CYCLE = "number.sensi_living_room_circulating_duty_cycle"
+ONLINE = "binary_sensor.sensi_living_room_online"
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
 
@@ -289,6 +291,43 @@ async def test_coordinator_refresh_reconnects_and_picks_up_new_state(
     # The climate entity reports whole degrees (PRECISION_WHOLE).
     assert after.attributes["current_temperature"] == 61
     assert after.attributes["current_humidity"] == 33
+
+
+async def test_entities_go_unavailable_after_repeated_failed_refreshes(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """Two failed refreshes in a row reach the state machine as unavailable.
+
+    One failure is tolerated (MAX_CONSECUTIVE_CONNECTION_FAILURES); the
+    second makes SensiEntity.available False. Home Assistant's coordinator
+    notifies listeners only on the failure that flips last_update_success,
+    so before the coordinator notified again on the second one, no state
+    was written after it and the climate entity kept showing its last
+    values as current for as long as the outage lasted.
+    """
+    coordinator = sensi_entry.runtime_data
+    sensi_backend.connect_error = SocketIOConnectionError("Sensi is down")
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(CLIMATE).state != STATE_UNAVAILABLE
+
+    for _ in range(2):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        assert hass.states.get(CLIMATE).state == STATE_UNAVAILABLE
+        assert hass.states.get(ONLINE).state == STATE_UNAVAILABLE
+
+    # The first refresh that works brings them back.
+    sensi_backend.connect_error = None
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.consecutive_connection_failures == 0
+    assert hass.states.get(CLIMATE).state != STATE_UNAVAILABLE
+    assert hass.states.get(ONLINE).state == STATE_ON
 
 
 async def test_a_setter_that_timed_out_is_not_replayed_on_reconnect(

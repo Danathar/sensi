@@ -9,7 +9,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .auth import AuthenticationError, SensiConnectionError
 from .client import SensiClient
-from .const import COORDINATOR_UPDATE_INTERVAL, LOGGER
+from .const import (
+    COORDINATOR_UPDATE_INTERVAL,
+    LOGGER,
+    MAX_CONSECUTIVE_CONNECTION_FAILURES,
+)
 from .data import SensiDevice
 
 type SensiConfigEntry = ConfigEntry[SensiUpdateCoordinator]
@@ -44,6 +48,18 @@ class SensiUpdateCoordinator(DataUpdateCoordinator):
                     "Failed to connect to Sensi API, consecutive failed count: %d",
                     self._consecutive_failed_count,
                 )
+                # SensiEntity.available goes False once the count passes
+                # MAX_CONSECUTIVE_CONNECTION_FAILURES, but Home Assistant only
+                # notifies listeners on the failure that flips
+                # last_update_success - the first one, while the entities are
+                # still available. Nothing wrote their state again after that,
+                # so they showed the last values for the whole outage. Notify
+                # once more on the failure that makes them unavailable.
+                if (
+                    self._consecutive_failed_count
+                    == MAX_CONSECUTIVE_CONNECTION_FAILURES + 1
+                ):
+                    self.async_update_listeners()
                 raise UpdateFailed(str(err)) from err
 
         super().__init__(
