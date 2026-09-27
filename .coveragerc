@@ -21,6 +21,11 @@ source = custom_components/sensi
 branch = true
 
 [report]
+# Digits after the point that the reported total - and `--cov-fail-under`'s
+# comparison - is rounded to. Unset, it is 0, and a 92.6% total rounds to 93
+# and passes a 93% gate while every report of it reads 92.6 (#332). The
+# coverage-gate Summarise step and scripts/auto_qa_tuner.py read it from here.
+precision = 2
 show_missing = true
 skip_covered = false
 exclude_also =

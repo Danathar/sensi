@@ -26,6 +26,7 @@ exactly once in a repository's life, and the "nothing changed" path that
 decides whether a push happens at all.
 """
 
+import configparser
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,7 @@ import shutil
 import subprocess
 import sys
 
+from coverage.results import should_fail_under
 import pytest
 import yaml
 
@@ -184,12 +186,27 @@ def _git(repo: Path, *arguments: str) -> str:
     ).stdout
 
 
-def _write_coverage_xml(repo: Path, line_rate: str | None) -> None:
-    """Write a coverage.xml carrying `line_rate`, or none at all."""
+def _write_coverage_xml(
+    repo: Path,
+    lines: tuple[int, int] | None,
+    branches: tuple[int, int] = (0, 0),
+) -> None:
+    """Write a coverage.xml with `(covered, valid)` counts, or none at all.
 
-    attribute = "" if line_rate is None else f' line-rate="{line_rate}"'
+    The attributes are the ones coverage.py's Cobertura report writes,
+    `line-rate` included, so a step reading the line rate instead of the
+    combined total the gate enforces reports a different number.
+    """
+
+    attributes = ""
+    if lines is not None:
+        attributes = (
+            f' lines-valid="{lines[1]}" lines-covered="{lines[0]}"'
+            f' line-rate="{lines[0] / lines[1]:.4f}"'
+            f' branches-valid="{branches[1]}" branches-covered="{branches[0]}"'
+        )
     (repo / "coverage.xml").write_text(
-        f'<?xml version="1.0" ?>\n<coverage{attribute} version="7.0">\n'
+        f'<?xml version="1.0" ?>\n<coverage{attributes} version="7.0">\n'
         "  <packages/>\n</coverage>\n",
         encoding="utf-8",
     )
@@ -251,6 +268,8 @@ def repo_fixture(tmp_path: Path) -> Path:
     scripts = repo / "scripts"
     scripts.mkdir()
     shutil.copy(_ROOT / "scripts" / "coverage_badge.py", scripts / "coverage_badge.py")
+    # Summarise reads the gate's rounding precision from here, as the gate does.
+    shutil.copy(_ROOT / ".coveragerc", repo / ".coveragerc")
     (repo / "README.md").write_text("readme\n", encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "initial")
@@ -297,13 +316,13 @@ def _summarise(repo: Path, stubs: Path, **env: str) -> StepResult:
 def test_summarise_reports_a_pass_above_the_threshold(repo: Path, stubs: Path) -> None:
     """The percentage, the threshold and the verdict all reach the summary."""
 
-    _write_coverage_xml(repo, "0.9812")
+    _write_coverage_xml(repo, (9812, 10000))
 
     result = _summarise(repo, stubs)
 
     assert result.returncode == 0, result.stderr
     assert "### Coverage PASS" in result.summary
-    assert "- Line coverage: **98.12%**" in result.summary
+    assert "- Coverage (lines + branches): **98.12%**" in result.summary
     assert "- Threshold: **93%**" in result.summary
 
 
@@ -316,7 +335,7 @@ def test_summarise_hands_the_percentage_to_the_publish_job(
     summary displayed.
     """
 
-    _write_coverage_xml(repo, "0.9812")
+    _write_coverage_xml(repo, (9812, 10000))
 
     result = _summarise(repo, stubs)
 
@@ -328,12 +347,12 @@ def test_summarise_reports_a_failure_below_the_threshold(
 ) -> None:
     """A number under MIN_COVERAGE is called FAIL, and still published."""
 
-    _write_coverage_xml(repo, "0.9")
+    _write_coverage_xml(repo, (90, 100))
 
     result = _summarise(repo, stubs)
 
     assert "### Coverage FAIL" in result.summary
-    assert "- Line coverage: **90.00%**" in result.summary
+    assert "- Coverage (lines + branches): **90.00%**" in result.summary
     assert result.outputs == {"percent": "90.00"}
 
 
@@ -344,7 +363,7 @@ def test_summarise_calls_exactly_the_threshold_a_pass(repo: Path, stubs: Path) -
     contradict the step that actually failed or did not fail the job.
     """
 
-    _write_coverage_xml(repo, "0.93")
+    _write_coverage_xml(repo, (93, 100))
 
     result = _summarise(repo, stubs)
 
@@ -352,12 +371,83 @@ def test_summarise_calls_exactly_the_threshold_a_pass(repo: Path, stubs: Path) -
     assert result.outputs == {"percent": "93.00"}
 
 
+def test_summarise_reports_the_combined_total_the_gate_enforces(
+    repo: Path, stubs: Path
+) -> None:
+    """Every line ran but half the branches did not: the gate fails.
+
+    `.coveragerc` sets `branch = true`, so `--cov-fail-under` compares lines
+    and branches together. A summary that read `line-rate` would call this
+    100% and PASS on a run whose gate step had just failed the job.
+    """
+
+    _write_coverage_xml(repo, (1000, 1000), branches=(100, 200))
+
+    result = _summarise(repo, stubs)
+
+    assert "### Coverage FAIL" in result.summary
+    assert "- Coverage (lines + branches): **91.67%**" in result.summary
+    assert result.outputs == {"percent": "91.67"}
+
+
+@pytest.mark.parametrize(
+    ("covered", "valid"),
+    [
+        (926, 1000),  # 92.6: passed a precision-0 gate at 93
+        (92994, 100000),
+        (92995, 100000),
+        (92996, 100000),
+        (93, 100),
+        (99999, 100000),
+        (100, 100),
+    ],
+)
+def test_summarise_agrees_with_the_gate_at_the_rounding_boundary(
+    repo: Path, stubs: Path, covered: int, valid: int
+) -> None:
+    """PASS exactly when `--cov-fail-under` passes, rounding included.
+
+    pytest-cov rounds the total to `.coveragerc`'s `precision` before
+    comparing it, so the summary has to round the same way, and to the same
+    number of places, or it calls a failed gate a pass or the other way round.
+    """
+
+    config = configparser.ConfigParser()
+    config.read(_ROOT / ".coveragerc", encoding="utf-8")
+    precision = config.getint("report", "precision", fallback=0)
+    total = 100.0 * covered / valid
+
+    for threshold in (93, 100):
+        _write_coverage_xml(repo, (covered, valid))
+        result = _summarise(repo, stubs, MIN_COVERAGE=str(threshold))
+
+        gate_passes = not should_fail_under(total, threshold, precision)
+        assert ("### Coverage PASS" in result.summary) is gate_passes, (
+            total,
+            threshold,
+            result.summary,
+        )
+
+
+def test_coverage_rounding_precision_is_explicit() -> None:
+    """The gate rounds at a stated precision, not coverage.py's default of 0.
+
+    At precision 0 a 92.6% total rounds to 93 and passes a 93% gate while
+    every report of it reads 92.6.
+    """
+
+    config = configparser.ConfigParser()
+    config.read(_ROOT / ".coveragerc", encoding="utf-8")
+
+    assert config.getint("report", "precision") == 2
+
+
 def test_summarise_reads_the_threshold_from_the_workflow_env(
     repo: Path, stubs: Path
 ) -> None:
     """MIN_COVERAGE is the threshold, not a number repeated in the heredoc."""
 
-    _write_coverage_xml(repo, "0.9812")
+    _write_coverage_xml(repo, (9812, 10000))
 
     result = _summarise(repo, stubs, MIN_COVERAGE="99")
 
@@ -381,8 +471,8 @@ def test_summarise_says_so_when_no_coverage_xml_was_produced(
     assert result.outputs == {}
 
 
-def test_summarise_treats_a_missing_line_rate_as_zero(repo: Path, stubs: Path) -> None:
-    """A coverage.xml without the attribute is a failure, not a traceback."""
+def test_summarise_treats_missing_counts_as_zero(repo: Path, stubs: Path) -> None:
+    """A coverage.xml without the counts is a failure, not a traceback."""
 
     _write_coverage_xml(repo, None)
 

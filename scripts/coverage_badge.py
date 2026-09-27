@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Turn a measured coverage percentage into durable badge and trend files.
+"""Turn the gate's coverage percentage into durable badge and trend files.
 
-The coverage number is otherwise visible only inside a single run: the job
-summary disappears into the run's history and the uploaded `coverage.xml`
-artifact expires. This script is the CI-facing half of publishing it
-somewhere durable - it writes a shields.io endpoint-badge payload and
-appends one row to a CSV trend file.
+The percentage is the one the coverage gate enforces: coverage.py's combined
+line and branch total, rounded to `.coveragerc`'s `precision`, as the
+workflow's Summarise step reports it. The number is otherwise visible only
+inside a single run: the job summary disappears into the run's history and
+the uploaded `coverage.xml` artifact expires. This script is the CI-facing
+half of publishing it somewhere durable - it writes a shields.io
+endpoint-badge payload and appends one row to a CSV trend file.
 
 It only produces the files. `.github/workflows/coverage-gate.yml` is what
 pushes them to the `coverage-data` branch, and only for a push to master.
@@ -48,7 +50,9 @@ def badge_payload(
     """Build the shields.io endpoint badge payload.
 
     One decimal rather than a rounded integer: 92.6% rendered as "93%" reads
-    as passing a 93% gate that it actually fails.
+    as passing a 93% gate that it fails - the gate rounds to `.coveragerc`'s
+    precision of 2, not to a whole number. The colour is the verdict: a
+    total within 0.05 below the gate still renders as the gate's number.
     """
     return {
         "schemaVersion": 1,

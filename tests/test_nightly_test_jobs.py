@@ -111,9 +111,12 @@ _LATEST_EXPECTED = [
     "pytest-homeassistant-custom-component==0.13.363",
 ]
 
-# A Cobertura report is a `line-rate` attribute as far as the tuner is
-# concerned; `measured_coverage` reads that and nothing else.
-_COVERAGE_XML = '<?xml version="1.0" ?>\n<coverage line-rate="{rate}"></coverage>\n'
+# A Cobertura report is its line and branch counts as far as the tuner is
+# concerned; `measured_coverage` reads those and nothing else.
+_COVERAGE_XML = (
+    '<?xml version="1.0" ?>\n<coverage lines-valid="{valid}" lines-covered="{covered}"'
+    ' branches-valid="0" branches-covered="0"></coverage>\n'
+)
 
 
 def _workflow() -> dict:
@@ -615,7 +618,7 @@ def test_the_tuner_step_proposes_from_the_report_the_test_step_wrote(
     workspace.mkdir()
     (workspace / "scripts").symlink_to(_ROOT / "scripts")
     (workspace / "coverage.xml").write_text(
-        _COVERAGE_XML.format(rate="0.9912"), encoding="utf-8"
+        _COVERAGE_XML.format(covered=9912, valid=10000), encoding="utf-8"
     )
 
     result = _run(*_PINNED_TUNER, tmp_path=tmp_path, stubs=stubs, workspace=workspace)
