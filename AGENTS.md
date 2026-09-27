@@ -48,7 +48,9 @@ are refused; and so are the options that write or delete a path of their own
 (`--junitxml`, `--log-file`, `--basetemp`, `--cov-config`, and `--cov-report`
 with a destination such as `xml:DEST`). `--cov-report=term-missing`, with or
 without `:skip-covered`, and a bare `--cov-report=xml` are forwarded; the
-report then lands where `.coveragerc` says. Bare `pytest` still takes
+report then lands where `.coveragerc` says. An argument starting with `@` is
+refused before any of the three, because pytest replaces it with the lines of
+the file it names and none of those lines is checked. Bare `pytest` still takes
 everything and asks first.
 
 ## Rules
