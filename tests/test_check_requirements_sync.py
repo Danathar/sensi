@@ -143,6 +143,71 @@ def test_every_difference_is_annotated_in_sorted_order(files, capsys):
     assert annotations[1].endswith("in manifest.json only: bbb==2")
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "python-socketio==5.16.4  # CVE fix, see #113",
+        "python-socketio == 5.16.4",
+        "Python-SocketIO==5.16.4",
+        "python_socketio==5.16.4",
+        "python.socketio==5.16.4",
+    ],
+)
+def test_an_equivalent_spelling_is_in_sync(files, capsys, line):
+    """Each of these is the manifest's pin to pip, so none is drift."""
+    files(["python-socketio==5.16.4"], f"# Keep in sync with manifest.json.\n{line}\n")
+
+    assert check_requirements_sync.main() == 0
+    assert "OK: 1 requirement(s) in sync" in capsys.readouterr().out
+
+
+def test_extras_markers_and_specifier_order_do_not_matter(files, capsys):
+    """Only whitespace and order differ, so the two lists agree."""
+    files(
+        ["aiohttp[Speedups,dev]>=3.9,<4; python_version >= '3.14'"],
+        "aiohttp [dev, speedups] < 4 , >= 3.9 ;  python_version >= '3.14'\n",
+    )
+
+    assert check_requirements_sync.main() == 0
+
+
+def test_a_different_marker_is_still_drift(files, capsys):
+    """Normalising the spelling must not hide a real difference."""
+    files(
+        ["aiohttp==3.13.2; python_version >= '3.14'"],
+        "aiohttp==3.13.2\n",
+    )
+
+    assert check_requirements_sync.main() == 1
+
+
+def test_the_drift_report_quotes_each_line_as_written(files, capsys):
+    """The annotation shows the file's own text, not the normalised form."""
+    files(["Python_SocketIO==5.16.4"], "python-socketio==5.13.0  # old\n")
+
+    assert check_requirements_sync.main() == 1
+    out = capsys.readouterr().out
+    assert "in manifest.json only: Python_SocketIO==5.16.4" in out
+    assert "in requirements_component.txt only: python-socketio==5.13.0\n" in out
+
+
+def test_a_hash_without_whitespace_before_it_is_not_a_comment(tmp_path):
+    """A URL fragment is kept: pip needs whitespace before a comment `#`."""
+    path = tmp_path / "requirements_component.txt"
+    path.write_text(
+        "pkg @ https://example.invalid/pkg.zip#sha256=ab\n", encoding="utf-8"
+    )
+
+    assert check_requirements_sync.read_requirements(path) == {
+        "pkg @ https://example.invalid/pkg.zip#sha256=ab"
+    }
+
+
+def test_an_unrecognised_line_is_compared_as_written():
+    """A line the pattern cannot parse is left alone, not guessed at."""
+    assert check_requirements_sync.canonical("  ???  ") == "???"
+
+
 def test_the_shipped_files_are_in_sync():
     """The check the nightly runs, run here against the real pair.
 
