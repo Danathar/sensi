@@ -82,6 +82,27 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         # The mobile device always uses whole numbers for C and F unit
         self._attr_target_temperature_step = PRECISION_WHOLE
 
+        # The mode turn_on restores from OFF, see _remember_hvac_mode
+        self._last_on_hvac_mode: HVACMode | None = None
+        self._remember_hvac_mode()
+
+    def _remember_hvac_mode(self) -> None:
+        """Record the current mode if the thermostat is on.
+
+        turn_on brings an OFF thermostat back in this mode. It is recorded
+        whenever the entity sees the state: at creation, on every
+        coordinator update, and just before a mode change (a state event can
+        have moved the mode since the last update).
+        """
+        hvac_mode = get_hvac_mode_from_operating_mode(self._state.operating_mode)
+        if hvac_mode not in (None, HVACMode.OFF):
+            self._last_on_hvac_mode = hvac_mode
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._remember_hvac_mode()
+        super()._handle_coordinator_update()
+
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         """Return the state attributes."""
@@ -502,6 +523,8 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         if not operating_mode:
             raise ValueError(f"Unsupported HVAC mode: {hvac_mode}")
 
+        self._remember_hvac_mode()
+
         response = await self.coordinator.client.async_set_operating_mode(
             self._device, operating_mode
         )
@@ -567,9 +590,21 @@ class SensiThermostat(SensiEntity, ClimateEntity):
     async def async_turn_on(self) -> None:
         """Turn thermostat on."""
 
-        # First call base to set the hvac mode and then set fan mode.
+        # Only an OFF thermostat changes mode, and it comes back in the mode
+        # it was last seen running in. The base class always picks HEAT when
+        # there are more than two modes, so it is only the fallback for a
+        # thermostat never seen on (or whose last mode is no longer offered).
         # async_turn_off is not implemented. Base sets OFF hvac mode.
-        await super().async_turn_on()
+        if self._state.operating_mode == OperatingMode.OFF:
+            if self._last_on_hvac_mode in self.hvac_modes:
+                await self.async_set_hvac_mode(self._last_on_hvac_mode)
+            else:
+                await super().async_turn_on()
+
+        # fan_modes is None when fan support is turned off in the entry
+        # options, and then there is no fan mode to reset.
+        if not self.fan_modes:
+            return
 
         response = await self.coordinator.client.async_set_fan_mode(
             self._device, FanMode.AUTO.value
