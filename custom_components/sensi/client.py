@@ -328,20 +328,27 @@ class SensiClient:
         LOGGER.info("Updating devices - reconnecting and updating")
         async with self._reconnect_lock:
             await self._async_disconnect()
-            await self._connect()
 
-        # Refresh does no create new devices so let us just wait for device states. We don't
-        # care the order in which state event is received. It can come before or after connected.
-        async def _wait_for_device_states() -> None:
-            tasks = [
+            # The per-device waiters are registered before connecting, for the
+            # reason wait_for_devices gives: a `state` push right behind the
+            # handshake is dispatched before connect() returns, so a waiter
+            # created afterwards misses it and the refresh sits out the whole
+            # PREPARE_DEVICES_TIMEOUT. They come after the disconnect, so a
+            # late event from the old socket cannot resolve them.
+            waiters = [
                 await self._create_event_future("state", icd_id)
                 for icd_id in self._devices
             ]
-
-            await asyncio.wait_for(asyncio.gather(*tasks), PREPARE_DEVICES_TIMEOUT)
+            try:
+                await self._connect()
+            except BaseException:
+                # Not left pending for the next state event to resolve.
+                for waiter in waiters:
+                    waiter.cancel()
+                raise
 
         with contextlib.suppress(asyncio.exceptions.TimeoutError):
-            await _wait_for_device_states()
+            await asyncio.wait_for(asyncio.gather(*waiters), PREPARE_DEVICES_TIMEOUT)
 
     async def async_set_temperature(
         self, device: SensiDevice, mode: OperatingMode, value: int

@@ -366,6 +366,49 @@ async def test_a_state_event_delivered_before_connect_returns_still_loads(
     await sensi_backend.shutdown()
 
 
+async def test_a_refresh_sees_state_delivered_before_connect_returns(
+    sensi_entry: MockConfigEntry, sensi_backend: FakeSensiBackend
+) -> None:
+    """The 30-second refresh does not wait out the timeout either.
+
+    Same race as the test above, on the reconnect ``async_update_devices``
+    makes. Its per-device waiters were created only after ``connect()``
+    returned, so the ``state`` pushes that came in with the handshake
+    resolved nothing and every refresh took the full PREPARE_DEVICES_TIMEOUT.
+    """
+    client = sensi_entry.runtime_data.client
+    sensi_backend.state_before_connect_returns = True
+
+    # A regression waits out the patched timeout and is cancelled here.
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 5):
+        async with asyncio.timeout(1):
+            await client.async_update_devices()
+
+
+async def test_a_refresh_whose_connect_fails_leaves_no_waiter_behind(
+    sensi_entry: MockConfigEntry, sensi_backend: FakeSensiBackend
+) -> None:
+    """A failed reconnect cancels the waiters it registered for the refresh."""
+    client = sensi_entry.runtime_data.client
+    waiters = []
+    create = client._create_event_future
+
+    async def recording_create(event, icd_id):
+        waiter = await create(event, icd_id)
+        waiters.append(waiter)
+        return waiter
+
+    with (
+        patch.object(client, "_create_event_future", recording_create),
+        patch.object(client, "_connect", side_effect=RuntimeError("connect failed")),
+        pytest.raises(RuntimeError, match="connect failed"),
+    ):
+        await client.async_update_devices()
+
+    assert waiters
+    assert all(waiter.cancelled() for waiter in waiters)
+
+
 async def test_temperature_offset_is_not_converted_on_a_metric_instance(
     hass: HomeAssistant,
     sensi_backend: FakeSensiBackend,
