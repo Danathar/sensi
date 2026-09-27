@@ -48,6 +48,9 @@ _STUB_MONTH = "9"
 
 _EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}")
 
+# The commit the release job runs on, as the runner's GITHUB_SHA would carry it.
+_SHA = "0123456789abcdef0123456789abcdef01234567"
+
 
 def _workflow() -> dict:
     """Return the parsed workflow."""
@@ -146,6 +149,8 @@ def _run_step(
         "GITHUB_OUTPUT": str(output_file),
         "GITHUB_STEP_SUMMARY": str(summary_file),
         "GITHUB_REF_NAME": "master",
+        "GITHUB_REPOSITORY": "Danathar/sensi",
+        "GITHUB_SHA": _SHA,
     }
     for block in (
         document.get("env") or {},
@@ -558,6 +563,106 @@ def test_the_comparison_uses_the_newest_tag_not_the_first_one(
     assert result.returncode == 0, result.stderr
     assert result.outputs["go"] == "false"
     assert "2026.9.10" in result.summary
+
+
+# --------------------------------------------------------------------------
+# "Require green checks on this commit"
+# --------------------------------------------------------------------------
+
+_GREEN = "Require green checks on this commit"
+_NIGHTLY = _ROOT / ".github" / "workflows" / "nightly.yml"
+
+
+def _jq_has_in() -> bool:
+    """Return whether the `jq` on PATH is one the step's filter runs under.
+
+    `gh api --jq` evaluates with gojq, and the runner's jq is jq 1.7; both have
+    `IN`. jaq, which some distributions install as `jq`, does not.
+    """
+
+    jq = shutil.which("jq")
+    if jq is None:
+        return False
+    probe = subprocess.run(  # noqa: S603
+        [jq, "-n", "1 | IN(1)"], capture_output=True, check=False
+    )
+    return probe.returncode == 0
+
+
+def _check_runs(tmp_path: Path, repo: Path, runs: list[dict]) -> StepResult:
+    """Run the step against a check-runs listing served by a stub `gh`.
+
+    The stub answers `gh api <path> --jq <filter>` by running the step's own
+    filter through jq over `runs`, so the filter is what is under test.
+    """
+
+    payload = tmp_path / "check-runs.json"
+    payload.write_text(json.dumps({"check_runs": runs}), encoding="utf-8")
+    bin_dir = tmp_path / "gh-bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "gh"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'[ "$1 $2 $3" = "api repos/Danathar/sensi/commits/{_SHA}/check-runs --jq" ]'
+        " || exit 2\n"
+        f'exec jq -r "$4" "{payload}"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return _run_step(_GREEN, repo, {"github.token": "stub-token"}, bin_dir)
+
+
+def _latest_leg_name() -> str:
+    """Return the check-run name nightly.yml's informational leg reports."""
+
+    return yaml.safe_load(_NIGHTLY.read_text(encoding="utf-8"))["jobs"]["latest"][
+        "name"
+    ]
+
+
+@pytest.mark.skipif(not _jq_has_in(), reason="needs a jq with IN, as gh's gojq has")
+def test_the_informational_nightly_leg_does_not_block_a_release(
+    tmp_path: Path, repo: Path
+) -> None:
+    """The advance-warning leg is `continue-on-error`; it must never gate.
+
+    Its check run still concludes `failure`, and it runs about two hours
+    before the monthly release on the same commit (#330).
+    """
+
+    result = _check_runs(
+        tmp_path,
+        repo,
+        [
+            {"name": "pinned Home Assistant", "conclusion": "success"},
+            {"name": _latest_leg_name(), "conclusion": "failure"},
+            {"name": "release", "conclusion": None, "status": "in_progress"},
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not _jq_has_in(), reason="needs a jq with IN, as gh's gojq has")
+def test_any_other_failed_check_still_blocks_a_release(
+    tmp_path: Path, repo: Path
+) -> None:
+    """Only the informational leg is excused; a real failure is still named."""
+
+    result = _check_runs(
+        tmp_path,
+        repo,
+        [
+            {"name": "ruff", "conclusion": "failure"},
+            {"name": "pinned Home Assistant", "conclusion": None, "status": "queued"},
+            {"name": _latest_leg_name(), "conclusion": "failure"},
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "ruff: failure" in result.stderr
+    assert "pinned Home Assistant: queued" in result.stderr
+    assert _latest_leg_name() not in result.stderr
 
 
 # --------------------------------------------------------------------------
