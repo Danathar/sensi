@@ -104,8 +104,13 @@ async def _get_new_tokens(hass: HomeAssistant, refresh_token: str) -> any:
         # Only a client error (e.g. 400/401/403 invalid_grant) means the refresh
         # token is genuinely bad and reauth is required. A 5xx or other
         # non-success is a transient backend failure and must be retried rather
-        # than escalated to a reauth flow.
-        if 400 <= response.status < 500:
+        # than escalated to a reauth flow. 408 and 429 are 4xx but say nothing
+        # about the token: the endpoint timed out or is throttling, so they are
+        # retried too, as Home Assistant's own OAuth2 helper does for 429.
+        if 400 <= response.status < 500 and response.status not in (
+            HTTPStatus.REQUEST_TIMEOUT,
+            HTTPStatus.TOO_MANY_REQUESTS,
+        ):
             LOGGER.warning("Refresh token rejected (HTTP %s)", response.status)
             raise AuthenticationError("Invalid token")
 
