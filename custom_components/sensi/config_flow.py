@@ -7,6 +7,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN
 from homeassistant.data_entry_flow import FlowResult
 
 from .auth import (
@@ -74,6 +75,15 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                 # Before the save: an abort here means this account is already
                 # set up, and its stored credentials must be left alone.
                 self._abort_if_unique_id_configured()
+                # A different account may have taken the only allowed entry
+                # while the token was being validated. Home Assistant aborts
+                # this flow when that happens, but only outside this step, so
+                # the shared store would still get this account's tokens.
+                if self._async_current_entries():
+                    return self.async_abort(
+                        reason="single_instance_allowed",
+                        translation_domain=HOMEASSISTANT_DOMAIN,
+                    )
 
                 await async_save_config(self.hass, result.config)
                 return self.async_create_entry(
