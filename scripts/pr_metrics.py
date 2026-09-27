@@ -92,6 +92,20 @@ def is_bot(author: dict) -> bool:
     return (author or {}).get("is_bot", False) or login.endswith("[bot]")
 
 
+def reviews_before_merge(pull: dict) -> int:
+    """Return how many reviews were submitted no later than the merge.
+
+    A review without `submittedAt` is a pending draft that was never submitted,
+    so it is not a submission and is not counted.
+    """
+    merged = parse_time(pull["mergedAt"])
+    return sum(
+        1
+        for review in pull.get("reviews") or []
+        if (submitted := parse_time(review.get("submittedAt"))) and submitted <= merged
+    )
+
+
 def summarise(pulls: list[dict], since: str | None) -> dict:
     """Reduce raw pull requests to the reported metrics."""
     if since:
@@ -119,7 +133,7 @@ def summarise(pulls: list[dict], since: str | None) -> dict:
             for p in merged
             if (hours := hours_between(p["createdAt"], p["mergedAt"])) is not None
         ]
-        reviews = [len(p.get("reviews") or []) for p in merged]
+        reviews = [reviews_before_merge(p) for p in merged]
         churn = [p.get("additions", 0) + p.get("deletions", 0) for p in merged]
 
         report["buckets"][name] = {

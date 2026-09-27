@@ -43,6 +43,10 @@ Rows are split by author: `all`, `human`, and `bot` (GitHub Apps and `[bot]`
 accounts). The split is the point — a single blended acceptance rate hides the
 thing worth knowing.
 
+A review counts toward **Median reviews** only if its `submittedAt` is at or
+before the merge; reviews left after merging, and pending reviews that were
+never submitted, are not counted.
+
 ## Reading it honestly
 
 **Acceptance rate is not a quality score.** A repository with one maintainer who

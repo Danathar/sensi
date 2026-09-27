@@ -142,7 +142,9 @@ def _pull(
         "additions": lines,
         "deletions": 0,
         "changedFiles": 1,
-        "reviews": [{"state": "APPROVED"} for _ in range(reviews)],
+        "reviews": [
+            {"state": "APPROVED", "submittedAt": created} for _ in range(reviews)
+        ],
         "comments": [],
     }
 
@@ -517,7 +519,7 @@ def test_median_hours_measures_open_to_merge_of_merged_pulls() -> None:
 
 
 def test_median_reviews_counts_submissions_on_merged_pulls() -> None:
-    """Pin "review submissions before merge": the length of the reviews list."""
+    """Pin "review submissions before merge": only reviews submitted by the merge."""
     assert _definition("Median reviews") == "review submissions before merge"
 
     bucket = _report(_MIXED)["buckets"]["all"]
