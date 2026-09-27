@@ -479,20 +479,27 @@ class TestSensiThermostatHvacModes:
 
 
 @pytest.mark.parametrize(
-    ("mode", "heat", "cool", "expected"),
+    ("mode", "heat", "cool", "aux", "expected"),
     [
-        (OperatingMode.OFF, 0, 0, HVACAction.OFF),
-        (OperatingMode.HEAT, 100, 0, HVACAction.HEATING),
-        (OperatingMode.COOL, 0, 100, HVACAction.COOLING),
-        (OperatingMode.HEAT, 0, 0, HVACAction.IDLE),
-        (OperatingMode.AUX, 0, 0, HVACAction.HEATING),
+        (OperatingMode.OFF, 0, 0, 0, HVACAction.OFF),
+        (OperatingMode.HEAT, 100, 0, 0, HVACAction.HEATING),
+        (OperatingMode.COOL, 0, 100, 0, HVACAction.COOLING),
+        (OperatingMode.HEAT, 0, 0, 0, HVACAction.IDLE),
+        # AUX is heating only while there is demand; the HP1 state=aux sample
+        # has all demand at 0 once the setpoint is met.
+        (OperatingMode.AUX, 0, 0, 0, HVACAction.IDLE),
+        (OperatingMode.AUX, 0, 0, 100, HVACAction.HEATING),
+        (OperatingMode.AUX, 100, 0, 0, HVACAction.HEATING),
     ],
 )
-def test_hvac_action(mock_device, mock_thermostat, mode, heat, cool, expected) -> None:
+def test_hvac_action(
+    mock_device, mock_thermostat, mode, heat, cool, aux, expected
+) -> None:
     """Test cases for HVAC action determination."""
     mock_device.state.operating_mode = mode
     mock_device.state.demand_status.heat = heat
     mock_device.state.demand_status.cool = cool
+    mock_device.state.demand_status.aux = aux
     assert mock_thermostat.hvac_action == expected
 
 
