@@ -16,6 +16,12 @@ from .utils import redact_token, to_int
 
 DEFAULT_TIMEOUT = 10
 
+# 4xx statuses from the token endpoint that mean "try again later" rather than
+# "this refresh token is bad".
+TRANSIENT_CLIENT_ERRORS: Final = frozenset(
+    {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS}
+)
+
 # Defined in CreateRefreshParams.java
 OAUTH_URL: Final = "https://oauth.sensiapi.io/token?device={}"
 CLIENT_SECRET: Final = "XBF?Z9U6;x3bUwe^FugbL=4ksvGjLnCQ"
@@ -104,8 +110,13 @@ async def _get_new_tokens(hass: HomeAssistant, refresh_token: str) -> any:
         # Only a client error (e.g. 400/401/403 invalid_grant) means the refresh
         # token is genuinely bad and reauth is required. A 5xx or other
         # non-success is a transient backend failure and must be retried rather
-        # than escalated to a reauth flow.
-        if 400 <= response.status < 500:
+        # than escalated to a reauth flow. 408 and 429 are 4xx codes that say
+        # "not now" rather than "not this token", so they are transient too,
+        # as Home Assistant's own OAuth2 helper treats them.
+        if (
+            400 <= response.status < 500
+            and response.status not in TRANSIENT_CLIENT_ERRORS
+        ):
             LOGGER.warning("Refresh token rejected (HTTP %s)", response.status)
             raise AuthenticationError("Invalid token")
 

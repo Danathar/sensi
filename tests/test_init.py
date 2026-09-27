@@ -8,11 +8,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.sensi import SUPPORTED_PLATFORMS, async_unload_entry
 from custom_components.sensi.auth import (
     KEY_USER_ID,
+    OAUTH_URL2,
     AuthenticationError,
     SensiConnectionError,
 )
 from custom_components.sensi.const import SENSI_DOMAIN
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
@@ -559,3 +560,36 @@ async def test_unload_without_a_coordinator_still_unloads_the_platforms(
         assert await async_unload_entry(hass, mock_entry) is True
 
     mock_unload_platforms.assert_awaited_once_with(mock_entry, SUPPORTED_PLATFORMS)
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize("status", [408, 429, 503])
+async def test_try_again_later_from_the_token_endpoint_retries_setup(
+    hass: HomeAssistant, hass_storage, aioclient_mock, status: int
+) -> None:
+    """A rate limit or timeout at setup retries; it does not ask for a new token."""
+
+    hass_storage[SENSI_DOMAIN] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": SENSI_DOMAIN,
+        "data": {
+            "refresh_token": "still_valid",
+            "access_token": "old_access",
+            "expires_at": 1,  # expired, so setup refreshes before connecting
+            "user_id": "user-a",
+        },
+    }
+    entry = MockConfigEntry(domain=SENSI_DOMAIN, unique_id="user-a", data={})
+    entry.add_to_hass(hass)
+    aioclient_mock.post(OAUTH_URL2, status=status)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert not [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"]["source"] == SOURCE_REAUTH
+    ]

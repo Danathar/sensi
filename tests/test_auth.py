@@ -180,6 +180,42 @@ async def test_refresh_access_token_auth_failure(
         await refresh_access_token(hass, refresh_token)
 
 
+@pytest.mark.parametrize("status", [408, 429])
+async def test_refresh_access_token_try_again_later_is_transient(
+    hass: HomeAssistant, mock_auth_data, aioclient_mock, status: int
+) -> None:
+    """408 and 429 say "not now", not "bad token", so they are not reauth."""
+
+    aioclient_mock.post(OAUTH_URL2, status=status)
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        pytest.raises(SensiConnectionError, match=f"status {status}"),
+    ):
+        await refresh_access_token(hass, "refresh_token_123")
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 499])
+async def test_refresh_access_token_other_client_errors_still_need_reauth(
+    hass: HomeAssistant, mock_auth_data, aioclient_mock, status: int
+) -> None:
+    """Only the two try-again-later codes are exempt from reauth."""
+
+    aioclient_mock.post(OAUTH_URL2, status=status)
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        pytest.raises(AuthenticationError),
+    ):
+        await refresh_access_token(hass, "refresh_token_123")
+
+
 async def test_refresh_access_token_server_error_is_transient(
     hass: HomeAssistant, mock_auth_data, aioclient_mock
 ) -> None:
