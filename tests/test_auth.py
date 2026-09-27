@@ -198,6 +198,30 @@ async def test_refresh_access_token_server_error_is_transient(
         await refresh_access_token(hass, refresh_token)
 
 
+@pytest.mark.parametrize("status", [408, 429])
+async def test_refresh_access_token_throttle_or_timeout_is_transient(
+    hass: HomeAssistant, mock_auth_data, aioclient_mock, status: int
+) -> None:
+    """A 408 or 429 is the endpoint asking for a later retry, not a bad token.
+
+    Both are 4xx, but neither says anything about the refresh token. Raising
+    AuthenticationError for them would send a user with a working token to
+    reauth.
+    """
+
+    refresh_token = "refresh_token_123"
+    aioclient_mock.post(OAUTH_URL2, status=status)
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        pytest.raises(SensiConnectionError),
+    ):
+        await refresh_access_token(hass, refresh_token)
+
+
 async def test_refresh_access_token_timeout(
     hass: HomeAssistant, mock_auth_data, aioclient_mock
 ) -> None:

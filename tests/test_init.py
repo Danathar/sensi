@@ -8,6 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.sensi import SUPPORTED_PLATFORMS, async_unload_entry
 from custom_components.sensi.auth import (
     KEY_USER_ID,
+    OAUTH_URL2,
     AuthenticationError,
     SensiConnectionError,
 )
@@ -148,6 +149,35 @@ async def test_init_connection_failure_retries_without_reauth(
     ):
         mock_wait_for_devices.side_effect = error
 
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.SETUP_RETRY
+    mock_start_reauth.assert_not_called()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize("status", [408, 429, 503])
+async def test_init_transient_token_endpoint_status_retries_without_reauth(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data, aioclient_mock, status
+) -> None:
+    """A throttled or timed-out token refresh at setup is a retry, not reauth.
+
+    The stored access token has expired, so setup refreshes it first. 408 and
+    429 are 4xx, but they say the endpoint is busy, not that the refresh token
+    is bad. They must land where a 503 does.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    aioclient_mock.post(OAUTH_URL2, status=status)
+
+    with (
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+        patch(REAUTH_TARGET) as mock_start_reauth,
+    ):
         assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
         await hass.async_block_till_done()
 
