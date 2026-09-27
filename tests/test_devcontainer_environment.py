@@ -351,6 +351,36 @@ def test_the_published_port_reaches_home_assistants_listener() -> None:
     )
 
 
+def test_the_post_create_command_leaves_the_integration_where_hass_looks(
+    tmp_path: Path,
+) -> None:
+    """`hass -c config` finds custom integrations under `config/custom_components`.
+
+    The pinned image's `setup.sh` runs `ln -s custom_components
+    config/custom_components`. A relative target resolves from the link's own
+    directory, so that link points at itself and Home Assistant finds no
+    custom integrations. Whatever `postCreateCommand` runs after `setup.sh` has
+    to leave the link resolving to the repository's `custom_components`.
+    """
+    steps = [step.strip() for step in _devcontainer()["postCreateCommand"].split("&&")]
+    setup = next(
+        index for index, step in enumerate(steps) if step.endswith("/setup.sh")
+    )
+    (tmp_path / "custom_components" / "sensi").mkdir(parents=True)
+    (tmp_path / "config").mkdir()
+    # The state setup.sh leaves behind: a link whose target is itself.
+    (tmp_path / "config" / "custom_components").symlink_to("custom_components")
+
+    for step in steps[setup + 1 :]:
+        subprocess.run(["sh", "-c", step], cwd=tmp_path, check=True)  # noqa: S603, S607
+
+    assert (tmp_path / "config" / "custom_components" / "sensi").is_dir(), (
+        "after postCreateCommand, config/custom_components does not resolve to "
+        "the repository's custom_components; `hass -c config` would find no "
+        "custom integrations"
+    )
+
+
 # --------------------------------------------------------------------------
 # devcontainer.json - what a contributor's editor is told to do
 # --------------------------------------------------------------------------
