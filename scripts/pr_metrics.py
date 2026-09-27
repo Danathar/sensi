@@ -12,7 +12,7 @@ No third-party packages, no network code of its own.
 
     python3 scripts/pr_metrics.py                    # default: last 50 merged/closed
     python3 scripts/pr_metrics.py --limit 200
-    python3 scripts/pr_metrics.py --since 2026-01-01
+    python3 scripts/pr_metrics.py --since 2026-01-01 # every PR opened since then
     python3 scripts/pr_metrics.py --json
 """
 
@@ -40,6 +40,11 @@ FIELDS = [
     "comments",
 ]
 
+# `--limit` when none is given. With `--since` the window, not a count, is the
+# scope, so the fetch asks for as many as GitHub's search will return (1000).
+DEFAULT_LIMIT = 50
+SINCE_LIMIT = 1000
+
 
 def die(message: str) -> None:
     """Print an error and exit non-zero."""
@@ -47,8 +52,12 @@ def die(message: str) -> None:
     raise SystemExit(1)
 
 
-def fetch(limit: int, repo: str | None) -> list[dict]:
-    """Return closed pull requests as dictionaries, newest first."""
+def fetch(limit: int, repo: str | None, since: str | None = None) -> list[dict]:
+    """Return closed pull requests as dictionaries, newest first.
+
+    With `since`, `gh` is asked only for pulls opened on or after that date, so
+    older pulls cannot use up the limit before the window is filled.
+    """
     if not shutil.which("gh"):
         die("the GitHub CLI (gh) is required; see https://cli.github.com/")
 
@@ -65,6 +74,8 @@ def fetch(limit: int, repo: str | None) -> list[dict]:
     ]
     if repo:
         command += ["--repo", repo]
+    if since:
+        command += ["--search", f"created:>={since}"]
 
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -175,13 +186,32 @@ def render(report: dict) -> str:
 def main() -> int:
     """Parse arguments, fetch, and print the report."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--limit", type=int, default=50, help="pull requests to fetch")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help=f"pull requests to fetch (default {DEFAULT_LIMIT}, "
+        f"or {SINCE_LIMIT} with --since)",
+    )
     parser.add_argument("--since", help="ignore pull requests opened before YYYY-MM-DD")
     parser.add_argument("--repo", help="OWNER/REPO (defaults to the current one)")
     parser.add_argument("--json", action="store_true", help="emit JSON, not Markdown")
     args = parser.parse_args()
 
-    report = summarise(fetch(args.limit, args.repo), args.since)
+    limit = args.limit
+    if limit is None:
+        limit = SINCE_LIMIT if args.since else DEFAULT_LIMIT
+
+    pulls = fetch(limit, args.repo, args.since)
+    # A full page means `gh` stopped at the limit, not at the start of the
+    # window; reporting it as "since X" would present part of the window as all.
+    if args.since and len(pulls) >= limit:
+        die(
+            f"at least {limit} pull requests were opened since {args.since}, so "
+            f"--limit {limit} cut the window short; pass a later --since"
+            + (" or a higher --limit" if limit < SINCE_LIMIT else "")
+        )
+
+    report = summarise(pulls, args.since)
 
     if not report["total_considered"]:
         print("No closed pull requests matched.")

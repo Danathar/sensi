@@ -607,8 +607,8 @@ def run_main(monkeypatch, argv, pulls):
     """Run `main()` with the given arguments over a fixed set of pulls."""
     calls = []
 
-    def fake_fetch(limit, repo):
-        calls.append((limit, repo))
+    def fake_fetch(limit, repo, since=None):
+        calls.append((limit, repo, since))
         return pulls
 
     monkeypatch.setattr(pr_metrics, "fetch", fake_fetch)
@@ -622,7 +622,7 @@ def test_main_fetches_fifty_of_the_current_repo_by_default(monkeypatch, capsys):
     capsys.readouterr()
 
     assert rc == 0
-    assert calls == [(50, None)]
+    assert calls == [(50, None, None)]
 
 
 def test_main_passes_limit_and_repo_through(monkeypatch, capsys):
@@ -633,11 +633,15 @@ def test_main_passes_limit_and_repo_through(monkeypatch, capsys):
     capsys.readouterr()
 
     assert rc == 0
-    assert calls == [(200, "Danathar/sensi")]
+    assert calls == [(200, "Danathar/sensi", None)]
 
 
-def test_main_applies_since_after_fetching(monkeypatch, capsys):
-    """`--since` filters what `gh` returned; it is not a `gh` argument."""
+def test_main_asks_for_the_since_window_and_still_filters_it(monkeypatch, capsys):
+    """`--since` reaches `gh` as the window, with the window-sized default limit.
+
+    The date filter still runs on what came back, so a pull opened before the
+    cutoff never counts even if the query returned it.
+    """
     rc, calls = run_main(
         monkeypatch,
         ["--since", "2026-01-01"],
@@ -646,7 +650,7 @@ def test_main_applies_since_after_fetching(monkeypatch, capsys):
     out = capsys.readouterr().out
 
     assert rc == 0
-    assert calls == [(50, None)]
+    assert calls == [(pr_metrics.SINCE_LIMIT, None, "2026-01-01")]
     assert out.splitlines()[0] == "Pull requests considered since 2026-01-01: 1"
 
 
@@ -691,3 +695,77 @@ def test_main_rejects_a_non_numeric_limit(monkeypatch):
         run_main(monkeypatch, ["--limit", "many"], [])
 
     assert excinfo.value.code == 2
+
+
+def fake_gh_over(monkeypatch, everything):
+    """Stand in for `gh` over a repository holding `everything`, newest first.
+
+    Honours `--limit` and a `created:>=DATE` `--search` the way `gh` does, so a
+    test sees exactly the truncation the real command would produce.
+    """
+    commands = []
+    monkeypatch.setattr(pr_metrics.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        pulls = everything
+        if "--search" in command:
+            query = command[command.index("--search") + 1]
+            assert query.startswith("created:>="), query
+            cutoff = query.removeprefix("created:>=")
+            pulls = [p for p in pulls if p["createdAt"][:10] >= cutoff]
+        limit = int(command[command.index("--limit") + 1])
+        return subprocess.CompletedProcess(command, 0, json.dumps(pulls[:limit]), "")
+
+    monkeypatch.setattr(pr_metrics.subprocess, "run", fake_run)
+    return commands
+
+
+def test_main_since_window_is_not_truncated_by_the_default_limit(monkeypatch, capsys):
+    """`--since` alone reports the whole window, not the newest 50 of it (#337)."""
+    fake_gh_over(
+        monkeypatch, [pull(n, created="2026-06-01T00:00:00Z") for n in range(60)]
+    )
+    monkeypatch.setattr("sys.argv", ["pr_metrics.py", "--since", "2026-01-01"])
+
+    assert pr_metrics.main() == 0
+    first = capsys.readouterr().out.splitlines()[0]
+    assert first == "Pull requests considered since 2026-01-01: 60"
+
+
+def test_main_since_asks_gh_for_the_window_itself(monkeypatch, capsys):
+    """Older pulls must not use up the limit before the window is filled."""
+    commands = fake_gh_over(
+        monkeypatch,
+        [pull(n, created="2026-06-01T00:00:00Z") for n in range(3)]
+        + [pull(n, created="2025-06-01T00:00:00Z") for n in range(3, 10)],
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pr_metrics.py", "--since", "2026-01-01", "--limit", "5"]
+    )
+
+    assert pr_metrics.main() == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "Pull requests considered since 2026-01-01: 3"
+    )
+    command = commands[0]
+    assert command[command.index("--search") + 1] == "created:>=2026-01-01"
+
+
+def test_main_since_refuses_a_window_the_limit_cut_short(monkeypatch, capsys):
+    """A fetch that filled `--limit` may have dropped part of the window."""
+    fake_gh_over(
+        monkeypatch, [pull(n, created="2026-06-01T00:00:00Z") for n in range(10)]
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["pr_metrics.py", "--since", "2026-01-01", "--limit", "10"]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        pr_metrics.main()
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--limit" in captured.err
+    assert "2026-01-01" in captured.err

@@ -153,7 +153,9 @@ def _run_documented(
     """Run `main()` on a documented argv and return what `fetch` was asked for."""
     captured: list[tuple[int, str | None]] = []
 
-    def fake_fetch(limit: int, repo: str | None) -> list[dict]:
+    def fake_fetch(
+        limit: int, repo: str | None, since: str | None = None
+    ) -> list[dict]:
         captured.append((limit, repo))
         return pulls
 
