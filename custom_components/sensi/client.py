@@ -302,14 +302,26 @@ class SensiClient:
         # mid-handshake is left exactly as it was, and wait() on it blocks on
         # its live engine.io transport for the whole DISCONNECT_TIMEOUT.
         # There is nothing for wait() to drain that shutdown() did not tear
-        # down itself, so skip it for a socket that was not connected. The
-        # reconnecting case is covered: shutdown() aborts and awaits the
-        # reconnect task before returning.
+        # down itself, so skip it for a socket that was not connected.
         was_connected = sio.connected
 
         # `shutdown()` awaits an in-flight reconnect task, so it is bounded too.
         with contextlib.suppress(Exception):
             await asyncio.wait_for(sio.shutdown(), DISCONNECT_TIMEOUT)
+
+        # The reconnecting case. shutdown() on a socket socket.io is
+        # reconnecting by itself only sets an abort flag, which the reconnect
+        # task checks between attempts, and then awaits that task. An attempt
+        # already inside connect() completes, so the socket can come back
+        # connected after shutdown() returns - with nothing referencing it,
+        # still pushing state events into this instance, past stop(). Shut
+        # down what the retry won; it is an established connection now, so
+        # it is drained like one.
+        if not was_connected and sio.connected:
+            was_connected = True
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(sio.shutdown(), DISCONNECT_TIMEOUT)
+
         if was_connected:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(sio.wait(), DISCONNECT_TIMEOUT)

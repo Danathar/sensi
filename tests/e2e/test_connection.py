@@ -21,7 +21,7 @@ from custom_components.sensi.data import AuthenticationConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .conftest import NOT_EXPIRED, FakeSensiBackend
+from .conftest import NOT_EXPIRED, FakeSensiBackend, FakeSensiSocket
 
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
@@ -33,6 +33,43 @@ EXPIRED_TOKEN_ERROR = {
         "type": "UnauthorizedError",
     },
 }
+
+
+class ReconnectingSocket(FakeSensiSocket):
+    """The fake socket with socket.io's own reconnect, caught mid-handshake.
+
+    When the server drops a connection, the library retries it by itself.
+    shutdown() on a socket in that state only sets an abort flag, which the
+    reconnect task checks between attempts, and then awaits that task. An
+    attempt already inside connect() therefore runs to completion, and the
+    socket is connected again by the time shutdown() returns. This fake always
+    takes that timing: its retry is mid-handshake whenever shutdown() lands.
+    """
+
+    def __init__(self, backend: FakeSensiBackend) -> None:
+        """Bind to the backend; nothing is being retried yet."""
+        super().__init__(backend)
+        self.reconnecting = False
+        self._connect_args: tuple[str, dict] | None = None
+
+    async def connect(self, url: str, **kwargs) -> None:
+        """Connect, remembering the arguments the library would retry with."""
+        self._connect_args = (url, kwargs)
+        await super().connect(url, **kwargs)
+
+    async def fire_disconnect(self, reason: str) -> None:
+        """Drop the connection and start the library's own retry."""
+        await super().fire_disconnect(reason)
+        self.reconnecting = True
+
+    async def shutdown(self) -> None:
+        """Disconnect, or wait out the retry - which completes, and connects."""
+        if self.connected:
+            await self.disconnect()
+        elif self.reconnecting:
+            self.reconnecting = False
+            url, kwargs = self._connect_args
+            await super().connect(url, **kwargs)
 
 
 @pytest.fixture
@@ -153,6 +190,41 @@ async def test_a_dropped_connection_marks_the_socket_disconnected(
     await socket.fire_disconnect("transport error")
 
     assert not socket.connected
+
+    await sensi_backend.shutdown()
+
+
+async def test_a_refresh_during_the_librarys_own_reconnect_leaves_no_socket_behind(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """The socket socket.io was reconnecting is torn down, not left connected.
+
+    After a server-side drop the library retries once on its own. A 30-second
+    refresh that lands while that retry is mid-handshake called shutdown() on
+    a socket that was not connected yet. shutdown() waited for the retry and
+    returned with the socket connected again, and nothing checked. The client
+    installed a replacement and forgot the old one: it stayed connected past
+    stop(), still pushing state events into an unloaded client.
+    """
+
+    def factory(*_args, **_kwargs) -> ReconnectingSocket:
+        socket = ReconnectingSocket(sensi_backend)
+        sensi_backend.sockets.append(socket)
+        return socket
+
+    with patch("custom_components.sensi.client.socketio.AsyncClient", factory):
+        await client._connect()
+        dropped = sensi_backend.sockets[-1]
+
+        # The server drops the transport, and socket.io starts its own retry.
+        await dropped.fire_disconnect("transport error")
+
+        # The refresh lands while that retry is mid-handshake; then unload.
+        await client.async_update_devices()
+        await client.stop()
+
+    assert not dropped.connected, "the socket socket.io reconnected was left connected"
+    assert [socket for socket in sensi_backend.sockets if socket.connected] == []
 
     await sensi_backend.shutdown()
 
