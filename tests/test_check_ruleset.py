@@ -410,6 +410,100 @@ def test_a_github_failure_is_reported_not_treated_as_clean(
 
 
 # --------------------------------------------------------------------------
+# Weakenings that leave every rule in place.
+# --------------------------------------------------------------------------
+
+
+def _pins(live: dict) -> list[dict]:
+    return next(
+        rule["parameters"]["required_status_checks"]
+        for rule in live["rules"]
+        if rule["type"] == "required_status_checks"
+    )
+
+
+def test_excluding_the_default_branch_is_drift(agreed: dict) -> None:
+    """An exclude wins over the include, so master is no longer covered."""
+    live = _live(agreed)
+    live["conditions"]["ref_name"]["exclude"] = ["~DEFAULT_BRANCH"]
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert problems == ["ref_name.exclude gained ['~DEFAULT_BRANCH']"]
+
+
+def test_an_exclude_that_was_agreed_is_not_drift(agreed: dict) -> None:
+    """Only an exclude added live narrows the rule."""
+    agreed["conditions"]["ref_name"]["exclude"] = ["refs/heads/scratch"]
+    live = _live(agreed)
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_a_missing_exclude_list_is_not_drift(agreed: dict) -> None:
+    """GitHub may omit an empty list; no exclude cannot narrow the rule."""
+    live = _live(agreed)
+    del live["conditions"]["ref_name"]["exclude"]
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_a_ruleset_retargeted_at_tags_is_drift(agreed: dict) -> None:
+    """A tag ruleset protects no branch, whatever its conditions say."""
+    problems = check_ruleset.compare(agreed, _live(agreed, target="tag"))
+
+    assert len(problems) == 1
+    assert "target is 'tag', not 'branch'" in problems[0]
+
+
+def test_a_required_check_that_loses_its_pin_is_drift(agreed: dict) -> None:
+    """Without integration_id, a status from any source satisfies the check."""
+    live = _live(agreed)
+    _pins(live)[0].pop("integration_id")
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert problems == [
+        "required check 'pytest (Python 3.14)': agreed integration_id 15368, live None"
+    ]
+
+
+def test_a_required_check_pinned_elsewhere_is_drift(agreed: dict) -> None:
+    """Another integration's status would satisfy the check."""
+    live = _live(agreed)
+    _pins(live)[1]["integration_id"] = 1
+
+    problems = check_ruleset.compare(agreed, live)
+
+    assert problems == [
+        "required check 'line coverage >= threshold': agreed integration_id "
+        "15368, live 1"
+    ]
+
+
+def test_pinning_a_check_that_was_agreed_unpinned_is_not_drift(agreed: dict) -> None:
+    """Naming a source where none was agreed only tightens the check."""
+    _pins(agreed)[0].pop("integration_id")
+    live = _live(agreed)
+    _pins(live)[0]["integration_id"] = 15368
+
+    assert check_ruleset.compare(agreed, live) == []
+
+
+def test_main_fails_on_an_unpinned_check(
+    agreed: dict, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The online exit status reflects an unpinned check, not just compare()."""
+    live = _live(agreed)
+    for check in _pins(live):
+        check.pop("integration_id")
+
+    with patch.object(check_ruleset, "fetch_live", return_value=live):
+        assert check_ruleset.main([]) == 1
+    assert "weaker than agreed" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
 # Talking to GitHub.
 #
 # Every test above patches `fetch_live` out, so the function that actually
@@ -436,6 +530,15 @@ sys.stdout.write(reply.get("stdout", ""))
 sys.stderr.write(reply.get("stderr", ""))
 sys.exit(reply.get("code", 0))
 """
+
+
+def _listing(entries: list[dict]) -> str:
+    """Format a ruleset listing as `gh api --paginate --jq '.[]'` prints it."""
+    return "".join(json.dumps(entry) + "\n" for entry in entries)
+
+
+def _list_call(repo: str) -> list[str]:
+    return ["api", "--paginate", "--jq", ".[]", f"repos/{repo}/rulesets"]
 
 
 @pytest.fixture(name="gh")
@@ -477,7 +580,7 @@ def test_fetch_live_asks_for_the_named_ruleset_by_its_id(gh) -> None:
     set_replies(
         {
             "repos/Danathar/sensi/rulesets": {
-                "stdout": json.dumps(
+                "stdout": _listing(
                     [{"id": 7, "name": "protect master"}, {"id": 9, "name": "tags"}]
                 )
             },
@@ -491,9 +594,31 @@ def test_fetch_live_asks_for_the_named_ruleset_by_its_id(gh) -> None:
 
     assert live == {"id": 7, "name": "protect master"}
     assert calls() == [
-        ["api", "repos/Danathar/sensi/rulesets"],
+        _list_call("Danathar/sensi"),
         ["api", "repos/Danathar/sensi/rulesets/7"],
     ]
+
+
+def test_fetch_live_finds_a_ruleset_past_the_first_page(gh) -> None:
+    """GitHub pages the listing at 30; the 31st ruleset must still be found."""
+    set_replies, calls = gh
+    others = [{"id": i, "name": f"other {i}"} for i in range(30)]
+    set_replies(
+        {
+            "repos/Danathar/sensi/rulesets": {
+                "stdout": _listing([*others, {"id": 77, "name": "protect master"}])
+            },
+            "repos/Danathar/sensi/rulesets/77": {
+                "stdout": json.dumps({"id": 77, "name": "protect master"})
+            },
+        }
+    )
+
+    assert check_ruleset.fetch_live("Danathar/sensi", "protect master") == {
+        "id": 77,
+        "name": "protect master",
+    }
+    assert "--paginate" in calls()[0]
 
 
 def test_fetch_live_matches_on_name_not_on_being_first(gh) -> None:
@@ -506,22 +631,22 @@ def test_fetch_live_matches_on_name_not_on_being_first(gh) -> None:
     set_replies(
         {
             "repos/Danathar/sensi/rulesets": {
-                "stdout": json.dumps([{"id": 9, "name": "tags"}])
+                "stdout": _listing([{"id": 9, "name": "tags"}])
             }
         }
     )
 
     assert check_ruleset.fetch_live("Danathar/sensi", "protect master") is None
-    assert calls() == [["api", "repos/Danathar/sensi/rulesets"]]
+    assert calls() == [_list_call("Danathar/sensi")]
 
 
 def test_fetch_live_takes_the_repository_it_is_given(gh) -> None:
     """`--repo` has to reach the API call, or it checks the wrong repository."""
     set_replies, calls = gh
-    set_replies({"repos/other/fork/rulesets": {"stdout": "[]"}})
+    set_replies({"repos/other/fork/rulesets": {"stdout": ""}})
 
     assert check_ruleset.fetch_live("other/fork", "protect master") is None
-    assert calls() == [["api", "repos/other/fork/rulesets"]]
+    assert calls() == [_list_call("other/fork")]
 
 
 def test_an_empty_listing_is_no_ruleset_rather_than_a_crash(gh) -> None:
@@ -574,7 +699,7 @@ def test_a_failed_detail_read_is_raised_not_silently_skipped(gh) -> None:
     set_replies(
         {
             "repos/Danathar/sensi/rulesets": {
-                "stdout": json.dumps([{"id": 7, "name": "protect master"}])
+                "stdout": _listing([{"id": 7, "name": "protect master"}])
             },
             "repos/Danathar/sensi/rulesets/7": {"code": 1, "stderr": "gh: HTTP 403\n"},
         }
@@ -597,7 +722,7 @@ def test_online_mode_runs_end_to_end_against_a_live_ruleset(
     set_replies(
         {
             "repos/Danathar/sensi/rulesets": {
-                "stdout": json.dumps([{"id": 42, "name": agreed["name"]}])
+                "stdout": _listing([{"id": 42, "name": agreed["name"]}])
             },
             "repos/Danathar/sensi/rulesets/42": {"stdout": json.dumps(live)},
         }
@@ -608,7 +733,7 @@ def test_online_mode_runs_end_to_end_against_a_live_ruleset(
     assert exit_code == 0
     assert "matches the committed definition" in capsys.readouterr().out
     assert calls() == [
-        ["api", "repos/Danathar/sensi/rulesets"],
+        _list_call("Danathar/sensi"),
         ["api", "repos/Danathar/sensi/rulesets/42"],
     ]
 
@@ -622,7 +747,7 @@ def test_online_mode_reports_drift_read_from_github(
     set_replies(
         {
             "repos/Danathar/sensi/rulesets": {
-                "stdout": json.dumps([{"id": 42, "name": agreed["name"]}])
+                "stdout": _listing([{"id": 42, "name": agreed["name"]}])
             },
             "repos/Danathar/sensi/rulesets/42": {"stdout": json.dumps(live)},
         }
@@ -637,10 +762,10 @@ def test_online_mode_reports_drift_read_from_github(
 def test_repo_reaches_the_api_call(agreed: dict, gh) -> None:
     """`--repo` is how this is pointed at a fork; it must not be ignored."""
     set_replies, calls = gh
-    set_replies({"repos/someone/sensi/rulesets": {"stdout": "[]"}})
+    set_replies({"repos/someone/sensi/rulesets": {"stdout": ""}})
 
     assert check_ruleset.main(["--repo", "someone/sensi"]) == 1
-    assert calls() == [["api", "repos/someone/sensi/rulesets"]]
+    assert calls() == [_list_call("someone/sensi")]
 
 
 # --------------------------------------------------------------------------

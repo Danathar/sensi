@@ -9,8 +9,10 @@ does not.
 It is deliberately asymmetric. Extra rules are fine, and so is a parameter set
 stricter than agreed -- somebody tightening the branch is not drift worth
 failing on. What it fails on is *weakening*: a bypass actor that was not
-agreed, enforcement switched off, a rule removed, a required check dropped, or
-a parameter relaxed below what was agreed. Those are the changes that quietly
+agreed, enforcement switched off, the target or the branch conditions changed
+so master falls outside the rule, a rule removed, a required check dropped or
+unpinned from its agreed source, or a parameter relaxed below what was agreed.
+Those are the changes that quietly
 return the branch to the state issue #109 was opened about, and none of them
 shows up in a diff.
 
@@ -143,20 +145,53 @@ def _rule(document: dict, rule_type: str) -> dict | None:
     return None
 
 
-def _required_checks(document: dict) -> set[str]:
+def _required_check_entries(document: dict) -> list[dict]:
     rule = _rule(document, "required_status_checks")
     if rule is None:
-        return set()
-    return {
-        check.get("context")
-        for check in rule.get("parameters", {}).get("required_status_checks", [])
-    }
+        return []
+    return rule.get("parameters", {}).get("required_status_checks", [])
+
+
+def _required_checks(document: dict) -> set[str]:
+    return {check.get("context") for check in _required_check_entries(document)}
+
+
+def _unpinned_checks(definition: dict, live: dict) -> list[str]:
+    """Agreed checks still required live, but no longer from the agreed source.
+
+    `integration_id` is what stops a status posted by anything else - another
+    app, or a token with `statuses: write` - from satisfying the check. A live
+    check that drops it, or names another integration, is weaker even though
+    its name still appears. An agreed check without one accepts any source,
+    so any live pin honours it.
+    """
+    live_sources: dict[str, set[object]] = {}
+    for check in _required_check_entries(live):
+        live_sources.setdefault(check.get("context"), set()).add(
+            check.get("integration_id")
+        )
+
+    problems = []
+    for check in _required_check_entries(definition):
+        context = check.get("context")
+        agreed = check.get("integration_id")
+        if agreed is None or context not in live_sources:
+            continue
+        if agreed not in live_sources[context]:
+            live = sorted(live_sources[context], key=repr)
+            problems.append(
+                f"required check {context!r}: agreed integration_id {agreed!r}, "
+                f"live {live[0] if len(live) == 1 else live!r}"
+            )
+    return problems
 
 
 def fetch_live(repo: str, name: str) -> dict | None:
     """Return the live ruleset called `name`, or None if there is not one."""
+    # Paginated, one ruleset per line: GitHub returns 30 per page by default,
+    # and a ruleset past the first page would otherwise read as absent.
     listing = subprocess.run(  # noqa: S603
-        ["gh", "api", f"repos/{repo}/rulesets"],
+        ["gh", "api", "--paginate", "--jq", ".[]", f"repos/{repo}/rulesets"],
         capture_output=True,
         text=True,
         check=False,
@@ -166,7 +201,10 @@ def fetch_live(repo: str, name: str) -> dict | None:
             f"Unable to list rulesets for {repo}: "
             f"{listing.stderr.strip().splitlines()[-1] if listing.stderr.strip() else 'gh failed'}"
         )
-    for entry in json.loads(listing.stdout or "[]"):
+    for line in (listing.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        entry = json.loads(line)
         if entry.get("name") == name:
             detail = subprocess.run(  # noqa: S603
                 ["gh", "api", f"repos/{repo}/rulesets/{entry['id']}"],
@@ -199,12 +237,32 @@ def compare(definition: dict, live: dict) -> list[str]:
             f"live {live.get('bypass_actors')}"
         )
 
-    live_include = live.get("conditions", {}).get("ref_name", {}).get("include")
-    agreed_include = definition["conditions"]["ref_name"]["include"]
+    # A ruleset retargeted at tags, or at pushes, no longer protects a branch.
+    if live.get("target") != definition["target"]:
+        problems.append(
+            f"target is {live.get('target')!r}, not {definition['target']!r} - "
+            "the ruleset no longer applies to branches"
+        )
+
+    live_ref_name = live.get("conditions", {}).get("ref_name", {})
+    agreed_ref_name = definition["conditions"]["ref_name"]
+    live_include = live_ref_name.get("include")
+    agreed_include = agreed_ref_name["include"]
     if live_include != agreed_include:
         problems.append(
             f"ref_name.include differs: agreed {agreed_include}, live {live_include}"
         )
+
+    # An exclude wins over an include, so `~DEFAULT_BRANCH` here takes master
+    # out of the ruleset while `include` still reads as protecting it. Fewer
+    # excludes than agreed only widens the rule, which is not drift.
+    added_excludes = [
+        ref
+        for ref in live_ref_name.get("exclude") or []
+        if ref not in (agreed_ref_name.get("exclude") or [])
+    ]
+    if added_excludes:
+        problems.append(f"ref_name.exclude gained {added_excludes}")
 
     for rule in definition.get("rules", []):
         rule_type = rule["type"]
@@ -228,6 +286,7 @@ def compare(definition: dict, live: dict) -> list[str]:
     missing_checks = _required_checks(definition) - _required_checks(live)
     if missing_checks:
         problems.append(f"required checks no longer required: {sorted(missing_checks)}")
+    problems.extend(_unpinned_checks(definition, live))
 
     return problems
 
