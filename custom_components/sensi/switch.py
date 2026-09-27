@@ -1,7 +1,7 @@
 """Sensi thermostat setting switches."""
 
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, override
 
 from homeassistant.components.switch import (
     ENTITY_ID_FORMAT,
@@ -9,7 +9,7 @@ from homeassistant.components.switch import (
     SwitchEntityDescription,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import get_config_option, set_config_option
@@ -257,8 +257,28 @@ class SensiAuxHeatSwitch(SensiDescriptionEntity, SwitchEntity):
         """Return True if aux heating is on."""
         return self._state.operating_mode == OperatingMode.AUX
 
+    @callback
+    @override
+    def _handle_coordinator_update(self) -> None:
+        """Remember the latest mode other than AUX, whoever set it.
+
+        The mode can change on the climate card, at the thermostat or in the
+        Sensi app, so the mode seen at entity creation soon goes stale.
+        """
+
+        mode = self._state.operating_mode
+        if mode is not None and mode != OperatingMode.AUX:
+            self._last_operating_mode_before_aux_heat = mode
+
+        super()._handle_coordinator_update()
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn aux heating on."""
+
+        # Already in AUX: the current mode is AUX, and recording it would lose
+        # the mode to restore.
+        if self.is_on:
+            return
 
         self._last_operating_mode_before_aux_heat = _mode_to_restore(
             self._state.operating_mode
@@ -275,6 +295,11 @@ class SensiAuxHeatSwitch(SensiDescriptionEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn aux heating off."""
+
+        # Not in AUX: sending the remembered mode would change a mode the
+        # user has since picked, or turn on a thermostat that is off.
+        if not self.is_on:
+            return
 
         response = await self.coordinator.client.async_set_operating_mode(
             self._device, self._last_operating_mode_before_aux_heat
