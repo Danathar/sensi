@@ -854,7 +854,9 @@ def test_the_nightly_run_happens_once_a_day() -> None:
 def test_the_latest_leg_resolves_a_newer_home_assistant_than_the_pin() -> None:
     """Claim: "runs the suite against the **latest** ... rather than the pinned one"."""
     body = "\n".join(_run_steps(_NIGHTLY, "latest").values())
-    assert "requirements_test.txt" not in body, (
+    # Only ruff is taken from requirements_test.txt (#329); installing the
+    # whole file would pin Home Assistant back to the pinned leg's release.
+    assert "-r requirements_test.txt" not in body, (
         "the latest leg now installs the pinned harness, which makes it a "
         "duplicate of the pinned leg rather than advance warning"
     )
