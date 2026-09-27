@@ -420,7 +420,9 @@ def test_release_yml_pushes_exactly_what_the_page_says() -> None:
     ) in body
     pushes = _pushes()
     assert set(pushes) == {"prepare", "release"}, pushes
-    assert pushes["prepare"] == ['git push origin "HEAD:refs/heads/$branch"'], pushes
+    assert pushes["prepare"] == [
+        'git push --force-with-lease origin "HEAD:refs/heads/$branch"'
+    ], pushes
     assert _branch_assignment().startswith("release/")
     assert len(pushes["release"]) == 1 and "refs/tags/" in pushes["release"][0], pushes
     for line in sum(pushes.values(), []):

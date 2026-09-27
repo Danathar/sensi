@@ -144,7 +144,17 @@ That makes a release two steps:
    It derives the version from the date - this month's `.0` if there has not
    been one yet, otherwise the next patch - or takes the one you type, sets the
    manifest to it on a `release/<version>` branch, and opens a pull request.
-   Nothing is tagged.
+   Nothing is tagged. Two GitHub limits decide what happens next:
+   - If "Allow GitHub Actions to create and approve pull requests" is off
+     (Settings, Actions, General), the workflow cannot open the pull request.
+     It pushes the branch, warns, and puts a link in the run summary. Open the
+     pull request from that link yourself.
+   - A pull request the workflow opens itself starts no checks, because GitHub
+     does not start workflows from the workflow token's events. The ruleset
+     needs those checks, so close and reopen the pull request to start them.
+
+   Re-running **prepare** for the same version replaces the `release/<version>`
+   branch and reuses a pull request that is already open.
 2. **Release it.** Once that pull request is merged, run the workflow again
    without **prepare**, or wait for the monthly run. It reads the version off
    the merged manifest, tags that commit, and publishes with notes generated

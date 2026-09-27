@@ -151,6 +151,7 @@ def _run_step(
         "GITHUB_REF_NAME": "master",
         "GITHUB_REPOSITORY": "Danathar/sensi",
         "GITHUB_SHA": _SHA,
+        "GITHUB_SERVER_URL": "https://github.com",
     }
     for block in (
         document.get("env") or {},
@@ -341,7 +342,7 @@ def test_the_prepare_job_pushes_only_its_own_release_branch() -> None:
         if "git push" in line
     ]
 
-    assert pushes == ['git push origin "HEAD:refs/heads/$branch"']
+    assert pushes == ['git push --force-with-lease origin "HEAD:refs/heads/$branch"']
     assert (
         'branch="release/$VERSION"' in _step("Open the pull request", "prepare")["run"]
     )
@@ -1161,3 +1162,133 @@ def test_the_manifest_is_rewritten_to_the_proposed_version(repo: Path) -> None:
     assert manifest["version"] == "2026.9.0"
     assert manifest["domain"] == "sensi"
     assert not (repo / "custom_components" / "sensi" / "manifest.json.tmp").exists()
+
+
+# --------------------------------------------------------------------------
+# "Open the pull request" - the prepare job's push and pull request.
+# --------------------------------------------------------------------------
+
+_OPEN = "Open the pull request"
+_COMPARE = (
+    "https://github.com/Danathar/sensi/compare/master...release/2026.9.1?expand=1"
+)
+
+
+def _origin(tmp_path: Path, repo: Path) -> Path:
+    """Give `repo` a bare `origin` holding its master, as a checkout has."""
+
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/master")
+    return origin
+
+
+def _gh(tmp_path: Path, *, open_pr: str = "", create_fails: bool = False) -> Path:
+    """Put a stub `gh` on PATH that records its calls.
+
+    `gh pr list` prints `open_pr` - the pull request an earlier run left open,
+    if any - and `gh pr create` fails when `create_fails` is set, as it does
+    while Actions may not create pull requests here.
+    """
+
+    bin_dir = tmp_path / "gh-bin"
+    bin_dir.mkdir()
+    log = tmp_path / "gh.log"
+    stub = bin_dir / "gh"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{log}"\n'
+        'case "$1 $2" in\n'
+        f'  "pr list") printf "%s" "{open_pr}" ;;\n'
+        f'  "pr create") {"exit 1" if create_fails else "echo created"} ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return bin_dir
+
+
+def _open_pr(repo: Path, gh: Path) -> StepResult:
+    """Run the step on a manifest already bumped to 2026.9.1."""
+
+    _write_manifest(repo, "2026.9.1")
+    return _run_step(
+        _OPEN,
+        repo,
+        {"steps.version.outputs.version": "2026.9.1", "github.token": "stub-token"},
+        gh,
+        job="prepare",
+    )
+
+
+def test_a_re_run_replaces_the_release_branch_an_earlier_run_pushed(
+    tmp_path: Path, repo: Path
+) -> None:
+    """A re-run's bump commit does not descend from the one already pushed.
+
+    Without a force the push is rejected and the run cannot recover until
+    someone deletes `release/<version>` by hand (#331).
+    """
+
+    origin = _origin(tmp_path, repo)
+    _commit(repo, "earlier-run.txt", "earlier\n", "chore(release): 2026.9.1")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/release/2026.9.1")
+    _git(repo, "reset", "-q", "--hard", "HEAD~1")
+
+    result = _open_pr(repo, _gh(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert _git(origin, "rev-parse", "release/2026.9.1") == _git(
+        repo, "rev-parse", "HEAD"
+    )
+
+
+def test_a_refused_pull_request_leaves_a_link_to_open_it_by_hand(
+    tmp_path: Path, repo: Path
+) -> None:
+    """With Actions barred from creating pull requests, a person opens it.
+
+    The branch is already pushed, so the run says where to open the pull
+    request instead of ending on gh's error alone.
+    """
+
+    origin = _origin(tmp_path, repo)
+
+    result = _open_pr(repo, _gh(tmp_path, create_fails=True))
+
+    assert result.returncode == 0, result.stderr
+    assert _git(origin, "rev-parse", "release/2026.9.1").strip()
+    assert "::warning::" in result.stderr
+    assert _COMPARE in result.summary
+    assert "chore(release): 2026.9.1" in result.summary
+
+
+def test_a_re_run_reuses_the_pull_request_already_open(
+    tmp_path: Path, repo: Path
+) -> None:
+    """A second `gh pr create` for the same branch would fail; it is not tried."""
+
+    _origin(tmp_path, repo)
+    existing = "https://github.com/Danathar/sensi/pull/999"
+
+    result = _open_pr(repo, _gh(tmp_path, open_pr=existing))
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "gh.log").read_text(encoding="utf-8")
+    assert "pr create" not in calls
+    assert existing in result.summary
+
+
+def test_an_opened_pull_request_says_its_checks_need_a_person_to_start(
+    tmp_path: Path, repo: Path
+) -> None:
+    """Events from the workflow token start no workflows, required checks included."""
+
+    _origin(tmp_path, repo)
+
+    result = _open_pr(repo, _gh(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert "close and reopen" in result.summary.lower()

@@ -183,9 +183,24 @@ jobs:
           git checkout -b "$branch"
           git add custom_components/sensi/manifest.json
           git commit -s -m "chore(release): $VERSION"
-          git push origin "HEAD:refs/heads/$branch"
+          # A re-run makes a new bump commit that does not descend from the
+          # one an earlier run pushed. The force is limited to this run's own
+          # release/* branch, and the lease refuses if anyone pushed to it
+          # after this checkout fetched it.
+          git push --force-with-lease origin "HEAD:refs/heads/$branch"
 
-          gh pr create \
+          existing="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // empty')"
+          if [ -n "$existing" ]; then
+            echo "Updated \`$branch\`. Its pull request is already open: $existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Two repository-level limits apply here, and neither is fixed by
+          # this workflow. Actions may be barred from creating pull requests
+          # ("Allow GitHub Actions to create and approve pull requests"), and
+          # a pull request the workflow token opens starts no workflows, so
+          # its required checks never run until a person re-triggers them.
+          if ! gh pr create \
             --base "$GITHUB_REF_NAME" \
             --head "$branch" \
             --title "chore(release): $VERSION" \
@@ -193,9 +208,30 @@ jobs:
 
           Merging this is what approves the number. The Release workflow then
           tags the commit that lands and publishes it; it does not change the
-          version itself."
+          version itself.
 
-          echo "Opened the version-bump pull request for **$VERSION**." >> "$GITHUB_STEP_SUMMARY"
+          Opened by the Release workflow, so no checks have started. Close and
+          reopen this pull request to start them."; then
+            compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$GITHUB_REF_NAME...$branch?expand=1"
+            echo "::warning::Pushed $branch, but could not open its pull request. Open it by hand: $compare" >&2
+            {
+              echo "### Open the version-bump pull request by hand"
+              echo
+              echo "\`$branch\` is pushed, but this workflow could not open its pull request."
+              echo "Usually that is because GitHub Actions may not create pull requests"
+              echo "in this repository. Open it here, titled \`chore(release): $VERSION\`:"
+              echo
+              echo "$compare"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "Opened the version-bump pull request for **$VERSION**."
+            echo
+            echo "It was opened with the workflow token, so no checks have started."
+            echo "Close and reopen it to start them."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------------------------
   # Tag an approved commit and publish it. Reads the version; never sets it.
