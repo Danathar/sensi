@@ -628,6 +628,82 @@ class TestSensiThermostatFanModes:
         assert mock_thermostat.max_temp == mock_device.state.heat_max_temp
 
 
+class TestSensiThermostatSetpointLimits:
+    """The single-setpoint bounds Home Assistant validates against."""
+
+    @staticmethod
+    def _thermostat(hass, mock_json, mock_coordinator, **state) -> SensiThermostat:
+        mock_json["state"].update(state)
+        _, device = SensiDevice.create(mock_json)
+        return SensiThermostat(hass, device, mock_coordinator.config_entry)
+
+    @pytest.mark.parametrize(
+        ("display_scale", "operating_mode", "field", "bound", "expected"),
+        [
+            ("c", "cool", "cool_min_temp", "min_temp", 7.22),
+            ("c", "heat", "heat_max_temp", "max_temp", 37.22),
+            ("c", "aux", "heat_max_temp", "max_temp", 37.22),
+            ("f", "cool", "cool_min_temp", "min_temp", 45),
+            ("f", "heat", "heat_max_temp", "max_temp", 99),
+        ],
+    )
+    def test_an_unreported_limit_falls_back_in_the_thermostats_unit(
+        self,
+        hass: HomeAssistant,
+        mock_json,
+        mock_coordinator,
+        display_scale,
+        operating_mode,
+        field,
+        bound,
+        expected,
+    ):
+        """A null limit falls back to the app's limit, converted from °F.
+
+        The fallback used to be the °F number itself. On a Celsius thermostat
+        that made min_temp 45 in COOL, above max_temp, so Home Assistant
+        refused every cooling setpoint.
+        """
+        thermostat = self._thermostat(
+            hass,
+            mock_json,
+            mock_coordinator,
+            display_scale=display_scale,
+            operating_mode=operating_mode,
+            **{field: None},
+        )
+
+        assert getattr(thermostat, bound) == pytest.approx(expected, abs=0.01)
+
+    @pytest.mark.parametrize(
+        ("operating_mode", "field", "bound"),
+        [
+            ("cool", "cool_min_temp", "min_temp"),
+            ("heat", "heat_max_temp", "max_temp"),
+        ],
+    )
+    def test_a_reported_limit_is_used_as_is(
+        self,
+        hass: HomeAssistant,
+        mock_json,
+        mock_coordinator,
+        operating_mode,
+        field,
+        bound,
+    ):
+        """A limit the thermostat reports is already in its unit; no conversion."""
+        thermostat = self._thermostat(
+            hass,
+            mock_json,
+            mock_coordinator,
+            display_scale="c",
+            operating_mode=operating_mode,
+            **{field: 21},
+        )
+
+        assert getattr(thermostat, bound) == 21
+
+
 class TestSensiThermostatTargetTemperature:
     """Test cases for target temperature."""
 

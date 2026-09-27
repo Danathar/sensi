@@ -387,7 +387,11 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         """Return the minimum temperature for single mode. This gets used as the lower bounds in UI."""
 
         # Use the thermostat defined minimum temperature if not heating. This is in temperature_unit.
-        if self._state.operating_mode == OperatingMode.COOL:
+        # A thermostat that does not report one gets the app's limit, converted below.
+        if (
+            self._state.operating_mode == OperatingMode.COOL
+            and self._state.cool_min_temp is not None
+        ):
             return self._state.cool_min_temp
 
         return TemperatureConverter.convert(
@@ -402,7 +406,11 @@ class SensiThermostat(SensiEntity, ClimateEntity):
 
         # Use the thermostat defined maximum temperature if not cooling. This is in temperature_unit.
         # AUX adjusts the heat setpoint, so it takes the heat bound as well.
-        if get_setpoint_mode(self._state.operating_mode) == OperatingMode.HEAT:
+        # A thermostat that does not report one gets the app's limit, converted below.
+        if (
+            get_setpoint_mode(self._state.operating_mode) == OperatingMode.HEAT
+            and self._state.heat_max_temp is not None
+        ):
             return self._state.heat_max_temp
 
         return TemperatureConverter.convert(
