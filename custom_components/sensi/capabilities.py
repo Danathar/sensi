@@ -187,5 +187,5 @@ class Capabilities:
             f"Capabilities(heat_range={self.min_heat_setpoint}-{self.max_heat_setpoint}, "
             f"cool_range={self.min_cool_setpoint}-{self.max_cool_setpoint}, "
             f"modes={self.operating_mode_settings.__dict__}, "
-            f"backlight={self.continuous_backlight}"
+            f"backlight={self.continuous_backlight})"
         )

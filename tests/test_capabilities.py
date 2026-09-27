@@ -258,6 +258,34 @@ class TestCapabilities:
         assert capabilities.humidity_control.humidification.min == 5
         assert capabilities.humidity_control.dehumidification.max == 95
 
+    def test_capabilities_string_representation(self):
+        """Test Capabilities string representation."""
+        data = {
+            "max_cool_setpoint": 88,
+            "min_cool_setpoint": 50,
+            "max_heat_setpoint": 95,
+            "min_heat_setpoint": 55,
+            "operating_mode_settings": {
+                "off": "yes",
+                "heat": "yes",
+                "cool": "no",
+                "aux": "no",
+                "auto": "no",
+            },
+            "continuous_backlight": "yes",
+        }
+
+        # Asserted exactly rather than by substring: a substring-only check
+        # passes even when the rendering is truncated or unbalanced, which is
+        # how the missing closing paren survived here.
+        assert str(Capabilities(data)) == (
+            "Capabilities(heat_range=55-95, "
+            "cool_range=50-88, "
+            "modes={'off': True, 'heat': True, 'cool': False, "
+            "'aux': False, 'auto': False}, "
+            "backlight=True)"
+        )
+
 
 class TestNullContainers:
     """A capability object sent as null falls back to "not capable".
