@@ -20,12 +20,17 @@ files touched, and PRs opened are not tracked as goals.
 ```bash
 python3 scripts/pr_metrics.py                 # last 50 closed PRs
 python3 scripts/pr_metrics.py --limit 200
-python3 scripts/pr_metrics.py --since 2026-01-01
+python3 scripts/pr_metrics.py --since 2026-01-01 # every closed PR opened since then
 python3 scripts/pr_metrics.py --json          # for piping somewhere
 ```
 
 Reads through `gh`, so it uses whatever `gh auth status` reports. No third-party
 packages.
+
+`--since` asks `gh` for the whole window (up to 1000 PRs, the most GitHub search
+returns) rather than filtering the newest 50. If the fetch fills `--limit`, the
+window was cut short, so the script exits non-zero instead of reporting part of
+it; pass a later `--since` or a higher `--limit`.
 
 ## What each column means
 
