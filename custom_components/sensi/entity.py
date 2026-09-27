@@ -1,6 +1,7 @@
 """Base Sensi entity."""
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.entity import (
     DeviceInfo,
     EntityDescription,
@@ -64,16 +65,29 @@ class SensiEntity(CoordinatorEntity[SensiUpdateCoordinator]):
         return self._device.state
 
     @property
+    def _updates_ok(self) -> bool:
+        """Return False once the coordinator's updates can no longer be trusted.
+
+        That is after too many consecutive connection failures, or after the
+        refresh token was rejected. Home Assistant stops polling after
+        ConfigEntryAuthFailed, so the failure count never moves on that path.
+        """
+        if not self.coordinator.last_update_success and isinstance(
+            self.coordinator.last_exception, ConfigEntryAuthFailed
+        ):
+            return False
+        return (
+            self.coordinator.consecutive_connection_failures
+            <= MAX_CONSECUTIVE_CONNECTION_FAILURES
+        )
+
+    @property
     def available(self) -> bool:
         """Return if the entity is available.
 
         The entity is not available if the fetch failed or if the device is offline.
         """
-        return (
-            self.coordinator.consecutive_connection_failures
-            <= MAX_CONSECUTIVE_CONNECTION_FAILURES
-            and self._state.is_online
-        )
+        return self._updates_ok and self._state.is_online
 
 
 class SensiDescriptionEntity(SensiEntity):

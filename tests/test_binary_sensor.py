@@ -15,6 +15,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 
 
 def create_description() -> BinarySensorEntityDescription:
@@ -93,6 +94,20 @@ class TestOnlineBinarySensorEntity:
             hass, mock_device, description, mock_coordinator.config_entry
         )
         mock_coordinator._consecutive_failed_count = 2  # noqa: SLF001
+
+        assert entity.available is False
+
+    def test_online_binary_sensor_unavailable_after_auth_failure(
+        self, hass: HomeAssistant, mock_device, mock_coordinator: SensiUpdateCoordinator
+    ):
+        """A rejected refresh token makes the Online sensor unavailable."""
+
+        description = create_description()
+        entity = OnlineBinarySensorEntity(
+            hass, mock_device, description, mock_coordinator.config_entry
+        )
+        mock_coordinator.last_update_success = False
+        mock_coordinator.last_exception = ConfigEntryAuthFailed()
 
         assert entity.available is False
 

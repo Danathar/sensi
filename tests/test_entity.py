@@ -1,14 +1,24 @@
 """Tests for Sensi entity module."""
 
-import pytest
+from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
+import pytest
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+from custom_components.sensi.auth import AuthenticationError
 from custom_components.sensi.const import (
     MAX_CONSECUTIVE_CONNECTION_FAILURES,
     SENSI_ATTRIBUTION,
     SENSI_DOMAIN,
 )
 from custom_components.sensi.entity import SensiDescriptionEntity, SensiEntity
+from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.entity import EntityDescription
+from homeassistant.util import dt as dt_util
+
+CLIENT = "custom_components.sensi.client.SensiClient"
 
 
 class TestSensiEntity:
@@ -68,6 +78,59 @@ class TestSensiEntity:
         entity = SensiEntity(mock_device, mock_coordinator.config_entry)
 
         assert entity.available is False
+
+    def test_sensi_entity_unavailable_after_auth_failure(
+        self, mock_device, mock_coordinator
+    ):
+        """A rejected refresh token makes the entity unavailable.
+
+        Home Assistant stops polling after ConfigEntryAuthFailed, so the
+        connection failure count never moves; the entity has to look at the
+        failed update itself.
+        """
+        mock_coordinator.last_update_success = False
+        mock_coordinator.last_exception = ConfigEntryAuthFailed()
+        entity = SensiEntity(mock_device, mock_coordinator.config_entry)
+
+        assert entity.available is False
+
+    async def test_entities_unavailable_after_refresh_token_rejected(
+        self,
+        hass,
+        mock_coordinator,
+        mock_auth_data,
+        mock_device,
+        enable_custom_integrations,
+    ):
+        """After the refresh token is rejected no entity keeps its frozen value."""
+        entry = mock_coordinator.config_entry
+        revoked = AsyncMock(side_effect=AuthenticationError("refresh token revoked"))
+        with (
+            patch(f"{CLIENT}.wait_for_devices"),
+            patch(f"{CLIENT}.get_devices", return_value=[mock_device]),
+            patch(f"{CLIENT}.stop"),
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+        ):
+            await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+
+            with patch(f"{CLIENT}.async_update_devices", revoked):
+                for minutes in (1, 2, 3, 10):
+                    async_fire_time_changed(
+                        hass, dt_util.utcnow() + timedelta(minutes=minutes)
+                    )
+                    await hass.async_block_till_done()
+
+        # HA stops polling after the auth failure, so only one refresh ran.
+        assert revoked.await_count == 1
+        for entity_id in (
+            "climate.sensi_living_room",
+            "binary_sensor.sensi_living_room_online",
+        ):
+            assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
 
     @pytest.mark.parametrize(
         ("key", "expected_entity_id"),
