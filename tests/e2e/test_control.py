@@ -14,8 +14,10 @@ from socketio.exceptions import ConnectionError as SocketIOConnectionError
 
 from custom_components.sensi.client import EMIT_LOOP_DELAY
 from homeassistant.components.climate import (
+    ATTR_FAN_MODE,
     ATTR_HVAC_MODE,
     DOMAIN as CLIMATE_DOMAIN,
+    SERVICE_SET_FAN_MODE,
     SERVICE_SET_HVAC_MODE,
     SERVICE_SET_TEMPERATURE,
     HVACMode,
@@ -178,6 +180,33 @@ async def test_circulating_fan_switch_round_trip(
     assert hass.states.get(CIRCULATING_FAN).state == STATE_ON
     assert hass.states.get(CLIMATE).attributes["circulating_fan"] is True
     assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == "10"
+
+
+async def test_climate_fan_mode_refreshes_the_circulating_fan_entities(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A fan mode picked on the climate card updates the switch and number (#318).
+
+    Leaving Circulate turns circulation off on the thermostat. The Circulating
+    Fan switch and the duty cycle number read the same setting, so they must
+    follow at once rather than at the next poll.
+    """
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_ON
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == "10"
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_FAN_MODE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_FAN_MODE: "auto"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(CLIMATE).attributes["circulating_fan"] is False
+    assert hass.states.get(CIRCULATING_FAN).state == STATE_OFF
+    assert hass.states.get(CIRCULATING_DUTY_CYCLE).state == STATE_UNAVAILABLE
 
 
 async def test_circulating_fan_duty_cycle_reaches_the_wire(

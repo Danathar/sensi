@@ -568,6 +568,10 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         self.async_write_ha_state()
         LOGGER.info("%s: Setting fan_mode to %s", self._device.name, fan_mode)
 
+        # Refresh the Circulating Fan switch and duty cycle number, which read
+        # the circulating fan state changed above
+        self.coordinator.async_update_listeners()
+
     async def async_turn_on(self) -> None:
         """Turn thermostat on."""
 
