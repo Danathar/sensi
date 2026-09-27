@@ -114,6 +114,15 @@ supply-chain concern.
   inside the repository that none of the `Read` deny rows (or the usual key
   shapes) match; `git log --stdin </dev/null` and a revision list such as
   `git log --stdin <revs.txt` are allowed.
+  Every refusal above matches a fixed string, and a fixed string can be
+  rebuilt out of pieces that are not themselves refused: `--no-inde{x,x}`,
+  `--outpu[t]`, `$(printf -- --no-index)`. The hook cannot resolve any of
+  those without running a shell, so instead of trying it refuses the pieces:
+  any argument to a gated `git diff`/`log`/`show` that contains a glob or
+  substitution character (`*?[]$` or a backtick) is refused outright, and so
+  is one shaped like a brace expansion (a `{`, then a `,` or `..`, then a
+  `}`) or a process substitution (`<(`/`>(`). This is a blanket catch-all on
+  top of the specific option refusals above, not a replacement for them.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.
