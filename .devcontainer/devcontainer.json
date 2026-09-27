@@ -5,7 +5,7 @@
   "appPort": "9123:8123",
   "containerUser": "root",
   "remoteUser": "root",
-  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && /workspaces/container_content/scripts/setup.sh",
+  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && /workspaces/container_content/scripts/setup.sh && ln -sfn ../custom_components config/custom_components",
   "containerEnv": {
     "TZ": "America/Chicago"
   },
