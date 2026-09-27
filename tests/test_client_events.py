@@ -173,6 +173,36 @@ class TestAsyncDisconnect:
         assert client._sio is None
 
 
+class TestUpdateDevices:
+    """The coordinator's refresh: reconnect, then wait for each device's state."""
+
+    async def test_a_failed_connect_leaves_no_state_waiter_pending(
+        self, client: SensiClient, mock_json
+    ) -> None:
+        """The waiters registered before connecting go when the connect fails.
+
+        They are created before connect() so that a state burst inside the
+        handshake resolves them. A refresh whose connect raised has nobody
+        left waiting, and a pending waiter would sit in the registry until
+        the next state event - one per device for every refresh that fails
+        through an outage.
+        """
+        client._update_state([mock_json])
+
+        with (
+            patch.object(
+                client,
+                "_connect",
+                AsyncMock(side_effect=SensiConnectionError("Sensi is down")),
+            ),
+            pytest.raises(SensiConnectionError),
+        ):
+            await client.async_update_devices()
+
+        waiters = client._futures.get(("state", mock_json["icd_id"]), [])
+        assert [waiter for waiter in waiters if not waiter.done()] == []
+
+
 class TestEventFutures:
     """Test cases for the (event, icd_id) future registry."""
 

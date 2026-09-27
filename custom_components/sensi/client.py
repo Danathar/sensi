@@ -338,22 +338,38 @@ class SensiClient:
         # pair, and a tick landing in the middle of one left the recovery
         # taking the tick's half-connected socket. See _async_invoke_setter.
         LOGGER.info("Updating devices - reconnecting and updating")
-        async with self._reconnect_lock:
-            await self._async_disconnect()
-            await self._connect()
 
-        # Refresh does no create new devices so let us just wait for device states. We don't
-        # care the order in which state event is received. It can come before or after connected.
-        async def _wait_for_device_states() -> None:
-            tasks = [
-                await self._create_event_future("state", icd_id)
-                for icd_id in self._devices
-            ]
+        # Refresh does not create new devices, so wait for each known
+        # device's state.
+        #
+        # The waiters are registered before connecting, as wait_for_devices
+        # does for its own. socketio dispatches events from its read loop, and
+        # connect() returns only after that loop has woken it - so `state`
+        # packets right behind the namespace handshake reach _update_state
+        # before this coroutine gets control back. Waiters created after
+        # connect() returned missed them and waited out the whole
+        # PREPARE_DEVICES_TIMEOUT. They are created after the disconnect,
+        # not before it: the refresh waits for what the new connection reports.
+        state_futures: list[asyncio.Future] = []
+        try:
+            async with self._reconnect_lock:
+                await self._async_disconnect()
+                state_futures = [
+                    await self._create_event_future("state", icd_id)
+                    for icd_id in self._devices
+                ]
+                await self._connect()
 
-            await asyncio.wait_for(asyncio.gather(*tasks), PREPARE_DEVICES_TIMEOUT)
-
-        with contextlib.suppress(asyncio.exceptions.TimeoutError):
-            await _wait_for_device_states()
+            with contextlib.suppress(asyncio.exceptions.TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*state_futures), PREPARE_DEVICES_TIMEOUT
+                )
+        finally:
+            # Already done when the state arrived, already cancelled by
+            # wait_for on a timeout; this is for a connect that raised, so the
+            # waiters are not left pending for the next state event.
+            for future in state_futures:
+                future.cancel()
 
     async def async_set_temperature(
         self, device: SensiDevice, mode: OperatingMode, value: int
