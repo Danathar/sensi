@@ -2,7 +2,6 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Final, override
 
 from homeassistant.components.sensor import (
@@ -222,17 +221,20 @@ class ActiveSavingsEventEntity(SensiEntity, SensorEntity):
         self._attr_unique_id = f"{device.identifier}_active_savings"
         self._attr_options = [state.value for state in ActiveSavingsEventState]
 
-        self._update_state(None)
+        # Setup does no first refresh, so the coordinator update that sets the
+        # state comes a whole poll interval later. Start from the loaded state.
+        self._update_state()
 
         self._set_entity_id(hass, ENTITY_ID_FORMAT, "active_savings")
 
-    def _update_state(
-        self, value: tuple[ActiveSavingsEventState, datetime | None, datetime | None]
-    ) -> None:
-        """Update the state of the sensor."""
+    def _update_state(self) -> None:
+        """Update the state of the sensor from the device's demand response."""
 
-        if value:
-            (current_state, start_time, end_time) = value
+        demand_response = self._state.demand_response
+        if demand_response:
+            (current_state, start_time, end_time) = (
+                demand_response.get_active_savings_event_state()
+            )
         else:
             current_state = ActiveSavingsEventState.UNKNOWN
             start_time = None
@@ -249,12 +251,6 @@ class ActiveSavingsEventEntity(SensiEntity, SensorEntity):
     def _handle_coordinator_update(self) -> None:
         """Update state when the coordinator updates."""
 
-        demand_response = self._state.demand_response
-        value = (
-            demand_response.get_active_savings_event_state()
-            if demand_response
-            else None
-        )
-        self._update_state(value)
+        self._update_state()
 
         super()._handle_coordinator_update()

@@ -392,10 +392,10 @@ class TestActiveSavingsEventEntity:
             hass, mock_device, mock_coordinator.config_entry
         )
 
-    def test_initial_state_is_unknown(
+    def test_initial_state_without_demand_response_is_unknown(
         self, hass: HomeAssistant, mock_device, mock_coordinator
     ):
-        """Before any update the sensor reports unknown with no window."""
+        """A state carrying no demand_response starts unknown with no window."""
 
         entity = self._make_entity(hass, mock_device, mock_coordinator)
 
@@ -403,6 +403,37 @@ class TestActiveSavingsEventEntity:
         assert entity.extra_state_attributes == {"start_time": None, "end_time": None}
         assert entity.entity_registry_enabled_default is False
         assert ActiveSavingsEventState.CURRENT.value in entity.options
+
+    def test_initial_state_reports_a_current_event_before_any_update(
+        self, hass: HomeAssistant, mock_device, mock_coordinator
+    ):
+        """A savings event already in the loaded state shows at once.
+
+        Setup does no first refresh, so waiting for the coordinator left the
+        sensor unknown for a whole poll interval.
+        """
+
+        now = dt_util.now()
+        demand_response = DemandResponse(
+            {
+                "event_id": "event-1",
+                "event_status": DemandResponseEventStatus.STARTED.value,
+                "start_time": (now - timedelta(minutes=30)).timestamp(),
+                "end_time": (now + timedelta(hours=3)).timestamp(),
+                "pre_duration": 0,
+                "pre_gap": 0,
+                "notification_time": 0,
+            }
+        )
+        mock_device.state.demand_response = demand_response
+
+        entity = self._make_entity(hass, mock_device, mock_coordinator)
+
+        assert entity.native_value == ActiveSavingsEventState.CURRENT.value
+        assert entity.extra_state_attributes == {
+            "start_time": demand_response.start_time,
+            "end_time": demand_response.end_time,
+        }
 
     def test_update_without_demand_response_reports_unknown(
         self, hass: HomeAssistant, mock_device, mock_coordinator
