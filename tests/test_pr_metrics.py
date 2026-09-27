@@ -51,7 +51,10 @@ def pull(
         "additions": additions,
         "deletions": deletions,
         "changedFiles": 1,
-        "reviews": [{"state": "APPROVED"} for _ in range(reviews)],
+        # Submitted as the pull was opened, so before any merge.
+        "reviews": [
+            {"state": "APPROVED", "submittedAt": created} for _ in range(reviews)
+        ],
         "comments": [],
     }
     record.update(extra)
@@ -420,6 +423,45 @@ def test_summarise_treats_a_null_reviews_list_as_no_reviews():
         ]
         == 0
     )
+
+
+def test_summarise_ignores_a_review_submitted_after_the_merge():
+    """#297's only review came 89 seconds after it merged: none before (#338)."""
+    late = pull(
+        297, created="2026-09-26T15:18:22Z", merged="2026-09-26T15:22:40Z", reviews=0
+    )
+    late["reviews"] = [{"state": "COMMENTED", "submittedAt": "2026-09-26T15:24:09Z"}]
+
+    report = pr_metrics.summarise([late], None)
+
+    assert report["buckets"]["all"]["median_reviews_before_merge"] == 0
+
+
+def test_summarise_counts_a_review_submitted_in_the_merge_second():
+    """Approve-and-merge in one second is still a review before the merge."""
+    merged = "2026-01-01T01:00:00Z"
+    same = pull(1, merged=merged, reviews=0)
+    same["reviews"] = [
+        {"state": "APPROVED", "submittedAt": merged},
+        {"state": "COMMENTED", "submittedAt": "2026-01-01T01:00:01Z"},
+    ]
+
+    report = pr_metrics.summarise([same], None)
+
+    assert report["buckets"]["all"]["median_reviews_before_merge"] == 1
+
+
+def test_summarise_ignores_a_review_that_was_never_submitted():
+    """A pending review has no `submittedAt`; it is not a submission."""
+    pending = pull(1, merged="2026-01-01T01:00:00Z", reviews=0)
+    pending["reviews"] = [
+        {"state": "PENDING", "submittedAt": None},
+        {"state": "PENDING"},
+    ]
+
+    report = pr_metrics.summarise([pending], None)
+
+    assert report["buckets"]["all"]["median_reviews_before_merge"] == 0
 
 
 def test_summarise_measures_churn_as_additions_plus_deletions():
