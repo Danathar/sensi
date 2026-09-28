@@ -22,6 +22,7 @@ What those nine bodies decide:
 * `latest` is the advance-warning leg. It deliberately installs
   `requirements_component.txt` and then upgrades the test harness, so that it
   runs against whatever Home Assistant shipped rather than against the pin. It
+  also installs the one pinned tool the suite runs, ruff. It
   is `continue-on-error`, and its `id: run` step outcome is the job output the
   report job reads.
 
@@ -678,7 +679,7 @@ def test_the_latest_leg_installs_the_newest_harness_rather_than_the_pin(
     result = _run(*_LATEST_INSTALL, tmp_path=tmp_path, stubs=stubs, workspace=workspace)
 
     assert result.returncode == 0, result.stderr
-    assert result.calls_to("pip") == [
+    assert result.calls_to("pip")[:2] == [
         ["pip", "install", "-r", "requirements_component.txt"],
         [
             "pip",
@@ -688,7 +689,30 @@ def test_the_latest_leg_installs_the_newest_harness_rather_than_the_pin(
             "pytest-cov",
         ],
     ]
-    assert "requirements_test.txt" not in _body(*_LATEST_INSTALL)
+    assert "-r requirements_test.txt" not in _body(*_LATEST_INSTALL)
+
+
+def test_the_latest_leg_installs_the_pinned_ruff_the_suite_runs(
+    tmp_path: Path, stubs: Path, workspace: Path
+) -> None:
+    """Without ruff, four tests fail every night for a reason that is not HA.
+
+    `tests/test_agent_format_hook.py` runs the real ruff. It is pinned only in
+    `requirements_test.txt`, which this leg must not install wholesale, so the
+    leg installs that one pin the way `validate.yml` does. A red leg then
+    means Home Assistant moved, not that a tool was missing (#329).
+    """
+
+    (pin,) = [
+        line
+        for line in _TEST_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+        if line.startswith("ruff==")
+    ]
+
+    result = _run(*_LATEST_INSTALL, tmp_path=tmp_path, stubs=stubs, workspace=workspace)
+
+    assert result.returncode == 0, result.stderr
+    assert ["pip", "install", pin] in result.calls_to("pip")
 
 
 def test_the_latest_record_step_writes_only_to_the_job_summary(
