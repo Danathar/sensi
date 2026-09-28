@@ -11,9 +11,11 @@ be pasted into any assistant — nothing here depends on a particular tool.
 | [`review.md`](review.md) | reviewing a pull request against `docs/review-rubric.md` |
 | [`release-readiness.md`](release-readiness.md) | before triggering the release workflow |
 
-Claude Code users have the same workflows as slash commands under
-`.claude/commands/`. The rules that apply to *any* change here live in
-`AGENTS.md`; these prompts assume it has been read.
+Claude Code users also have slash commands under `.claude/commands/`. That is a
+separate, non-overlapping set — mechanical repo tasks (adding an entity,
+capturing a fixture, running the full local gate, raising coverage) rather than
+the procedures cataloged above. The rules that apply to *any* change here live
+in `AGENTS.md`; these prompts assume it has been read.
 
 ## Adding one
 
