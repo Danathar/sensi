@@ -360,6 +360,60 @@ async def test_set_temperature_with_hvac_mode_auto_switches_then_sets_both(
     ]
 
 
+@pytest.mark.parametrize(
+    ("current", "hvac_mode", "new_mode"),
+    [
+        (OperatingMode.OFF, HVACMode.HEAT, OperatingMode.HEAT),
+        (OperatingMode.HEAT, HVACMode.COOL, OperatingMode.COOL),
+        (OperatingMode.COOL, HVACMode.HEAT, OperatingMode.HEAT),
+        # AUX is shown as heat, so hvac_mode cool is a real change.
+        (OperatingMode.AUX, HVACMode.COOL, OperatingMode.COOL),
+    ],
+)
+async def test_set_temperature_with_hvac_mode_switches_then_sets_one_setpoint(
+    hass: HomeAssistant,
+    mock_device,
+    mock_thermostat,
+    mock_coordinator,
+    current,
+    hvac_mode,
+    new_mode,
+) -> None:
+    """hvac_mode heat or cool with a temperature switches, then sets it (#315)."""
+
+    order = []
+
+    async def fake_set_operating_mode(device, mode):
+        order.append(("mode", mode))
+        device.state.operating_mode = mode
+        return ActionResponse(None, None)
+
+    async def fake_set_temperature(device, mode, value):
+        order.append(("temperature", mode, value))
+        return ActionResponse(None, None)
+
+    mock_device.state.operating_mode = current
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_coordinator.client,
+            "async_set_operating_mode",
+            new=fake_set_operating_mode,
+        ),
+        patch.object(
+            mock_coordinator.client, "async_set_temperature", new=fake_set_temperature
+        ),
+    ):
+        await mock_thermostat.async_set_temperature(hvac_mode=hvac_mode, temperature=70)
+
+    assert order == [
+        ("mode", new_mode),
+        ("temperature", new_mode, 70),
+    ]
+
+
 async def test_set_temperature_with_the_current_hvac_mode_keeps_the_mode(
     hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
 ) -> None:
