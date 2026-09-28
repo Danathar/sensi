@@ -1027,7 +1027,12 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
     async def test_an_abandoned_save_does_not_block_the_next_flow(
         self, hass: HomeAssistant
     ):
-        """A flow whose save failed, then was closed, leaves no claim behind."""
+        """A flow whose save failed leaves no claim behind, even while it is open.
+
+        Flow A stays open on purpose: closing it would release the claim
+        through async_remove, which test_a_closed_dialog_releases_its_claim
+        covers, and this test would then pass without the release on failure.
+        """
         user = {"source": config_entries.SOURCE_USER}
         flow_a = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
 
@@ -1045,7 +1050,6 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
             await hass.config_entries.flow.async_configure(
                 flow_a["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_a"}
             )
-        hass.config_entries.flow.async_abort(flow_a["flow_id"])
 
         flow_b = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
         with (
