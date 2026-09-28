@@ -44,10 +44,20 @@ def gate(current=93, ceiling=97, headroom=5, step=1, min_observations=5):
     }
 
 
-def write_coverage(path: Path, line_rate: str) -> Path:
-    """Write a minimal Cobertura report carrying the given line-rate."""
+def write_coverage(
+    path: Path, lines: tuple[int, int], branches: tuple[int, int] = (0, 0)
+) -> Path:
+    """Write a minimal Cobertura report with `(covered, valid)` counts.
+
+    `line-rate` is included, as coverage.py writes it, so a tuner reading it
+    instead of the combined total sees a different number.
+    """
     path.write_text(
-        f'<?xml version="1.0" ?>\n<coverage line-rate="{line_rate}"></coverage>\n',
+        '<?xml version="1.0" ?>\n'
+        f'<coverage lines-valid="{lines[1]}" lines-covered="{lines[0]}"'
+        f' line-rate="{lines[0] / lines[1]:.4f}"'
+        f' branches-valid="{branches[1]}" branches-covered="{branches[0]}">'
+        "</coverage>\n",
         encoding="utf-8",
     )
     return path
@@ -63,15 +73,33 @@ def write_policy(tmp_path: Path, gate_def: dict) -> Path:
     return policy
 
 
-def test_measured_coverage_reads_the_line_rate_as_a_percentage(tmp_path):
-    """Cobertura stores a rate; the rest of the script talks in percent."""
-    report = write_coverage(tmp_path / "coverage.xml", "0.9912")
+def test_measured_coverage_reads_the_total_as_a_percentage(tmp_path):
+    """Cobertura stores counts; the rest of the script talks in percent."""
+    report = write_coverage(tmp_path / "coverage.xml", (9912, 10000))
 
     assert auto_qa_tuner.measured_coverage(report) == pytest.approx(99.12)
 
 
-def test_measured_coverage_defaults_to_zero_without_a_line_rate(tmp_path):
-    """A report with no line-rate reads as 0%, which lands below any gate."""
+def test_measured_coverage_is_the_combined_total_the_gate_enforces(tmp_path):
+    """Lines and branches together, as `--cov-fail-under` compares them.
+
+    Every line ran here, but half the branches did not. Headroom measured
+    from the 100% line rate would be headroom the gate does not have.
+    """
+    report = write_coverage(tmp_path / "coverage.xml", (1000, 1000), (100, 200))
+
+    assert auto_qa_tuner.measured_coverage(report) == pytest.approx(91.67)
+
+
+def test_measured_coverage_rounds_as_the_gate_does(tmp_path):
+    """92.996% passes a 93% gate at `.coveragerc`'s precision of 2, so it is 93."""
+    report = write_coverage(tmp_path / "coverage.xml", (92996, 100000))
+
+    assert auto_qa_tuner.measured_coverage(report) == 93.0
+
+
+def test_measured_coverage_defaults_to_zero_without_counts(tmp_path):
+    """A report with no counts reads as 0%, which lands below any gate."""
     (tmp_path / "coverage.xml").write_text("<coverage></coverage>", encoding="utf-8")
 
     assert auto_qa_tuner.measured_coverage(tmp_path / "coverage.xml") == 0.0
@@ -230,12 +258,12 @@ def test_markdown_render_of_a_proposal_names_the_variable_and_the_file():
     assert "Nothing here does that for you." in text
 
 
-def run_main(monkeypatch, tmp_path, argv, *, line_rate="0.99", gate_def=None):
+def run_main(monkeypatch, tmp_path, argv, *, lines=(99, 100), gate_def=None):
     """Invoke main() with a policy and a coverage report on disk."""
     monkeypatch.setattr(
         auto_qa_tuner, "POLICY", write_policy(tmp_path, gate_def or gate())
     )
-    report = write_coverage(tmp_path / "coverage.xml", line_rate)
+    report = write_coverage(tmp_path / "coverage.xml", lines)
     monkeypatch.setattr(
         "sys.argv", ["auto_qa_tuner.py", "--coverage", str(report), *argv]
     )
@@ -286,7 +314,7 @@ def test_main_defaults_the_report_path_to_the_working_directory(
 ):
     """`python3 scripts/auto_qa_tuner.py` with no --coverage reads ./coverage.xml."""
     monkeypatch.setattr(auto_qa_tuner, "POLICY", write_policy(tmp_path, gate()))
-    write_coverage(tmp_path / "coverage.xml", "0.99")
+    write_coverage(tmp_path / "coverage.xml", (99, 100))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("sys.argv", ["auto_qa_tuner.py"])
 
@@ -310,7 +338,7 @@ def test_main_holds_when_the_measurement_is_below_the_gate(
     monkeypatch, tmp_path, capsys
 ):
     """The end-to-end path for the case the gate has already failed."""
-    rc = run_main(monkeypatch, tmp_path, ["--json"], line_rate="0.80")
+    rc = run_main(monkeypatch, tmp_path, ["--json"], lines=(80, 100))
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)

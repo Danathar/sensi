@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Line coverage of custom_components/sensi must not fall below this.
+  # Coverage of custom_components/sensi - lines and branches combined, the
+  # total `--cov-fail-under` compares - must not fall below this. It is
+  # rounded to `.coveragerc`'s `precision` first. The job keeps the name
+  # "line coverage >= threshold" because .github/rulesets/master.json
+  # requires that check context by name.
   #
   # The suite sits above it (98% at the time of writing, with client.py at
   # 100%). The threshold is set below the current number on purpose, so an
@@ -63,21 +67,35 @@ jobs:
         run: |
           if [ -f coverage.xml ]; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import configparser
           import os
           import xml.etree.ElementTree as ET
 
+          from coverage.results import display_covered, should_fail_under
+
+          # The number --cov-fail-under decides on: coverage.py's combined
+          # line+branch total, rounded to the same precision by the same
+          # functions. `line-rate` is lines only.
+          config = configparser.ConfigParser()
+          config.read(".coveragerc", encoding="utf-8")
+          precision = config.getint("report", "precision", fallback=0)
+
           root = ET.parse("coverage.xml").getroot()
-          percent = float(root.get("line-rate", 0)) * 100
+          covered = int(root.get("lines-covered", 0)) + int(root.get("branches-covered", 0))
+          valid = int(root.get("lines-valid", 0)) + int(root.get("branches-valid", 0))
+          total = 100.0 * covered / valid if valid else 0.0
+          percent = display_covered(total, precision)
           threshold = float(os.environ["MIN_COVERAGE"])
-          verdict = "PASS" if percent >= threshold else "FAIL"
+          failed = should_fail_under(total, threshold, precision)
+          verdict = "FAIL" if failed else "PASS"
           print(f"### Coverage {verdict}\n")
-          print(f"- Line coverage: **{percent:.2f}%**")
+          print(f"- Coverage (lines + branches): **{percent}%**")
           print(f"- Threshold: **{threshold:.0f}%**")
 
           # Handed to the publish job below. Written here rather than
           # re-parsed there so the badge and the summary can never disagree.
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"percent={percent:.2f}\n")
+              out.write(f"percent={percent}\n")
           PY
           else
             echo "No coverage.xml was produced - the suite did not run." >> "$GITHUB_STEP_SUMMARY"

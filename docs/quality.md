@@ -10,7 +10,7 @@ Every pull request runs six checks. All are required.
 | Check | Workflow | Proves | Does not prove |
 | --- | --- | --- | --- |
 | `pytest (Python 3.14)` | `ci.yml` | the suite passes on the pinned Home Assistant | anything about real hardware |
-| `line coverage >= threshold` | `coverage-gate.yml` | ≥93% of `custom_components/sensi` lines execute | that the executed lines are *asserted* on |
+| `line coverage >= threshold` | `coverage-gate.yml` | ≥93% of `custom_components/sensi` lines and branches, combined, execute | that the executed lines are *asserted* on |
 | `ruff` | `validate.yml` | lint and format are clean | correctness |
 | `hassfest` | `validate.yml` | the manifest, strings and translations satisfy Home Assistant core | runtime behaviour |
 | `HACS` | `validate.yml` | repository metadata is installable through HACS | anything about the code |
@@ -48,7 +48,7 @@ coverage while the repository read 85%.
 Those are the numbers that tier moved, not today's. The live figure is the
 **Unit coverage** badge, which the *Trend* section below explains.
 
-**What the number does not mean.** Line coverage counts executed lines, not
+**What the number does not mean.** Coverage counts executed lines and branches, not
 asserted behaviour. A test that calls a function and asserts nothing raises
 coverage and protects nothing. When raising coverage, target by risk — see
 `.claude/commands/cover.md` — and never lower the threshold to make a change

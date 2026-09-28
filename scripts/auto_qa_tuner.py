@@ -17,6 +17,7 @@ not a failure.
 """
 
 import argparse
+import configparser
 import json
 from pathlib import Path
 import sys
@@ -24,6 +25,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 POLICY = ROOT / ".github" / "auto-qa-tuning.json"
+COVERAGERC = ROOT / ".coveragerc"
 
 
 def die(message: str) -> None:
@@ -33,14 +35,27 @@ def die(message: str) -> None:
 
 
 def measured_coverage(path: Path) -> float:
-    """Return line coverage as a percentage from a Cobertura XML report."""
+    """Return the total the coverage gate enforces, as a percentage.
+
+    That is coverage.py's combined line and branch total - `.coveragerc` sets
+    `branch = true` - rounded to `.coveragerc`'s `precision`, which is what
+    `--cov-fail-under` compares against the threshold. `line-rate` is lines
+    only, so headroom measured from it is headroom the gate may not have.
+    """
     if not path.exists():
         die(f"{path} not found - run pytest with --cov-report=xml first")
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as err:
         die(f"{path} is not valid XML: {err}")
-    return float(root.get("line-rate", 0)) * 100
+
+    covered = int(root.get("lines-covered", 0)) + int(root.get("branches-covered", 0))
+    valid = int(root.get("lines-valid", 0)) + int(root.get("branches-valid", 0))
+    total = 100.0 * covered / valid if valid else 0.0
+
+    config = configparser.ConfigParser()
+    config.read(COVERAGERC, encoding="utf-8")
+    return round(total, config.getint("report", "precision", fallback=0))
 
 
 def evaluate(measured: float, gate: dict) -> dict:
