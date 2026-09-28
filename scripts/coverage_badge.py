@@ -67,31 +67,38 @@ def trend_row(date: str, sha: str, percent: float) -> str:
     return f"{date},{sha},{percent:.2f}"
 
 
-def write_trend(path: Path, date: str, sha: str, percent: float) -> None:
-    """Append a row, or replace the last one if it is for the same commit.
+def write_trend(path: Path, date: str, sha: str, percent: float) -> bool:
+    """Append a row for `sha`, unless any row already records that commit.
 
-    Re-running a push-triggered workflow publishes the same SHA again.
-    Appending there would record two rows for one commit, and - because the
-    file then always grew - the caller's "nothing changed, do not commit"
-    check could never be true, so every re-run produced a commit that said
-    nothing. Replacing the row for the same SHA makes a re-run a real no-op.
+    Returns whether a row was appended.
+
+    Re-running a push-triggered workflow publishes the same SHA again, on the
+    re-run's date and possibly after later commits have published. Appending
+    would record the commit twice; rewriting its row would change its date,
+    so the caller's "nothing changed, do not commit" check would push a
+    commit that records nothing new. A commit already in the history is left
+    exactly as it was first recorded, which makes a re-run a real no-op.
     """
-    row = trend_row(date, sha, percent)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         lines = []
 
-    if lines and lines[-1].split(",")[1:2] == [sha]:
-        lines[-1] = row
-    else:
-        lines.append(row)
+    if any(line.split(",")[1:2] == [sha] for line in lines):
+        return False
 
+    lines.append(trend_row(date, sha, percent))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True
 
 
 def main(argv=None) -> int:
-    """Write the badge payload and record the trend row."""
+    """Record the trend row and, if one was recorded, write the badge payload.
+
+    A commit already in the trend leaves the badge alone too: it keeps the
+    number of the newest recorded commit. Otherwise re-running an older push
+    after a newer one published would set the badge back to the older number.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("percent", type=float, help="coverage percentage (0-100)")
     parser.add_argument("--label", default="unit coverage")
@@ -110,14 +117,16 @@ def main(argv=None) -> int:
     if not 0 <= args.percent <= 100:
         parser.error("percent must be between 0 and 100")
 
+    if not write_trend(Path(args.trend_out), args.date, args.sha, args.percent):
+        print(f"{args.sha} is already in the trend; leaving both files unchanged.")
+        return 0
+
     with open(args.badge_out, "w", encoding="utf-8") as f:
         json.dump(
             badge_payload(args.percent, label=args.label, high=args.high, low=args.low),
             f,
         )
         f.write("\n")
-
-    write_trend(Path(args.trend_out), args.date, args.sha, args.percent)
 
     return 0
 

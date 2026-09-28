@@ -590,10 +590,10 @@ def test_publish_appends_to_the_branch_it_already_has(repo: Path, stubs: Path) -
     assert _git(_origin(repo), "rev-list", "--count", "coverage-data").strip() == "2"
 
 
-def test_publish_replaces_the_row_when_the_same_commit_is_run_again(
+def test_publish_keeps_the_first_row_when_the_same_commit_is_run_again(
     repo: Path, stubs: Path
 ) -> None:
-    """Re-running a push records the commit once, at its newest number.
+    """Re-running a push records nothing: the commit is already in the trend.
 
     A second row for one commit would also make the trend file grow on every
     re-run, so "nothing changed, do not commit" could never be true again.
@@ -603,10 +603,35 @@ def test_publish_replaces_the_row_when_the_same_commit_is_run_again(
     result = _publish(repo, stubs, "98.10")
 
     assert result.returncode == 0, result.stderr
+    assert "nothing to commit" in result.stdout
     assert _published(repo, "coverage-trend.csv").splitlines() == [
-        f"{_STUB_DATE},{_SHA},98.10"
+        f"{_STUB_DATE},{_SHA},97.80"
     ]
-    assert _git(_origin(repo), "rev-list", "--count", "coverage-data").strip() == "2"
+    assert _git(_origin(repo), "rev-list", "--count", "coverage-data").strip() == "1"
+
+
+def test_publish_rerun_of_an_older_commit_leaves_the_newer_badge(
+    repo: Path, stubs: Path
+) -> None:
+    """Re-running an earlier push after a later one published is a no-op.
+
+    Otherwise the badge would go back to the older commit's number and the
+    trend would list that commit twice.
+    """
+
+    later = "fedcba9876543210fedcba9876543210fedcba98"
+
+    _publish(repo, stubs, "99.95")
+    _publish(repo, stubs, "98.50", GITHUB_SHA=later)
+    result = _publish(repo, stubs, "99.95")
+
+    assert result.returncode == 0, result.stderr
+    assert "nothing to commit" in result.stdout
+    assert json.loads(_published(repo, "coverage-unit.json"))["message"] == "98.5%"
+    assert _published(repo, "coverage-trend.csv").splitlines() == [
+        f"{_STUB_DATE},{_SHA},99.95",
+        f"{_STUB_DATE},{later},98.50",
+    ]
 
 
 def test_publish_makes_no_commit_when_nothing_changed(repo: Path, stubs: Path) -> None:
@@ -691,12 +716,41 @@ def test_a_failed_gate_cannot_overwrite_a_good_number() -> None:
 
 
 def test_concurrent_pushes_are_serialised_rather_than_cancelled() -> None:
-    """Two pushes must append two trend rows, not race and drop one."""
+    """Two pushes must append two trend rows, not race and drop one.
+
+    `queue: max` because the default queue holds one pending run: a third
+    push while one publishes would cancel the second's publish.
+    """
 
     concurrency = _workflow()["jobs"]["publish"]["concurrency"]
 
-    assert concurrency["group"] == "coverage-data"
-    assert concurrency["cancel-in-progress"] is False
+    assert concurrency == {
+        "group": "coverage-data",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
+
+
+def test_only_pull_requests_cancel_an_earlier_gate_run() -> None:
+    """A newer push to master must not cancel the run that publishes its row.
+
+    The workflow-level group used to be per ref with `cancel-in-progress:
+    true`, so a second master push cancelled the first push's whole run and
+    that commit never reached the trend (#333). A pull request's superseded
+    run is still cancelled; nothing publishes from one.
+    """
+
+    concurrency = _workflow()["concurrency"]
+
+    assert concurrency["cancel-in-progress"] == (
+        "${{ github.event_name == 'pull_request' }}"
+    )
+    # Per commit outside pull requests: runs sharing a group queue with one
+    # pending slot, and a third push would cancel the second while it waited.
+    assert concurrency["group"] == (
+        "coverage-gate-${{ github.event_name == 'pull_request' "
+        "&& github.ref || github.sha }}"
+    )
 
 
 def test_only_the_publishing_job_may_write_to_the_repository() -> None:
