@@ -122,6 +122,14 @@ class SensiClient:
         self._reconnect_lock = asyncio.Lock()
         self._recovery_epoch = 0
 
+        # Setter events on the wire whose ack has not come back, and an event
+        # set while there are none. python-socketio drops pending ack
+        # callbacks on disconnect, so async_update_devices waits for this
+        # before its own. See _track_setter_ack.
+        self._setter_acks_in_flight = 0
+        self._no_setter_ack_in_flight = asyncio.Event()
+        self._no_setter_ack_in_flight.set()
+
     async def __aenter__(self) -> Self:
         """Enter context manager."""
         return self
@@ -353,6 +361,20 @@ class SensiClient:
         state_futures: list[asyncio.Future] = []
         try:
             async with self._reconnect_lock:
+                # A setter whose event is on the wire loses its ack on
+                # disconnect, and reports "Future not done" for a write the
+                # thermostat accepted. Let those acks arrive first; each is
+                # bounded by SET_EVENT_TIMEOUT. A setter still queued is not
+                # waited for: the queue outlives the socket, and the new
+                # connection carries it.
+                #
+                # Re-checked after every wake, because the emit loop can put
+                # another setter on the wire before this resumes. Nothing
+                # between the check and the start of _async_disconnect yields,
+                # and that clears self._sio before its first await, so the emit
+                # loop cannot slip one in after the last check.
+                while self._setter_acks_in_flight:
+                    await self._no_setter_ack_in_flight.wait()
                 await self._async_disconnect()
                 state_futures = [
                     await self._create_event_future("state", icd_id)
@@ -720,6 +742,14 @@ class SensiClient:
         reconnect, and the emit loop discards a timed-out command rather than
         replay it. Holding the lock until the ack is in means the tick waits
         for the retry, which is bounded by that same timeout.
+
+        The first attempt is not emitted under the lock - concurrent setters
+        would then queue behind each other's acks. The coordinator's reconnect
+        waits for its ack instead: python-socketio drops pending ack callbacks
+        on disconnect, so a tick landing between the emit and the ack turned
+        a write the thermostat had accepted into "Future not done".
+        async_update_devices lets every setter on the wire have its answer
+        before it tears the socket down. See _track_setter_ack.
         """
 
         epoch = self._recovery_epoch
@@ -983,6 +1013,8 @@ class SensiClient:
                             continue
 
                         if self._sio and self._sio.connected:
+                            if item.future is not None:
+                                self._track_setter_ack(item.future)
                             await self._sio.emit(
                                 item.name, item.data, None, item.callback
                             )
@@ -1006,6 +1038,24 @@ class SensiClient:
                 LOGGER.debug(f"In event emit loop ({self._config.user_id}): {count}")
 
             count = count + 1
+
+    def _track_setter_ack(self, future: asyncio.Future) -> None:
+        """Count a setter as awaiting its ack until its future settles.
+
+        Called as the event goes on the wire, so async_update_devices waits
+        only for acks that a disconnect would drop. The future settles when
+        the ack arrives, when SET_EVENT_TIMEOUT cancels it, or when its caller
+        is cancelled - so nothing is counted for longer than that timeout.
+        """
+        self._setter_acks_in_flight += 1
+        self._no_setter_ack_in_flight.clear()
+
+        def settled(_future: asyncio.Future) -> None:
+            self._setter_acks_in_flight -= 1
+            if not self._setter_acks_in_flight:
+                self._no_setter_ack_in_flight.set()
+
+        future.add_done_callback(settled)
 
     async def _connect(self) -> None:
         """Make a connection and wait for `connected` event.
