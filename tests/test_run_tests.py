@@ -116,6 +116,18 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         # distribution on without `--tx`, so this ran PROG and then the suite.
         ["-n", "1", "--px", "id=p//popen//python=/tmp/evil", "tests"],
         ["--px=id=p//popen//python=/tmp/evil"],
+        # pytest-picked appends `--parent-branch` to `git diff` as its last
+        # word, so a value starting with `-` is a git option: this truncated
+        # the settings file. `--picked` swaps in paths from `git status`
+        # after the target check, so a test file outside `tests/` ran.
+        [
+            "--picked",
+            "--mode=branch",
+            "--parent-branch=--output=.claude/settings.json",
+        ],
+        ["--parent-branch", "master", "tests"],
+        ["--picked"],
+        ["--picked=first", "tests"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
