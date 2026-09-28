@@ -7,7 +7,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .auth import (
@@ -33,10 +33,19 @@ AUTH_DATA_SCHEMA = vol.Schema(
 )
 
 
+# hass.data key: ids of the user flows that have reached the credential save.
+_SAVE_CLAIMS = f"{SENSI_DOMAIN}_save_claims"
+
+
 class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
     """Config flow for Sensi thermostat."""
 
     VERSION = 1
+
+    @callback
+    def async_remove(self) -> None:
+        """Release this flow's claim on the credential save, if it made one."""
+        self.hass.data.get(_SAVE_CLAIMS, set()).discard(self.flow_id)
 
     async def _try_login(self, config: AuthenticationConfig) -> LoginResponse:
         """Check the credentials, without committing them.
@@ -79,13 +88,25 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                 # while the token was being validated. Home Assistant aborts
                 # this flow when that happens, but only outside this step, so
                 # the shared store would still get this account's tokens.
-                if self._async_current_entries():
+                # Home Assistant adds the entry only after awaits of its own
+                # once this step returns, so a flow whose validation ends in
+                # that gap sees no entry yet. The first flow to reach the save
+                # claims it, with no await between the check and the claim,
+                # and holds the claim until the flow is removed; by then its
+                # entry exists or it never will.
+                claims: set[str] = self.hass.data.setdefault(_SAVE_CLAIMS, set())
+                if self._async_current_entries() or claims - {self.flow_id}:
                     return self.async_abort(
                         reason="single_instance_allowed",
                         translation_domain=HOMEASSISTANT_DOMAIN,
                     )
-
-                await async_save_config(self.hass, result.config)
+                claims.add(self.flow_id)
+                try:
+                    await async_save_config(self.hass, result.config)
+                except BaseException:
+                    # Nothing was accepted, so another flow may try again.
+                    claims.discard(self.flow_id)
+                    raise
                 return self.async_create_entry(
                     title=SENSI_NAME,
                     # The rotated token, not the one the user pasted - Sensi
