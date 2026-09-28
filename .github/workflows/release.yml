@@ -422,9 +422,25 @@ jobs:
           newest="$(git tag --list '[0-9][0-9][0-9][0-9].*' | grep -vE '(b|rc)[0-9]+$' | sort -V | tail -1 || true)"
           echo "manifest: $current | newest stable tag: ${newest:-none} | releasing: $VERSION"
 
+          # Not `sort -V`: it puts 2026.9.1b1 after 2026.9.1, where PEP 440 and
+          # Home Assistant put it before. python3 compares the CalVer shapes
+          # CALVER_PATTERN admits the way PEP 440 does: numbers first, then a
+          # pre-release below its own release, b below rc. This job installs
+          # nothing, so `packaging` is not relied on; the ordering is spelled out.
           if [ -n "$newest" ]; then
-            older="$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | head -1)"
-            if [ "$older" = "$VERSION" ]; then
+            if ! NEWEST="$newest" python3 -c '
+          import os, re
+
+          def key(version):
+              match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:(b|rc)(\d+))?", version)
+              if match is None:
+                  raise SystemExit(f"cannot compare {version!r} as CalVer")
+              year, month, patch, stage, number = match.groups()
+              rank = {"b": 0, "rc": 1, None: 2}[stage]
+              return (int(year), int(month), int(patch), rank, int(number or 0))
+
+          raise SystemExit(key(os.environ["VERSION"]) <= key(os.environ["NEWEST"]))
+          '; then
               echo "::error::$VERSION is not newer than the latest tag $newest." >&2
               exit 1
             fi

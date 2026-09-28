@@ -962,6 +962,36 @@ def test_a_pre_release_tag_is_not_the_bar_a_stable_release_must_clear(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("version", "newer"),
+    [
+        ("2026.9.1b1", False),
+        ("2026.9.1rc1", False),
+        ("2026.9.0b2", False),
+        ("2026.9.2b1", True),
+    ],
+)
+def test_a_pre_release_is_ordered_below_its_own_stable_release(
+    repo: Path, version: str, newer: bool
+) -> None:
+    """2026.9.1b1 comes before 2026.9.1, as PEP 440 and Home Assistant say.
+
+    `sort -V` puts a suffixed version after its base, so a beta of a number
+    already released stable would be published as if it were newer (#334).
+    """
+
+    _git(repo, "tag", "2026.9.1")
+    _commit_manifest(repo, version)
+
+    result = _validate(repo, version, prerelease="true")
+
+    if newer:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1
+        assert f"{version} is not newer than the latest tag 2026.9.1" in result.stderr
+
+
 def test_validation_reports_the_numbers_it_compared(repo: Path) -> None:
     """The step echoes both so a refusal is explicable from the log alone."""
 
