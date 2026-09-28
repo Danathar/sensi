@@ -382,14 +382,36 @@ class SensiClient:
                 ]
                 await self._connect()
 
-            with contextlib.suppress(asyncio.exceptions.TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.gather(*state_futures), PREPARE_DEVICES_TIMEOUT
+            if not state_futures:
+                return
+
+            # A connection that comes up and then sends no state at all is a
+            # failed refresh, as it is for setup's wait_for_devices. This used
+            # to be suppressed: the refresh returned normally, the coordinator
+            # reset its failure count, and every entity kept its last values
+            # as current for as long as the backend stayed silent - the
+            # MAX_CONSECUTIVE_CONNECTION_FAILURES path was never reached.
+            #
+            # Some devices answering is still a refresh: one thermostat that
+            # is offline must not make the rest of the account unavailable.
+            done, pending = await asyncio.wait(
+                state_futures, timeout=PREPARE_DEVICES_TIMEOUT
+            )
+            if not done:
+                raise SensiConnectionError(
+                    f"No state event within {PREPARE_DEVICES_TIMEOUT} seconds of reconnecting"
+                )
+            if pending:
+                LOGGER.debug(
+                    "No state from %d of %d device(s) within %s seconds of reconnecting",
+                    len(pending),
+                    len(state_futures),
+                    PREPARE_DEVICES_TIMEOUT,
                 )
         finally:
-            # Already done when the state arrived, already cancelled by
-            # wait_for on a timeout; this is for a connect that raised, so the
-            # waiters are not left pending for the next state event.
+            # Already done when the state arrived; still pending on a timeout
+            # or after a connect that raised, so the waiters are not left for
+            # the next state event.
             for future in state_futures:
                 future.cancel()
 

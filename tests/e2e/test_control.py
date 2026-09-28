@@ -613,6 +613,44 @@ async def test_entities_go_unavailable_after_repeated_failed_refreshes(
     assert hass.states.get(ONLINE).state == STATE_ON
 
 
+async def test_a_refresh_with_no_state_counts_as_a_failure(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A reconnect that brings no state is an outage, not a quiet success.
+
+    The backend accepts the socket and then sends nothing. The refresh used to
+    swallow its own timeout, so the coordinator reset the failure count and
+    the entities showed the last values as current for the whole outage. It
+    now fails like a connect that could not be made, and the entities go
+    unavailable after the same number of refreshes.
+    """
+    coordinator = sensi_entry.runtime_data
+    sensi_backend.withhold_state = True
+
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        assert not coordinator.last_update_success
+        assert coordinator.consecutive_connection_failures == 1
+        assert hass.states.get(CLIMATE).state != STATE_UNAVAILABLE
+
+        for _ in range(2):
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            assert hass.states.get(CLIMATE).state == STATE_UNAVAILABLE
+
+        # The first refresh that brings state back ends the outage.
+        sensi_backend.withhold_state = False
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert coordinator.last_update_success
+    assert coordinator.consecutive_connection_failures == 0
+    assert hass.states.get(CLIMATE).state != STATE_UNAVAILABLE
+
+
 async def test_a_setter_that_timed_out_is_not_replayed_on_reconnect(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
