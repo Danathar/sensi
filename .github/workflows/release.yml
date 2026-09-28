@@ -282,6 +282,12 @@ jobs:
       # An automatic release publishes whatever is on master to everyone on
       # HACS without a person looking first. The least this can do is refuse
       # when master's own checks are not green.
+      #
+      # Two check runs are excused. `release` is this job. The nightly's
+      # "latest Home Assistant (advance warning)" leg is informational and
+      # continue-on-error: its check run still concludes `failure`, but
+      # nightly.yml says it must never gate. The name here has to match that
+      # job's `name:`; tests/test_release_workflow.py reads it from there.
       - name: Require green checks on this commit
         if: steps.decide.outputs.go == 'true'
         env:
@@ -290,7 +296,7 @@ jobs:
           set -euo pipefail
           bad="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
             --jq '[.check_runs[]
-                   | select(.name != "release")
+                   | select(.name | IN("release", "latest Home Assistant (advance warning)") | not)
                    | select((.conclusion // "pending") | IN("success","skipped","neutral") | not)
                    | "\(.name): \(.conclusion // .status)"] | .[]')"
 
