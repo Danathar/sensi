@@ -613,6 +613,41 @@ async def test_entities_go_unavailable_after_repeated_failed_refreshes(
     assert hass.states.get(ONLINE).state == STATE_ON
 
 
+async def test_a_refresh_that_brings_no_state_is_a_failed_update(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A reconnect that delivers no `state` does not count as fresh data.
+
+    The refresh used to swallow the timeout on its state wait, so a backend
+    that accepted the connection and then sent nothing was a successful
+    update: the failure count stayed at zero and every entity kept showing
+    the values from the last refresh that did bring state, as if current.
+    Setup already treats the same silence as a failure. Now a refresh does
+    too, and counts toward MAX_CONSECUTIVE_CONNECTION_FAILURES the same way
+    a connection that could not be made does.
+    """
+    coordinator = sensi_entry.runtime_data
+
+    sensi_backend.withhold_state = True
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        for _ in range(2):
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+
+    assert not coordinator.last_update_success
+    assert coordinator.consecutive_connection_failures == 2
+
+    # The next refresh that does bring state counts as an update again.
+    sensi_backend.withhold_state = False
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.last_update_success
+    assert coordinator.consecutive_connection_failures == 0
+
+
 async def test_a_setter_that_timed_out_is_not_replayed_on_reconnect(
     hass: HomeAssistant,
     sensi_entry: MockConfigEntry,
