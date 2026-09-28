@@ -134,6 +134,7 @@ On multi-stage systems (2-stage heat pumps, multi-stage auxiliary heat), `hvac_*
 - **Simultaneous logins.** Using the mobile app and the integration at the same time usually works, but property changes occasionally fail to apply — likely a Sensi backend issue, or the thermostat briefly dropping offline.
 - **Stale online status.** Incoming device data keeps reporting a thermostat as `online` for roughly 10 minutes after it loses WiFi. What happens to operations during that window is not known.
 - **Temperature unit.** The unit shown comes from Home Assistant's `unit_system` setting, not from the thermostat. Make sure the two agree ([upstream issue #113](https://github.com/iprak/sensi/issues/113)).
+- **Changing mode and setpoint in one call.** `climate.set_temperature` with `hvac_mode` works when the new setpoint is inside the *current* mode's range. For a setpoint outside that range, or a low/high range when switching to Auto, call `climate.set_hvac_mode` first and then `climate.set_temperature`. Home Assistant checks the values against the current mode before the integration sees them.
 - No public API, so any of this can break when Emerson changes their backend.
 
 ## About this fork
