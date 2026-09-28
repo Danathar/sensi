@@ -9,6 +9,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
+from custom_components.sensi import config_flow
 from custom_components.sensi.auth import (
     AuthenticationConfig,
     AuthenticationError,
@@ -942,6 +943,137 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
         assert (await get_stored_config(hass, entry.unique_id)) == self._VALIDATED_A
         assert result_b["type"] == FlowResultType.ABORT
         assert result_b["reason"] == "single_instance_allowed"
+
+    async def test_a_flow_validated_after_the_first_save_leaves_the_store_alone(
+        self, hass: HomeAssistant, hass_storage
+    ):
+        """The rest of #325: flow B answers after A saved, before A's entry.
+
+        Home Assistant adds A's entry only after awaits of its own once A's
+        step returns, so B finds no entry at that point and used to save B's
+        tokens over the ones A had just written. A's entry then won, and its
+        next setup found another account's credentials.
+        """
+        # A context each: Home Assistant keeps the dict it is given, and
+        # async_set_unique_id writes into it.
+        flow_a = await hass.config_entries.flow.async_init(
+            SENSI_DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        flow_b = await hass.config_entries.flow.async_init(
+            SENSI_DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        b_answered = asyncio.Event()
+        b_saved = asyncio.Event()
+        a_done = asyncio.Event()
+        save = config_flow.async_save_config
+
+        async def validate(_hass, token):
+            if token == "typed_b":
+                await b_answered.wait()
+                return self._VALIDATED_B
+            return self._VALIDATED_A
+
+        async def save_in_the_gap(hass_, config):
+            await save(hass_, config)
+            if config.user_id == "user123":
+                # A has saved and its entry does not exist yet: let B answer,
+                # and go on once B has either saved or given up.
+                assert not hass.config_entries.async_entries(SENSI_DOMAIN)
+                b_answered.set()
+                saved = asyncio.ensure_future(b_saved.wait())
+                await asyncio.wait(
+                    {saved, task_b}, timeout=5, return_when="FIRST_COMPLETED"
+                )
+                saved.cancel()
+            else:
+                # Hold B here so A's entry is the one that gets added.
+                b_saved.set()
+                await a_done.wait()
+
+        with (
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+            patch("custom_components.sensi.async_unload_entry", return_value=True),
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                side_effect=validate,
+            ),
+            patch(
+                "custom_components.sensi.config_flow.async_save_config",
+                side_effect=save_in_the_gap,
+            ),
+        ):
+            task_b = hass.async_create_task(
+                hass.config_entries.flow.async_configure(
+                    flow_b["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_b"}
+                )
+            )
+            await asyncio.sleep(0)
+            result_a = await hass.config_entries.flow.async_configure(
+                flow_a["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_a"}
+            )
+            a_done.set()
+            # Held rather than raised, so the store is checked first.
+            (result_b,) = await asyncio.gather(task_b, return_exceptions=True)
+            (entry,) = hass.config_entries.async_entries(SENSI_DOMAIN)
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert result_a["type"] == FlowResultType.CREATE_ENTRY
+        assert entry.unique_id == "user123"
+        assert hass_storage[SENSI_DOMAIN]["data"]["user_id"] == "user123"
+        assert (await get_stored_config(hass, entry.unique_id)) == self._VALIDATED_A
+        assert result_b["type"] == FlowResultType.ABORT
+        assert result_b["reason"] == "single_instance_allowed"
+
+    async def test_an_abandoned_save_does_not_block_the_next_flow(
+        self, hass: HomeAssistant
+    ):
+        """A flow whose save failed, then was closed, leaves no claim behind."""
+        user = {"source": config_entries.SOURCE_USER}
+        flow_a = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_A,
+            ),
+            patch(
+                "custom_components.sensi.config_flow.async_save_config",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError),
+        ):
+            await hass.config_entries.flow.async_configure(
+                flow_a["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_a"}
+            )
+        hass.config_entries.flow.async_abort(flow_a["flow_id"])
+
+        flow_b = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED_B,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config") as mock_save,
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result_b = await hass.config_entries.flow.async_configure(
+                flow_b["flow_id"], {CONFIG_REFRESH_TOKEN: "typed_b"}
+            )
+            await hass.async_block_till_done()
+
+        assert result_b["type"] == FlowResultType.CREATE_ENTRY
+        mock_save.assert_called_once_with(hass, self._VALIDATED_B)
+
+    async def test_a_closed_dialog_releases_its_claim(self, hass: HomeAssistant):
+        """A claim lasts only as long as the flow that made it."""
+        user = {"source": config_entries.SOURCE_USER}
+        flow_a = await hass.config_entries.flow.async_init(SENSI_DOMAIN, context=user)
+        claims = hass.data.setdefault(config_flow._SAVE_CLAIMS, set())
+        claims.add(flow_a["flow_id"])
+
+        hass.config_entries.flow.async_abort(flow_a["flow_id"])
+
+        assert flow_a["flow_id"] not in claims
 
 
 @pytest.mark.parametrize("path", STRINGS_FILES, ids=lambda p: p.name)
