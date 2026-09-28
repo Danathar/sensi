@@ -146,18 +146,21 @@ supply-chain concern.
   assurance. The wrapper is pytest with three rules, because it is what runs
   without a permission prompt: every target must be inside `tests/`, the
   options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`, `--tx`,
-  `--px`) are refused, and so are the options that write or delete a path of
-  their own (`--junitxml`, `--log-file`, `--basetemp`, `--cov-config`, and a
-  `--cov-report` destination such as `xml:DEST`). `--tx` and `--px` are
-  pytest-xdist's, and pytest-xdist ships as a pinned dependency of the test
-  harness, so either would otherwise let a gateway run any program on disk as
-  its interpreter - `--px` needs only the ordinary parallel-run option beside
-  it, since every proxy gateway is made before any worker. An argument
-  starting with
-  `@` is refused before any of the three, because pytest replaces it with
-  the lines of the file it names, and none of those lines is checked. The
-  full list, with the reason for each entry, is at the top of
-  `scripts/run_tests.py`.
+  `--px`, `--picked`, `--parent-branch`) are refused, and so are the options
+  that write or delete a path of their own (`--junitxml`, `--log-file`,
+  `--basetemp`, `--cov-config`, and a `--cov-report` destination such as
+  `xml:DEST`). `--tx` and `--px` are pytest-xdist's, and pytest-xdist ships as
+  a pinned dependency of the test harness, so either would otherwise let a
+  gateway run any program on disk as its interpreter - `--px` needs only the
+  ordinary parallel-run option beside it, since every proxy gateway is made
+  before any worker. `--picked` and `--parent-branch` are pytest-picked's,
+  another pinned dependency: the first swaps in targets from git after the
+  target check has run, and the second is handed to git as a word git reads as
+  an option, so a value naming git's own output option truncated the settings
+  file. An argument starting with `@` is refused before any of the three,
+  because pytest replaces it with the lines of the file it names, and none of
+  those lines is checked. The full list, with the reason for each entry, is at
+  the top of `scripts/run_tests.py`.
 - Say what could not be verified. There is no thermostat in CI and the protocol
   is undocumented; "unverified against hardware" is an acceptable outcome and
   a silent omission is not.

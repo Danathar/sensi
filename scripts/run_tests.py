@@ -12,14 +12,14 @@ This wrapper forwards to pytest with three rules. Every target it is given
 must resolve inside `tests/`, and conftest discovery is pinned to the repository
 so nothing above it is imported either. The options that load code by a route
 the target check cannot see (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`,
-`--tx`, `--px`) are refused. And the options that create, truncate or delete a
-path of their own (`--junitxml`, `--log-file`, `--basetemp` and the rest of
-`REFUSED_WRITE`, `--cov-config`, and the `--cov-report` destination forms such
-as `xml:DEST`) are refused too, because an option's path is not a target and
-does not have to be inside the repository. Before any of that, an argument
-starting with `@` is refused: pytest replaces it with the lines of the file it
-names, so every argument in that file would reach pytest without passing the
-three rules.
+`--tx`, `--px`, `--picked`, `--parent-branch`) are refused. And the options
+that create, truncate or delete a path of their own (`--junitxml`,
+`--log-file`, `--basetemp` and the rest of `REFUSED_WRITE`, `--cov-config`, and
+the `--cov-report` destination forms such as `xml:DEST`) are refused too,
+because an option's path is not a target and does not have to be inside the
+repository. Before any of that, an argument starting with `@` is refused:
+pytest replaces it with the lines of the file it names, so every argument in
+that file would reach pytest without passing the three rules.
 Running agent-written code is still possible, because that is what a test
 suite is. The point is that the code has to be a file in the tree, where
 `git status` shows it and review reaches it.
@@ -59,10 +59,31 @@ TESTS = ROOT / "tests"
 # turn distribution on: `-n 1` does that by itself. `python3 scripts/run_tests.py
 # -n 1 --px id=p//popen//python=PROG tests` ran PROG and then the suite, exit 0.
 #
+# `--picked` and `--parent-branch` are pytest-picked's, another pinned
+# dependency of the same harness. `--picked` replaces the targets with the
+# paths `git status` (or, with `--mode=branch`, `git diff`) reports, after the
+# target check has run, so a changed test file outside `tests/` runs as if it
+# had been named. `--parent-branch` is appended to that `git diff` as the last
+# word, and git reads a word starting with `-` as an option: `python3
+# scripts/run_tests.py --picked --mode=branch
+# --parent-branch=--output=.claude/settings.json` truncated the settings file
+# and wrote git's name-status list into it, and the same value naming the gate
+# hook left a hook that no longer parses. `--parent-branch` is refused as well
+# as `--picked` because the git call is the harm, whichever option enables it.
+#
 # Keep this list short and keep the reason with each entry. An option that
 # reaches code and is not here is a bug in the list, not in the target check.
 REFUSED_LONG = frozenset(
-    {"--pyargs", "--config-file", "--override-ini", "--confcutdir", "--tx", "--px"}
+    {
+        "--pyargs",
+        "--config-file",
+        "--override-ini",
+        "--confcutdir",
+        "--tx",
+        "--px",
+        "--picked",
+        "--parent-branch",
+    }
 )
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
 
