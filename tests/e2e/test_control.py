@@ -17,6 +17,8 @@ from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
 from homeassistant.components.climate import (
     ATTR_FAN_MODE,
     ATTR_HVAC_MODE,
+    ATTR_TARGET_TEMP_HIGH,
+    ATTR_TARGET_TEMP_LOW,
     DOMAIN as CLIMATE_DOMAIN,
     SERVICE_SET_FAN_MODE,
     SERVICE_SET_HVAC_MODE,
@@ -39,7 +41,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from .conftest import FakeSensiBackend
@@ -141,6 +143,116 @@ async def test_set_temperature_with_hvac_mode_turns_an_off_thermostat_on(
     state = hass.states.get(CLIMATE)
     assert state.state == HVACMode.HEAT
     assert state.attributes["temperature"] == 70
+
+
+# README "Limitations" (#382, closing #315 rows 2 and 3): a set_temperature
+# carrying hvac_mode is refused by Home Assistant when its values do not fit
+# the *current* mode, before the integration is called, and the workaround is
+# set_hvac_mode first, then set_temperature. Each case is (hvac_mode, the
+# set_temperature arguments, Home Assistant's translation key for the refusal,
+# the set_temperature payloads the workaround puts on the wire). The sample
+# thermostat is in HEAT with heat_max_temp 72.
+_REFUSED_BEFORE_THE_INTEGRATION = {
+    "cool setpoint above the heat bound": (
+        HVACMode.COOL,
+        {ATTR_TEMPERATURE: 74},
+        "temp_out_of_range",
+        [{"mode": "cool", "target_temp": 74}],
+    ),
+    "low/high range when switching to auto": (
+        HVACMode.AUTO,
+        {ATTR_TARGET_TEMP_LOW: 66, ATTR_TARGET_TEMP_HIGH: 78},
+        "missing_target_temperature_range_entity_feature",
+        [
+            {"mode": "heat", "target_temp": 66},
+            {"mode": "cool", "target_temp": 78},
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("hvac_mode", "arguments", "translation_key", "_payloads"),
+    _REFUSED_BEFORE_THE_INTEGRATION.values(),
+    ids=_REFUSED_BEFORE_THE_INTEGRATION.keys(),
+)
+async def test_set_temperature_with_hvac_mode_outside_the_current_range_is_refused(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+    hvac_mode: HVACMode,
+    arguments: dict,
+    translation_key: str,
+    _payloads: list,
+) -> None:
+    """Home Assistant refuses the call against the current mode (README).
+
+    The translation key is Home Assistant's own, not one this integration
+    raises, so the refusal is pinned to where README says it happens. If this
+    starts passing the call through, the README bullet "Changing mode and
+    setpoint in one call" is out of date.
+    """
+    emitted_before = list(sensi_backend.emitted)
+
+    with pytest.raises(ServiceValidationError) as refused:
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            SERVICE_SET_TEMPERATURE,
+            {ATTR_ENTITY_ID: CLIMATE, ATTR_HVAC_MODE: hvac_mode, **arguments},
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+
+    assert refused.value.translation_domain == CLIMATE_DOMAIN
+    assert refused.value.translation_key == translation_key
+    assert sensi_backend.emitted == emitted_before
+    assert hass.states.get(CLIMATE).state == HVACMode.HEAT
+
+
+@pytest.mark.parametrize(
+    ("hvac_mode", "arguments", "_translation_key", "payloads"),
+    _REFUSED_BEFORE_THE_INTEGRATION.values(),
+    ids=_REFUSED_BEFORE_THE_INTEGRATION.keys(),
+)
+async def test_set_hvac_mode_then_set_temperature_is_the_documented_workaround(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+    hvac_mode: HVACMode,
+    arguments: dict,
+    _translation_key: str,
+    payloads: list,
+) -> None:
+    """The two calls README gives for a refused set_temperature both land."""
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_HVAC_MODE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_HVAC_MODE: hvac_mode},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    emitted_between = len(sensi_backend.emitted)
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, **arguments},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_operating_mode")["value"] == hvac_mode
+    sent = sensi_backend.emitted[emitted_between:]
+    assert [name for name, _ in sent] == ["set_temperature"] * len(payloads)
+    assert [
+        {"mode": payload["mode"], "target_temp": payload["target_temp"]}
+        for _, payload in sent
+    ] == payloads
+
+    state = hass.states.get(CLIMATE)
+    assert state.state == hvac_mode
+    for attribute, value in arguments.items():
+        assert state.attributes[attribute] == value
 
 
 async def test_set_hvac_mode_reaches_the_wire_and_updates_state(
