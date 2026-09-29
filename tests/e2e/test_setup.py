@@ -22,7 +22,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
-from .conftest import NOT_EXPIRED, FakeSensiBackend
+from .conftest import NOT_EXPIRED, FakeSensiBackend, FakeSensiSocket
 
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
 
@@ -245,6 +245,44 @@ async def test_unload_disconnects_the_socket(
     # Unloading takes the entities out of service rather than deleting them.
     climate = hass.states.get("climate.sensi_living_room")
     assert climate is None or climate.state == STATE_UNAVAILABLE
+
+
+async def test_a_refresh_during_unload_leaves_no_socket_behind(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+) -> None:
+    """A coordinator tick that lands while unload stops the client is refused.
+
+    async_unload_entry stops the client before the coordinator is shut down,
+    so the coordinator can still start a refresh while stop() drains the
+    socket. That refresh used to reconnect once stop() released the lock: the
+    entry was NOT_LOADED and its account still had a live connection.
+    """
+    coordinator = sensi_entry.runtime_data
+    draining = asyncio.Event()
+    drained = asyncio.Event()
+
+    async def slow_wait(_socket: FakeSensiSocket) -> None:
+        draining.set()
+        await drained.wait()
+
+    with patch.object(FakeSensiSocket, "wait", slow_wait):
+        unload = asyncio.create_task(
+            hass.config_entries.async_unload(sensi_entry.entry_id)
+        )
+        await draining.wait()
+
+        tick = asyncio.create_task(coordinator.async_refresh())
+        await asyncio.sleep(0)
+
+        drained.set()
+        assert await unload
+        await tick
+        await hass.async_block_till_done()
+
+    assert sensi_entry.state is ConfigEntryState.NOT_LOADED
+    assert [socket for socket in sensi_backend.sockets if socket.connected] == []
 
 
 async def test_setup_retries_when_the_backend_is_unreachable(
