@@ -887,6 +887,60 @@ def test_an_assignment_before_a_gated_command_that_is_not_git_is_refused(
 @pytest.mark.parametrize(
     "command",
     [
+        # gh evaluates --jq with gojq, whose `env` builtin is the process
+        # environment: `gh pr view 1 --json number --jq env` printed GH_TOKEN
+        # under the gh allow rows (gh 2.101.0). Every pflag spelling of the
+        # filter, behind a wrapper, after another command, and a filter word
+        # bash rewrites into `env` before gh reads it.
+        "gh pr view 1 --json number --jq env",
+        "gh pr view 1 --json number --jq=env",
+        "gh pr view 1 --json number -q env.GH_TOKEN",
+        "gh pr list --json number -qenv",
+        "gh pr list --json number -q=env",
+        "gh pr view 1 -wq env",
+        "gh run view 1 --json jobs -q '[env]'",
+        "gh run list --json databaseId --jq 'env|to_entries[]|.key'",
+        "gh issue view 1 --json number --jq 'e'nv",
+        "gh issue list --json number --jq {e,}nv",
+        "gh pr view 1 --json number --jq e?v",
+        "timeout 5 gh issue view 1 --json number --jq env",
+        "git status; gh issue list --json title --jq env",
+    ],
+)
+def test_a_gh_filter_that_reads_the_environment_is_refused(command: str) -> None:
+    """An allow row for reading pull requests is not one for reading GH_TOKEN."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "gh --jq filter that can read the environment" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A filter that names fields reads the JSON gh fetched; `.env` is a
+        # field, a quoted `[` is not a glob, and `env` inside another word or
+        # outside the filter is not the builtin.
+        "gh pr view 1 --json title -q .title",
+        "gh pr view 1 --json title --jq '.env'",
+        "gh run view 1 --json jobs --jq '.jobs[].conclusion'",
+        "gh pr list --json number --jq '.[0].number'",
+        "gh issue list --json title --jq 'map(.title|select(test(\"environment\")))'",
+        "gh pr view 1 --json body --jq .body | grep env",
+        "gh pr list -R Danathar/sensi",
+        "gh run view 123 --log-failed",
+    ],
+)
+def test_a_gh_filter_that_names_fields_is_left_alone(command: str) -> None:
+    """Refusing every filter would cost the jq reads AGENTS.md relies on."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         # git reads the names of programs to run out of its environment, and
         # the allow rule matches `git diff` on its prefix, so the assignment
         # in front of it is part of the approved string.
@@ -2320,6 +2374,20 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "options",
+        "gh pr view 1 --json number --jq env",
+        _REFUSED,
+        "gojq's env builtin is the process environment, so the filter prints "
+        "GH_TOKEN and every other exported variable (gh 2.101.0)",
+    ),
+    _Row(
+        "options",
+        "gh pr view 1 --json title --jq .env",
+        _ALLOWED,
+        "a leading dot makes env a field of the JSON gh fetched, not the "
+        "builtin, so a filter test that matched the letters would refuse it",
+    ),
+    _Row(
+        "options",
         "ruff check . --output-format=github",
         _ALLOWED,
         "--output-format picks how the report looks and still prints it to "
@@ -2551,6 +2619,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "for prefix in _GATED_PREFIXES + _EXACT_ROWS:",
         "for prefix in _GATED_PREFIXES:",
         "ruff check . >custom_components/sensi/client.py",
+    ),
+    (
+        "gh's --jq filter reading the environment",
+        "if reading is not None:",
+        "if False:",
+        "gh pr view 1 --json number --jq env",
+    ),
+    (
+        "the dot that makes env a field of the fetched JSON",
+        'r"(?:^|[^A-Za-z0-9_.$])env(?![A-Za-z0-9_])"',
+        'r"(?:^|[^A-Za-z0-9_$])env(?![A-Za-z0-9_])"',
+        "gh pr view 1 --json title --jq .env",
     ),
     (
         "ruff's own --output-file / -o",

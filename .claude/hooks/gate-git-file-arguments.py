@@ -83,6 +83,18 @@ three of their arguments do file I/O that has nothing to do with the repository:
   on its own. The three rows with no `:*` (`ruff check .`, `ruff format --check .`,
   `python3 scripts/check_requirements_sync.py`) are gated the same way; see
   `_EXACT_ROWS`.
+* gh's `--jq` (`-q`) filter reads the environment. gh evaluates it with
+  gojq, whose `env` builtin is the whole process environment, so
+  `gh pr view 1 --json number --jq env` printed `GH_TOKEN` and every other
+  exported variable under the `gh` allow rows with no prompt (gh 2.101.0),
+  and no `Read` deny rule stands in front of a variable. `$ENV` carries a
+  `$` and is already refused as a substitution; a filter that names the
+  bare `env` is refused in every pflag spelling (`--jq F`, `--jq=F`, `-q F`,
+  `-qF`, `-q=F`, `-wq F`), and so is a filter word bash would rewrite first
+  (a brace, a glob), since `{e,}nv` reaches gh as `env`. A string literal
+  `"env"` inside a filter is refused too; telling it apart means parsing jq.
+  Filters that name fields (`--jq .title`, `.env`) are left alone, and gh's
+  `--template` has no function that reads the environment.
 * `xargs` hides the operands altogether. It appends the words it reads from
   standard input, or from the file `-a FILE` names, to the command it runs,
   so `xargs git diff <list.txt` is `git diff /dev/null ./secrets.yaml` when
@@ -456,6 +468,49 @@ _GUARDED_NAME = re.compile(r"\b(git|gh|python3|ruff)\b")
 # of a cluster of short flags (`-qo PATH`). The letter is looked for anywhere
 # in a short cluster, as `-O` is for git.
 _RUFF_OUTPUT_FLAG = re.compile(r"^--output-file(=|$)|^-[A-Za-z]*o")
+
+# gojq's `env` builtin as a word of a jq filter: `env` with no identifier
+# character on either side and no `.` before it, since `.env` is a field of the
+# JSON gh fetched. A `$` before it is `$ENV`, which the substitution rule
+# already refuses.
+_JQ_ENV = re.compile(r"(?:^|[^A-Za-z0-9_.$])env(?![A-Za-z0-9_])")
+
+# What bash rewrites in an unquoted word before gh reads it: a glob matches
+# names on disk (a file called `env` turns `e?v` into `env`), and a brace is
+# tested by `_brace_would_expand`.
+_GLOB = frozenset("*?[")
+
+
+def _gh_filter_reads_env(segment: list[str], twins: list[str]) -> str | None:
+    """Return the gh `--jq` filter word in `segment` that can read the environment.
+
+    gh parses its flags with pflag, so the filter is the word after `--jq` or
+    `-q`, the rest of `--jq=F`, or whatever follows the `q` of a short cluster
+    (`-qF`, `-q=F`, `-wq F`). A `q` behind a flag that takes a value (`-Rq`)
+    is read as the filter too, which refuses a repository name only when it
+    spells `env`. The quote-masked twin tells a brace or glob bash would
+    expand from a quoted one gh receives as typed.
+    """
+
+    expecting = False
+    for word, twin in zip(segment, twins, strict=True):
+        text = None
+        if expecting:
+            text, expecting = word, False
+        elif word == "--jq":
+            expecting = True
+        elif word.startswith("--jq="):
+            text = word[len("--jq=") :]
+        elif word.startswith("-") and not word.startswith("--") and "q" in word:
+            text = word[word.index("q") + 1 :].removeprefix("=")
+            if not text:
+                expecting = True
+                continue
+        if text is None:
+            continue
+        if _JQ_ENV.search(text) or _brace_would_expand(twin) or _GLOB & set(twin):
+            return word
+    return None
 
 
 def _brace_would_expand(word: str) -> bool:
@@ -1478,6 +1533,27 @@ def main() -> int:
                         file=sys.stderr,
                     )
                     return 2
+            reading = (
+                _gh_filter_reads_env(segment, twins)
+                if prefix and prefix[0] == "gh"
+                else None
+            )
+            if reading is not None:
+                print(
+                    f"Blocked: `{reading}` is a gh --jq filter that can read "
+                    "the environment. gh evaluates --jq (-q) with gojq, whose "
+                    "`env` builtin is every variable this shell holds - "
+                    "GH_TOKEN, GITHUB_TOKEN, ANTHROPIC_API_KEY and whatever "
+                    "else is exported - so `gh pr view 1 --json number --jq "
+                    "env` prints them under an allow row that is there to read "
+                    "pull requests, issues and runs. A filter word `env` is "
+                    "refused wherever it stands, a quoted string included, and "
+                    "so is a filter bash rewrites before gh sees it (a brace or "
+                    "a glob: `{e,}nv` reaches gh as env). Name the fields you "
+                    "want instead: --jq .title, --jq '.jobs[].conclusion'.",
+                    file=sys.stderr,
+                )
+                return 2
             continue
         redirection = _writing_redirection(segment)
         if redirection is not None:
