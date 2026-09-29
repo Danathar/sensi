@@ -11,7 +11,8 @@ following a pointer.
 
 - **Never emit a credential.** No access tokens, refresh tokens, or real
   `icd_id` values in code, logs, docstrings, test fixtures, or commit messages.
-  `auth.py` exports `redact_token` — use it for anything token-shaped.
+  `utils.py` exports `redact_token` and `redact_identifier` — use them for
+  anything token- or identifier-shaped.
 - **Parse defensively.** The Sensi socket.io protocol is reverse engineered and
   undocumented. Use `.get()` with a default and the `to_bool` / `to_int` /
   `to_float` helpers from `utils.py`. Never index a payload dict directly.

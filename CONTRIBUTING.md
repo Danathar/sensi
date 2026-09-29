@@ -73,9 +73,10 @@ tests/e2e/         end-to-end tests against a scripted fake socket.io backend
 function; `async` everywhere in the entity and client layers; no blocking I/O on
 the event loop. `ruff.toml` encodes the parts of this that are mechanical.
 
-**Never log or commit credentials.** `auth.py` has a `redact_token` helper -
-use it. Access tokens, refresh tokens, and `icd_id` values from a real account
-do not belong in log samples, test fixtures, or commit messages.
+**Never log or commit credentials.** `utils.py` has `redact_token` and
+`redact_identifier` helpers - use them. Access tokens, refresh tokens, and
+`icd_id` values from a real account do not belong in log samples, test
+fixtures, or commit messages.
 
 **Sample payloads live in `tests/`.** `sample.json` and
 `sample_with_humidification.json` are captured (and scrubbed) responses. When a

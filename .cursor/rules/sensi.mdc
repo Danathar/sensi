@@ -15,8 +15,8 @@ rules below are the ones that most often get broken without it.
 ## Never emit a credential
 
 No access tokens, refresh tokens, or real `icd_id` values in code, logs,
-docstrings, fixtures, or commit messages. `auth.py` exports `redact_token` — use
-it for anything token-shaped.
+docstrings, fixtures, or commit messages. `utils.py` exports `redact_token` and
+`redact_identifier` — use them for anything token- or identifier-shaped.
 
 ## Parse defensively
 
