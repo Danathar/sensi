@@ -10,6 +10,7 @@ rest of ``tests/e2e/`` uses, rather than reaching into its private state.
 """
 
 import asyncio
+import copy
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .conftest import NOT_EXPIRED, FakeSensiBackend, FakeSensiSocket
 
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
+SECOND_ICD_ID = "aa-bb-cc-dd-ee-ff-00-02"
 
 EXPIRED_TOKEN_ERROR = {
     "message": "jwt expired",
@@ -296,6 +298,45 @@ async def test_no_state_event_at_all_is_not_ready(
     assert sensi_backend.emitted_names() == []
     assert "Timed out waiting for event 'state'" in caplog.text
 
+    await sensi_backend.shutdown()
+
+
+async def test_a_refresh_with_one_silent_device_still_succeeds(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """One thermostat that sends no state does not fail the whole refresh.
+
+    A refresh that brings no state at all raises, so the coordinator counts
+    it as a failure. With two devices and only one reporting, the one that
+    reported did refresh; failing here would make every thermostat on the
+    account unavailable because one of them is offline.
+    """
+    second = copy.deepcopy(sensi_backend.devices[ICD_ID])
+    second["icd_id"] = SECOND_ICD_ID
+    sensi_backend.devices[SECOND_ICD_ID] = second
+
+    await client.wait_for_devices()
+    assert {device.identifier for device in client.get_devices()} == {
+        ICD_ID,
+        SECOND_ICD_ID,
+    }
+
+    sensi_backend.state_override = [copy.deepcopy(sensi_backend.devices[ICD_ID])]
+    with patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05):
+        await client.async_update_devices()
+
+    # Neither device is dropped by a refresh that did not mention it.
+    assert len(client.get_devices()) == 2
+
+    # And with neither reporting, the refresh fails.
+    sensi_backend.withhold_state = True
+    with (
+        patch("custom_components.sensi.client.PREPARE_DEVICES_TIMEOUT", 0.05),
+        pytest.raises(SensiConnectionError, match="No state event within"),
+    ):
+        await client.async_update_devices()
+
+    await client.stop()
     await sensi_backend.shutdown()
 
 
