@@ -52,6 +52,11 @@ CI runs the same things:
 | `.github/workflows/labeler.yml` | applies path, risk-tier and size labels |
 | `.github/workflows/nightly.yml` | `ruff`, requirements sync and the pytest suite nightly against the pinned Home Assistant (not hassfest, HACS or the coverage floor), plus the suite alone against the *latest* Home Assistant as advance warning |
 
+Every `uses:` in these workflows names a commit SHA rather than a tag, so a
+weekly Dependabot pull request bumping those SHAs (with their `# vX.Y.Z`
+comments) is expected, legitimate churn — see
+[`.github/dependabot.yml`](.github/dependabot.yml) for why and how.
+
 ## Layout
 
 ```
