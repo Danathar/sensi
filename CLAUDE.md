@@ -18,8 +18,8 @@ Before proposing any change:
 python3 scripts/run_tests.py && ruff check . && ruff format --check .
 ```
 
-Never log, commit, or print a token or a real `icd_id`. Use `redact_token` from
-`auth.py`.
+Never log, commit, or print a token or a real `icd_id`. Use `redact_token` or
+`redact_identifier` from `utils.py`.
 
 ## Slash commands
 

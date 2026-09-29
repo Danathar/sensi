@@ -57,8 +57,8 @@ is checked. Bare `pytest` still takes everything and asks first.
 
 **Never log, commit, or print a credential.** Access tokens, refresh tokens,
 and real `icd_id` values must not appear in source, log samples, test fixtures,
-commit messages, or PR descriptions. `auth.py` exports `redact_token` — use it
-for anything token-shaped. This has already been a real incident in this
+commit messages, or PR descriptions. `utils.py` exports `redact_token` and
+`redact_identifier` — use them for anything token- or identifier-shaped. This has already been a real incident in this
 repository's history; treat it as the highest-priority rule here.
 
 **Parse defensively.** Fields the app sends today may be missing tomorrow, and a
@@ -114,7 +114,7 @@ credit field. Do not point any of the three back at upstream.
 ```
 custom_components/sensi/
   __init__.py      async_setup_entry / async_unload_entry, config option helpers
-  auth.py          token refresh, credential storage, redact_token
+  auth.py          token refresh, credential storage
   client.py        socket.io client - connect, event queue, emit loop, setters
   config_flow.py   the UI setup flow - credentials in, config entry out
   coordinator.py   DataUpdateCoordinator wrapper (30s interval)
@@ -123,7 +123,7 @@ custom_components/sensi/
   entity.py        shared base entity
   const.py         constants; LOGGER lives here
   event.py         dataclasses for the socket.io event payloads
-  utils.py         to_bool / to_int / to_float / bool_to_onoff
+  utils.py         to_bool / to_int / to_float / bool_to_onoff / redact_token / redact_identifier
   climate.py binary_sensor.py number.py sensor.py switch.py   platforms
 
 tests/             one test module per source module
