@@ -117,6 +117,7 @@ circulating_fan_duty_cycle: 10
 hvac_heat_stage: 100
 hvac_cool_stage: 0
 hvac_aux_stage: 100
+power_status: c_wire
 attribution: Data provided by Sensi
 friendly_name: Living Room
 supported_features: 397
@@ -126,6 +127,8 @@ humidity: 5
 ```
 
 On multi-stage systems (2-stage heat pumps, multi-stage auxiliary heat), `hvac_*_stage` carries the raw demand percentage: **50** means stage 1 of a 2-stage system is active, **100** means stage 2 — or a single-stage system — is active.
+
+`power_status` reports how the thermostat itself is powered: `c_wire` when a C-wire supplies continuous power, `battery` when it is running on batteries, or an empty string when the thermostat has not reported it.
 
 **Deprecated:** `circulating_fan` and `circulating_fan_duty_cycle` are the same data the `Circulating Fan` switch and `Circulating Fan Duty Cycle` number now expose. Upstream removed the two attributes in v2.2.0; this fork keeps them for now so existing automations keep working, but they will go in a later release. Read the entities instead.
 
