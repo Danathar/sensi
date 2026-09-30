@@ -340,6 +340,46 @@ async def test_a_refresh_with_one_silent_device_still_succeeds(
     await sensi_backend.shutdown()
 
 
+async def test_a_refresh_queued_behind_stop_does_not_reconnect(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """A refresh that waited for stop() to let go of the lock stays stopped.
+
+    stop() holds _reconnect_lock while it drains the socket. A coordinator
+    tick that arrived meanwhile queued for the lock and, once stop() let go,
+    ran its own disconnect/connect pair on the stopped client. The new socket
+    stayed connected, and nothing was left that would ever shut it down.
+    """
+    await client.wait_for_devices()
+
+    draining = asyncio.Event()
+    drained = asyncio.Event()
+
+    async def slow_wait(_socket: FakeSensiSocket) -> None:
+        draining.set()
+        await drained.wait()
+
+    with patch.object(FakeSensiSocket, "wait", slow_wait):
+        stop = asyncio.create_task(client.stop())
+        await draining.wait()
+
+        refresh = asyncio.create_task(client.async_update_devices())
+        # Let the refresh run until it blocks on the lock stop() holds.
+        await asyncio.sleep(0)
+        assert not refresh.done()
+
+        drained.set()
+        await stop
+        with pytest.raises(SensiConnectionError, match="stopped"):
+            await refresh
+
+    assert [socket for socket in sensi_backend.sockets if socket.connected] == []
+    assert client._sio is None
+    assert client._emit_loop_task is None
+
+    await sensi_backend.shutdown()
+
+
 async def test_devices_that_never_answer_fail_setup_cleanly(
     client: SensiClient, sensi_backend: FakeSensiBackend
 ) -> None:

@@ -122,6 +122,11 @@ class SensiClient:
         self._reconnect_lock = asyncio.Lock()
         self._recovery_epoch = 0
 
+        # Set by stop(), and never cleared: Home Assistant builds a new client
+        # for every setup, so a stopped one is finished. _connect refuses to
+        # run once it is set. See stop().
+        self._stopped = False
+
         # Setter events on the wire whose ack has not come back, and an event
         # set while there are none. python-socketio drops pending ack
         # callbacks on disconnect, so async_update_devices waits for this
@@ -266,6 +271,14 @@ class SensiClient:
 
     async def stop(self) -> None:
         """Disconnect and stop the client."""
+        # Before the lock, so that whatever is queued for it behind this call
+        # finds the client stopped. A coordinator tick or a setter recovery
+        # that took the lock after stop() let go of it used to connect a new
+        # socket: the entry was unloaded, and that socket stayed connected
+        # with nothing left to shut it down until Home Assistant restarted.
+        # _connect checks this flag, so every reconnect path is covered.
+        self._stopped = True
+
         # Under the lock so that an unload landing mid-refresh waits for the
         # refresh's connect to finish and then tears that socket down, rather
         # than taking a mid-handshake socket that shutdown() cannot reach.
@@ -1084,6 +1097,9 @@ class SensiClient:
 
         This can raise SensiConnectionError, AuthenticationError.
         """
+
+        if self._stopped:
+            raise SensiConnectionError("The client has been stopped")
 
         # Create SocketIO client with reconnection limited to 1 attempt. Add engineio_logger=LOGGER for deeper debugging
         sio = self._sio = socketio.AsyncClient(logger=LOGGER, reconnection_attempts=1)
