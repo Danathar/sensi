@@ -380,6 +380,96 @@ async def test_a_refresh_queued_behind_stop_does_not_reconnect(
     await sensi_backend.shutdown()
 
 
+async def test_a_refresh_after_stop_has_returned_does_not_reconnect(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """A stopped client stays stopped after stop() returns, not only during it.
+
+    async_unload_entry awaits async_unload_platforms after stop(), and the
+    coordinator is shut down only after that. A tick that lands in that
+    window finds stop() already finished and the lock free. The stopped flag
+    is never cleared, so that tick is refused too.
+    """
+    await client.wait_for_devices()
+    await client.stop()
+
+    with pytest.raises(SensiConnectionError, match="stopped"):
+        await client.async_update_devices()
+
+    assert len(sensi_backend.sockets) == 1
+    assert [socket for socket in sensi_backend.sockets if socket.connected] == []
+    assert client._sio is None
+    assert client._emit_loop_task is None
+
+    await sensi_backend.shutdown()
+
+
+async def test_a_setter_recovery_queued_behind_stop_does_not_reconnect(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """A refused setter's recovery that waited for stop() does not reconnect.
+
+    The refresh is one of three reconnect paths; a `Forbidden` setter's
+    recovery is another, and it takes the same lock. A setter refused while
+    stop() drains the socket queues for that lock and, once stop() lets go,
+    runs its own disconnect/connect pair. It must find the client stopped and
+    report the refusal it already had, not open a socket nothing will close.
+    """
+    await client.wait_for_devices()
+    (device,) = client.get_devices()
+
+    sensi_backend.ack_for = lambda name, _data: (
+        ({"error": {"description": "Forbidden"}},)
+        if name == "set_fan_mode"
+        else (None,)
+    )
+
+    emitted = asyncio.Event()
+    release_ack = asyncio.Event()
+    draining = asyncio.Event()
+    drained = asyncio.Event()
+    invoke_ack = FakeSensiSocket.invoke_ack
+
+    async def held_ack(socket: FakeSensiSocket, callback, args: tuple) -> None:
+        emitted.set()
+        await release_ack.wait()
+        await invoke_ack(socket, callback, args)
+
+    async def slow_wait(_socket: FakeSensiSocket) -> None:
+        draining.set()
+        await drained.wait()
+
+    with (
+        patch.object(FakeSensiSocket, "invoke_ack", held_ack),
+        patch.object(FakeSensiSocket, "wait", slow_wait),
+        patch.object(client, "try_refresh_access_token", AsyncMock()),
+    ):
+        setter = asyncio.create_task(client.async_set_fan_mode(device, "on"))
+        await emitted.wait()
+
+        stop = asyncio.create_task(client.stop())
+        await draining.wait()
+
+        # The refusal arrives while stop() holds the lock; let the setter run
+        # until its recovery blocks on it.
+        release_ack.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not setter.done()
+
+        drained.set()
+        await stop
+        response = await setter
+
+    assert response.error == "Forbidden"
+    assert len(sensi_backend.sockets) == 1
+    assert [socket for socket in sensi_backend.sockets if socket.connected] == []
+    assert client._sio is None
+    assert client._emit_loop_task is None
+
+    await sensi_backend.shutdown()
+
+
 async def test_devices_that_never_answer_fail_setup_cleanly(
     client: SensiClient, sensi_backend: FakeSensiBackend
 ) -> None:
