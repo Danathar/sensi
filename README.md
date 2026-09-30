@@ -18,6 +18,25 @@ There is no public Sensi API. The integration talks to the same backend the mobi
 > [!NOTE]
 > **This is a fork of [`iprak/sensi`](https://github.com/iprak/sensi).** See [About this fork](#about-this-fork) for what differs, [Maintained with Hive (ACMM L5)](#maintained-with-hive-acmm-l5) for the agent fleet that reviews it, and [Thanks](#thanks) for credit where it belongs.
 
+## Project status
+
+**Beta.** The integration is in daily use and covers the features listed under [What you get](#what-you-get), but it has had one release so far (`2026.9.0`) and has not yet been run long enough, or on enough installs, to call stable.
+
+What beta means here:
+
+- **It drives a real thermostat.** Mode, setpoint and fan changes reach your HVAC equipment. Watch it for a while after installing or upgrading before leaving heating or cooling to it unattended.
+- **CI never talks to a real device.** Every pull request runs the unit suite, a coverage floor, and an end-to-end tier that starts Home Assistant against a scripted stand-in for the Sensi backend. Nothing in CI reaches `rt.sensiapi.io` or a physical thermostat.
+- **The backend is not under anyone's control here.** There is no public Sensi API, so a backend change can break the integration at any status level. Stable will describe this integration's own behaviour, not a promise about Emerson's service.
+- **Known gaps** are listed under [Limitations](#limitations).
+
+It moves to stable when all of these hold:
+
+- [ ] Three consecutive releases, spanning at least three months, with no reported regression in thermostat control: mode, setpoint, fan, or the configuration switches.
+- [ ] Each of those releases was checked against a real thermostat before it was tagged, and the release notes say what was checked.
+- [ ] Upgrading in place from an `iprak/sensi` install, as described in [Coming from `iprak/sensi`](#coming-from-ipraksensi), has been confirmed on a real Home Assistant instance.
+- [ ] No open bug report describes the integration sending the thermostat a mode or setpoint the user did not ask for.
+- [ ] The CI suite, coverage gate, and nightly run against the latest Home Assistant release are green on `master`.
+
 ## Requirements
 
 - A Sensi thermostat already set up in the Sensi mobile app (the app account is what this authenticates against).
