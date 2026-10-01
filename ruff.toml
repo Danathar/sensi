@@ -11,6 +11,10 @@
 # dedicated change, not incidentally.
 
 target-version = "py314"
+# The Claude Code hooks run under whatever `python3` is first on PATH, not
+# Home Assistant's 3.14, so they must stay parseable by older interpreters
+# (#410). This also stops `ruff format` stripping their except parentheses.
+per-file-target-version = { ".claude/hooks/*.py" = "py312" }
 line-length = 88
 
 [lint]

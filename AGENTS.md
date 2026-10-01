@@ -78,6 +78,13 @@ red in CI. Nor can the tree reach an interpreter that rejects the form:
 and `tests/test_metadata.py` enforces that floor. Automated scanners have filed
 this as a fatal syntax error five times (#79, #95, #133, #147, #148); run
 `python3 -m py_compile` before reporting any syntax problem in this repository.
+
+**The one exception is `.claude/hooks/`.** Claude Code runs those hooks under
+whatever `python3` is first on PATH, not Home Assistant's 3.14, and a hook that
+fails to parse exits 1, which Claude Code treats as "run the command anyway". So
+the gate silently stopped refusing anything on a 3.13 host (#410). The hooks keep
+the parenthesised `except (A, B):` form, `ruff.toml` targets them at py312, and
+`tests/test_hooks_parse_on_older_python.py` checks they parse under 3.12.
 The full account is in
 [`.claude/memory/except-tuple-without-parentheses-is-valid.md`](.claude/memory/except-tuple-without-parentheses-is-valid.md).
 

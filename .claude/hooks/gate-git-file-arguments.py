@@ -805,7 +805,7 @@ def _denied_read_shape(word: str) -> bool:
         base = _REPO
     try:
         resolved = (base / word).resolve()
-    except ValueError, RuntimeError:
+    except (ValueError, RuntimeError):
         return True
     for path in (Path(word), resolved):
         name = path.name
@@ -887,7 +887,7 @@ def _is_outside_repo(word: str) -> bool:
         path = Path(word).expanduser()
         resolved = (base / path).resolve()
         return not resolved.is_relative_to(_REPO)
-    except ValueError, RuntimeError:
+    except (ValueError, RuntimeError):
         return True
 
 
