@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from homeassistant.const import Platform
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.typing import StateType
@@ -14,7 +14,7 @@ from .auth import (
     is_user_id,
 )
 from .client import SensiClient
-from .const import LOGGER, SENSI_DOMAIN
+from .const import CONFIG_REFRESH_TOKEN, LOGGER, SENSI_DOMAIN
 from .coordinator import SensiConfigEntry, SensiUpdateCoordinator
 from .data import AuthenticationConfig, SensiDevice
 
@@ -25,6 +25,38 @@ SUPPORTED_PLATFORMS = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+# Credentials older versions wrote into entry.data. Nothing has ever read them
+# back: the domain-keyed store is what setup and token rotation use.
+_LEGACY_ENTRY_CREDENTIALS = (CONF_USERNAME, CONF_PASSWORD, CONFIG_REFRESH_TOKEN)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: SensiConfigEntry) -> bool:
+    """Remove the credential copies older versions left in entry.data.
+
+    Upstream v1.0.0 to v1.2.x stored the login and the plaintext password
+    there, and every version since stored the refresh token it was set up
+    with, which goes stale on the first rotation. Both stayed in
+    core.config_entries, and in every backup of it, for the life of the
+    entry. Only those keys are removed.
+
+    For an entry whose minor version is newer than this code's, Home
+    Assistant still calls this function; the check below makes it a no-op.
+    An older release, which has no migration at all, loads the emptied entry
+    as it is, so going back still works; nothing in any release reads these
+    keys.
+    """
+    if entry.version == 1 and entry.minor_version < 2:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={
+                key: value
+                for key, value in entry.data.items()
+                if key not in _LEGACY_ENTRY_CREDENTIALS
+            },
+            minor_version=2,
+        )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):

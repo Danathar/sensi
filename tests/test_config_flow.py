@@ -23,6 +23,7 @@ from custom_components.sensi.config_flow import (
 )
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN, SENSI_NAME
 from homeassistant import config_entries
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -222,7 +223,7 @@ class TestSensiFlowHandler:
             mock_login.assert_called_once()
             mock_unique_id.assert_called_once_with("user123")
             mock_abort.assert_called_once()
-            mock_create.assert_called_once_with(title=SENSI_NAME, data=user_input)
+            mock_create.assert_called_once_with(title=SENSI_NAME, data={})
 
     @pytest.mark.asyncio
     async def test_async_step_user_login_failure(self, hass: HomeAssistant):
@@ -478,7 +479,8 @@ class TestReauthFlowRouting:
 
         assert result2["type"] == FlowResultType.ABORT
         assert result2["reason"] == "reauth_successful"
-        assert entry.data[CONFIG_REFRESH_TOKEN] == "new_token"
+        # The store holds the token; the entry keeps no copy of it.
+        assert entry.data == {}
         assert len(hass.config_entries.async_entries(SENSI_DOMAIN)) == 1
 
     async def test_reauth_rejects_a_token_for_another_account(
@@ -535,7 +537,8 @@ class TestReauthFlowRouting:
 
         assert result3["type"] == FlowResultType.ABORT
         assert result3["reason"] == "reauth_successful"
-        assert entry.data[CONFIG_REFRESH_TOKEN] == "new_token"
+        # The store holds the token; the entry keeps no copy of it.
+        assert entry.data == {}
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -615,7 +618,8 @@ class TestReauthForEntriesUpstreamKeyedDifferently:
         assert result2["type"] == FlowResultType.ABORT
         assert result2["reason"] == "reauth_successful"
         mock_save.assert_called_once_with(hass, self._VALIDATED)
-        assert entry.data[CONFIG_REFRESH_TOKEN] == "rotated"
+        # The store holds the token; the entry keeps no copy of it.
+        assert entry.data == {}
         assert entry.unique_id == "12345"
         assert len(hass.config_entries.async_entries(SENSI_DOMAIN)) == 1
 
@@ -656,6 +660,47 @@ class TestReauthForEntriesUpstreamKeyedDifferently:
         assert result2["errors"] == {"base": "wrong_account"}
         mock_save.assert_not_called()
         assert entry.unique_id == "12345"
+
+    async def test_reauth_does_not_carry_the_legacy_login_forward(
+        self, hass: HomeAssistant
+    ):
+        """A first-generation entry's login and password are dropped, not copied.
+
+        Upstream v1.0.0 to v1.2.x stored them in entry.data, and reauth used
+        to spread the old data into the new, so the plaintext password
+        survived every reauth.
+        """
+        entry = MockConfigEntry(
+            domain=SENSI_DOMAIN,
+            data={
+                CONF_USERNAME: "someone@example.com",
+                CONF_PASSWORD: "plaintext-password",
+                CONFIG_REFRESH_TOKEN: "old_token",
+            },
+            unique_id="someone@example.com",
+            title=SENSI_NAME,
+            # Already migrated, so the reload after reauth runs no migration:
+            # only the flow itself can keep the old keys out of entry.data.
+            minor_version=2,
+        )
+        entry.add_to_hass(hass)
+        result = await entry.start_reauth_flow(hass)
+
+        with (
+            patch(
+                "custom_components.sensi.config_flow.validate_refresh_token",
+                return_value=self._VALIDATED,
+            ),
+            patch("custom_components.sensi.config_flow.async_save_config"),
+            patch("custom_components.sensi.async_setup_entry", return_value=True),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONFIG_REFRESH_TOKEN: "pasted"}
+            )
+            await hass.async_block_till_done()
+
+        assert result2["reason"] == "reauth_successful"
+        assert entry.data == {}
 
     async def test_a_token_without_a_user_id_leaves_the_key_alone(
         self, hass: HomeAssistant
@@ -761,7 +806,7 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
         Sensi rotates the refresh token on every exchange, so the token the
         user pasted is spent by the time validation returns. Writing that one
         into entry.data - which is what happened before - stored a credential
-        guaranteed to fail on first use.
+        guaranteed to fail on first use. entry.data now holds no token at all.
         """
         result = await entry.start_reauth_flow(hass)
 
@@ -781,7 +826,8 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
         assert result2["type"] == FlowResultType.ABORT
         assert result2["reason"] == "reauth_successful"
         mock_save.assert_called_once_with(hass, self._VALIDATED_A)
-        assert entry.data[CONFIG_REFRESH_TOKEN] == "a_rotated"
+        # The store holds the token; the entry keeps no copy of it.
+        assert entry.data == {}
 
     async def test_a_rejected_token_saves_nothing(
         self, hass: HomeAssistant, entry: MockConfigEntry
@@ -824,7 +870,8 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
 
         assert result2["type"] == FlowResultType.CREATE_ENTRY
         mock_save.assert_called_once_with(hass, self._VALIDATED_A)
-        assert result2["data"] == {CONFIG_REFRESH_TOKEN: "a_rotated"}
+        # The store holds the token; the entry keeps no copy of it.
+        assert result2["data"] == {}
 
     async def test_a_second_setup_never_gets_as_far_as_validating(
         self, hass: HomeAssistant, entry: MockConfigEntry

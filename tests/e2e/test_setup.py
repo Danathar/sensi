@@ -67,10 +67,12 @@ async def test_config_flow_creates_a_loadable_entry(
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {CONFIG_REFRESH_TOKEN: "from_the_form"}
+    # The store holds the token; the entry is created with no copy of it.
+    assert result["data"] == {}
 
     entry = hass.config_entries.async_entries(SENSI_DOMAIN)[0]
     assert entry.state is ConfigEntryState.LOADED
+    assert entry.minor_version == 2
     assert entry.unique_id == "e2e_user"
 
     assert hass.states.get("climate.sensi_living_room") is not None

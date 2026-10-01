@@ -691,19 +691,23 @@ def test_the_captured_payloads_are_committed_under_tests() -> None:
     )
 
 
-def test_there_is_no_config_entry_migration_to_cover() -> None:
-    """Claim: "Config entry migration ... has no automated coverage".
+def test_the_one_config_entry_migration_is_the_one_covered() -> None:
+    """Claim: "The one config entry migration, to minor version 2 ... is covered".
 
-    The honest reason is that there is no migration entry point at all. Adding
-    one has to come back through this page, so the claim is joined to its
-    absence rather than to the absence of a test.
+    The page names exactly one migration and the file that tests it, so a
+    second migration, or the tests moving, has to come back through it.
     """
     shipped = "\n".join(_read(path) for path in sorted(_COMPONENT.glob("*.py")))
-    assert "async_migrate_entry" not in shipped, (
-        "the component now defines async_migrate_entry, so docs/quality.md's "
-        "'upgrade paths have no automated coverage' is a gap with code behind "
-        "it rather than a path that does not exist"
+    assert shipped.count("async def async_migrate_entry") == 1
+    assert "MINOR_VERSION = 2" in _read(_COMPONENT / "config_flow.py"), (
+        "the config flow's MINOR_VERSION moved, so docs/quality.md's "
+        "'the one config entry migration, to minor version 2' is out of date"
     )
+    assert "minor_version=1" in _read(_ROOT / "tests" / "test_init.py"), (
+        "tests/test_init.py no longer sets up an entry from before the "
+        "migration, which docs/quality.md says it covers"
+    )
+    assert "migration, to minor version 2" in _flat(_DOC)
 
 
 def test_there_are_no_benchmarks() -> None:

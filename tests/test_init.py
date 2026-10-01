@@ -12,8 +12,9 @@ from custom_components.sensi.auth import (
     AuthenticationError,
     SensiConnectionError,
 )
-from custom_components.sensi.const import SENSI_DOMAIN
+from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
@@ -421,6 +422,93 @@ async def test_setup_does_not_take_a_user_id_another_entry_holds(
     assert mock_entry.state is ConfigEntryState.LOADED
     assert mock_entry.unique_id is None
     assert "another entry already uses it" in caplog.text
+
+
+async def _set_up(
+    hass: HomeAssistant, mock_auth_data, data: dict, minor_version: int
+) -> MockConfigEntry:
+    """Add an entry with this data and minor version, then set it up."""
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN, data=data, version=1, minor_version=minor_version
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    return entry
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_first_generation_entry_loads_without_its_login(
+    hass: HomeAssistant, mock_auth_data
+) -> None:
+    """Upstream v1.0.0 to v1.2.x stored the login and plaintext password.
+
+    Nothing reads them - the store holds the credential - so the migration
+    removes them and the entry still loads.
+    """
+    entry = await _set_up(
+        hass,
+        mock_auth_data,
+        {CONF_USERNAME: "someone@example.com", CONF_PASSWORD: "plaintext-password"},
+        minor_version=1,
+    )
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data == {}
+    assert entry.minor_version == 2
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_the_stale_refresh_token_copy_is_removed(
+    hass: HomeAssistant, mock_auth_data
+) -> None:
+    """Every entry kept the token it was set up with, spent after one rotation."""
+    entry = await _set_up(
+        hass, mock_auth_data, {CONFIG_REFRESH_TOKEN: "spent_token"}, minor_version=1
+    )
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data == {}
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_the_migration_removes_only_the_credential_keys(
+    hass: HomeAssistant, mock_auth_data
+) -> None:
+    """A key this migration does not know about is not its to delete."""
+    entry = await _set_up(
+        hass,
+        mock_auth_data,
+        {CONF_PASSWORD: "plaintext-password", "something_else": 1},
+        minor_version=1,
+    )
+
+    assert entry.data == {"something_else": 1}
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_an_entry_from_a_newer_minor_version_still_loads(
+    hass: HomeAssistant, mock_auth_data
+) -> None:
+    """A newer minor version loads untouched, the way a downgrade sees ours.
+
+    Home Assistant still calls async_migrate_entry for a newer minor version
+    of the same major one; ours leaves it alone. That, and an older release
+    having no migration at all, is what makes the minor bump safe to roll
+    back: the emptied entry loads as it is.
+    """
+    entry = await _set_up(hass, mock_auth_data, {"kept": True}, minor_version=3)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data == {"kept": True}
+    assert entry.minor_version == 3
 
 
 STOP_TARGET = "custom_components.sensi.client.SensiClient.stop"
