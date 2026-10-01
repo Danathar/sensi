@@ -66,8 +66,10 @@ Stating these plainly is part of the signal.
   proves the code handles *what Sensi sent on the day it was captured*. A
   protocol change is invisible to CI until a user reports it — which is why the
   parsing layer degrades rather than raising.
-- **Upgrade paths.** Config entry migration across integration versions has no
-  automated coverage.
+- **Upgrade paths.** The one config entry migration, to minor version 2 (it
+  removes the credential copies older versions left in `entry.data`), is
+  covered in `tests/test_init.py`. Nothing in CI installs one release and then
+  upgrades to the next, so an upgrade as a whole is not.
 - **Performance.** No benchmarks; the integration polls every 30 seconds and
   that has never been the constraint.
 

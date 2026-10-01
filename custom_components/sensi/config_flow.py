@@ -41,6 +41,9 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
     """Config flow for Sensi thermostat."""
 
     VERSION = 1
+    # 2: entry.data holds no credentials; the domain-keyed store is the only
+    # copy. async_migrate_entry strips what older versions left there.
+    MINOR_VERSION = 2
 
     @callback
     def async_remove(self) -> None:
@@ -109,10 +112,10 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                     raise
                 return self.async_create_entry(
                     title=SENSI_NAME,
-                    # The rotated token, not the one the user pasted - Sensi
-                    # rotates on every exchange, so what they typed is already
-                    # spent by the time validation returns.
-                    data={CONFIG_REFRESH_TOKEN: result.config.refresh_token},
+                    # The token lives in the store async_save_config just
+                    # wrote, and nothing reads entry.data. A copy here went
+                    # stale on the first rotation and stayed on disk.
+                    data={},
                 )
 
             errors = result.errors
@@ -170,10 +173,11 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                         # the account guard apply from now on. If the token
                         # endpoint sent no user_id there is nothing to adopt.
                         unique_id=result.config.user_id or existing_entry.unique_id,
-                        data={
-                            **existing_entry.data,
-                            CONFIG_REFRESH_TOKEN: result.config.refresh_token,
-                        },
+                        # Emptied rather than carried forward: entries from
+                        # upstream v1.0.0 to v1.2.x held the login and the
+                        # plaintext password here, and the store above is
+                        # the only copy of the credential anything reads.
+                        data={},
                     )
                     await self.hass.config_entries.async_reload(existing_entry.entry_id)
                     return self.async_abort(reason="reauth_successful")

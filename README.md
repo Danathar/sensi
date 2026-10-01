@@ -79,7 +79,7 @@ You should end up with one device per thermostat and its related entities.
 <img width="378" alt="Device page" src="https://github.com/user-attachments/assets/0b8bd8a9-7c6d-4569-b3ef-cf08c828cfca" />
 <img width="376" alt="Entity list" src="https://github.com/user-attachments/assets/d45e65c3-7595-4063-a689-7e6f9f280499" />
 
-Only one Sensi account can be configured at a time. Credentials live in a single domain-keyed store, so a second config entry would overwrite the first account's tokens; the integration declares `single_config_entry` to prevent that.
+Only one Sensi account can be configured at a time. Credentials live in a single domain-keyed store (`.storage/sensi`), so a second config entry would overwrite the first account's tokens; the integration declares `single_config_entry` to prevent that. The config entry itself holds no credentials. Older versions kept a copy of the refresh token in it, and upstream v1.0 to v1.2 kept your Sensi login and password there; both are removed the first time this version starts.
 
 ## What you get
 
