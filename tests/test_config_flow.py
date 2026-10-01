@@ -679,6 +679,9 @@ class TestReauthForEntriesUpstreamKeyedDifferently:
             },
             unique_id="someone@example.com",
             title=SENSI_NAME,
+            # Already migrated, so the reload after reauth runs no migration:
+            # only the flow itself can keep the old keys out of entry.data.
+            minor_version=2,
         )
         entry.add_to_hass(hass)
         result = await entry.start_reauth_flow(hass)

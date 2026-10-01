@@ -40,9 +40,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SensiConfigEntry) -> b
     core.config_entries, and in every backup of it, for the life of the
     entry. Only those keys are removed.
 
-    Home Assistant loads an entry whose minor version is newer than the
-    running code's without asking it, so going back to an older release
-    still works; nothing in any release reads these keys.
+    For an entry whose minor version is newer than this code's, Home
+    Assistant still calls this function; the check below makes it a no-op.
+    An older release, which has no migration at all, loads the emptied entry
+    as it is, so going back still works; nothing in any release reads these
+    keys.
     """
     if entry.version == 1 and entry.minor_version < 2:
         hass.config_entries.async_update_entry(

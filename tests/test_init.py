@@ -499,9 +499,10 @@ async def test_an_entry_from_a_newer_minor_version_still_loads(
 ) -> None:
     """A newer minor version loads untouched, the way a downgrade sees ours.
 
-    Home Assistant does not ask the integration about a newer minor version
-    of the same major one, which is what makes the minor bump safe to roll
-    back: an older release loads the emptied entry as it is.
+    Home Assistant still calls async_migrate_entry for a newer minor version
+    of the same major one; ours leaves it alone. That, and an older release
+    having no migration at all, is what makes the minor bump safe to roll
+    back: the emptied entry loads as it is.
     """
     entry = await _set_up(hass, mock_auth_data, {"kept": True}, minor_version=3)
 
