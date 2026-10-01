@@ -11,8 +11,9 @@ repository, which leaves nothing in the diff for a reviewer to see.
 This wrapper forwards to pytest with three rules. Every target it is given
 must resolve inside `tests/`, and conftest discovery is pinned to the repository
 so nothing above it is imported either. The options that load code by a route
-the target check cannot see (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`,
-`--tx`, `--px`, `--picked`, `--parent-branch`) are refused. And the options
+the target check cannot see, or run it in an interactive debugger reading
+stdin (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`, `--tx`, `--px`,
+`--picked`, `--parent-branch`, `--trace`, `--pdb`, `--pdbcls`) are refused. And the options
 that create, truncate or delete a path of their own (`--junitxml`,
 `--log-file`, `--basetemp` and the rest of `REFUSED_WRITE`, `--cov-config`, and
 the `--cov-report` destination forms such as `xml:DEST`) are refused too,
@@ -71,6 +72,20 @@ TESTS = ROOT / "tests"
 # hook left a hook that no longer parses. `--parent-branch` is refused as well
 # as `--picked` because the git call is the harm, whichever option enables it.
 #
+# `--trace`, `--pdb` and `--pdbcls` are pytest's own, and they run code a
+# different way: not by importing a module named on the command line, but by
+# dropping the run into an interactive debugger that executes whatever Python it
+# reads from standard input. `--trace` breaks into `pdb` at the start of every
+# test, so it needs no failure; `--pdb` breaks in on the first error, which is
+# trivial to force. At a `(Pdb)` prompt the `!` prefix runs any statement, so
+# `printf '!PROG\nc\n' | python3 scripts/run_tests.py --trace tests` ran PROG
+# before the first test body with nothing written to the tree for review to
+# see. `--pdbcls=module:classname` names an importable dotted path, the same
+# code-by-name route as `--pyargs`. None of the three names a path the target
+# check sees, and no CI or documented command uses any of them, so refusing
+# them costs the suite nothing. (`--trace-config` only prints conftest
+# discovery and is not a debugger - it is not refused.)
+#
 # Keep this list short and keep the reason with each entry. An option that
 # reaches code and is not here is a bug in the list, not in the target check.
 REFUSED_LONG = frozenset(
@@ -83,6 +98,9 @@ REFUSED_LONG = frozenset(
         "--px",
         "--picked",
         "--parent-branch",
+        "--trace",
+        "--pdb",
+        "--pdbcls",
     }
 )
 REFUSED_SHORT = frozenset({"-p", "-c", "-o"})

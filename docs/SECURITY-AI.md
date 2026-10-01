@@ -148,8 +148,9 @@ supply-chain concern.
   assurance. The wrapper is pytest with three rules, because it is what runs
   without a permission prompt: every target must be inside `tests/`, the
   options that load code (`-p`, `-c`, `-o`, `--pyargs`, `--confcutdir`, `--tx`,
-  `--px`, `--picked`, `--parent-branch`) are refused, and so are the options
-  that write or delete a path of their own (`--junitxml`, `--log-file`,
+  `--px`, `--picked`, `--parent-branch`, `--trace`, `--pdb`, `--pdbcls`) are
+  refused, and so are
+  the options that write or delete a path of their own (`--junitxml`, `--log-file`,
   `--basetemp`, `--cov-config`, and a `--cov-report` destination such as
   `xml:DEST`). `--tx` and `--px` are pytest-xdist's, and pytest-xdist ships as
   a pinned dependency of the test harness, so either would otherwise let a
@@ -159,7 +160,11 @@ supply-chain concern.
   another pinned dependency: the first swaps in targets from git after the
   target check has run, and the second is handed to git as a word git reads as
   an option, so a value naming git's own output option truncated the settings
-  file. An argument starting with `@` is refused before any of the three,
+  file. `--trace`, `--pdb` and `--pdbcls` are pytest's own: `--trace` breaks
+  into `pdb` at the start of every test and `--pdb` on the first failure, and a
+  `pdb` prompt runs any Python statement handed to it on standard input, so a
+  piped command ran arbitrary code before a single test body with nothing left
+  in the tree to review. An argument starting with `@` is refused before any of the three,
   because pytest replaces it with the lines of the file it names, and none of
   those lines is checked. The full list, with the reason for each entry, is at
   the top of `scripts/run_tests.py`.

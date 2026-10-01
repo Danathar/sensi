@@ -33,7 +33,6 @@ _spec.loader.exec_module(run_tests)
         ["tests/test_utils.py::TestRedactToken"],
         ["tests/e2e"],
         ["-q", "--cov=custom_components/sensi"],
-        ["--pdb"],
         ["-k", "redact"],
         ["--cov=custom_components.sensi", "--cov-report=term-missing"],
         ["--cov-report", "term"],
@@ -49,7 +48,6 @@ _spec.loader.exec_module(run_tests)
         "one node id",
         "a subdirectory",
         "options with no target",
-        "an option that starts with -p only as --",
         "a keyword filter",
         "the documented coverage command",
         "a terminal coverage report given as two arguments",
@@ -128,6 +126,17 @@ def test_a_target_outside_the_suite_is_refused(argv: list[str]) -> None:
         ["--parent-branch", "master", "tests"],
         ["--picked"],
         ["--picked=first", "tests"],
+        # pytest's debugger options run code interactively instead of by name.
+        # `--trace` breaks into pdb at the start of every test and `--pdb` on
+        # the first failure; a pdb prompt runs any statement read from stdin,
+        # so `printf '!PROG\nc\n' | run_tests.py --trace tests` ran PROG before
+        # the first test body. `--pdbcls` names an importable dotted path.
+        ["--trace", "tests"],
+        ["--trace"],
+        ["--pdb", "tests"],
+        ["--pdb"],
+        ["--pdbcls=IPython.terminal.debugger:TerminalPdb"],
+        ["--pdbcls", "mod:Cls"],
     ],
 )
 def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
