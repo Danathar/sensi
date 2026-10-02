@@ -13,5 +13,5 @@
     "python-socketio==5.16.4"
   ],
   "single_config_entry": true,
-  "version": "2026.9.0"
+  "version": "2026.10.0"
 }
