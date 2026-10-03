@@ -34,15 +34,15 @@ waivers:
   - id: acmm:auto-issue-gen
     satisfied_by: hive
     reason: >
-      Issues are generated automatically today, by two writers that already
-      exist. Hive agents file issues against this repository (the ACMM gap
-      issues #418 to #425 were filed that way), and the report job in
-      .github/workflows/nightly.yml opens, updates and closes the Nightly
-      compliance failing issue on its own. Every file this criterion accepts
-      is an in-repository generator: a workflow, or a script one would run.
-      Adding one would create a second autonomous writer, which is what
-      PR #118 removed. See docs/SECURITY-AI.md, "One autonomous path, and it
-      is Hive".
+      Issues are already generated automatically. Hive agents decide what to
+      file against this repository (the ACMM gap issues #418 to #425 were
+      filed that way). Separately, the report job in
+      .github/workflows/nightly.yml opens, updates and closes one fixed
+      Nightly compliance failing issue; it runs no model and decides nothing.
+      The criterion asks for a general issue generator in this repository,
+      a workflow or a script. Running one that chooses what to file would be
+      a second autonomous path next to Hive, of the kind PR #118 removed. See
+      docs/SECURITY-AI.md, "One autonomous path, and it is Hive".
 
   - id: aef:audit-trail
     satisfied_by: hive
