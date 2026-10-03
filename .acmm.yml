@@ -6,8 +6,9 @@
 # capability exists, here is what provides it, here is why it is not here.
 #
 # A waiver cannot advance an ACMM level — level pass/fail is computed on
-# detected criteria alone. These entries restore an accurate reading of L4;
-# they do not claim a level this repository has not earned.
+# detected criteria alone. The L4 entries restore an accurate reading of a
+# level this repository meets; the L6 entries record two capabilities Hive
+# provides. None of them claims a level this repository has not earned.
 #
 # See docs/SECURITY-AI.md and https://github.com/hivecommons/hive/issues/6263.
 
@@ -29,3 +30,29 @@ waivers:
       Same removal — ai-fix.yml was the only file matching this criterion's
       patterns as well. Review feedback is applied by Hive, under the same
       single autonomous path. See docs/SECURITY-AI.md.
+
+  - id: acmm:auto-issue-gen
+    satisfied_by: hive
+    reason: >
+      Issues are already generated automatically. Hive agents decide what to
+      file against this repository (the ACMM gap issues #418 to #425 were
+      filed that way). Separately, the report job in
+      .github/workflows/nightly.yml opens, updates and closes one fixed
+      Nightly compliance failing issue; it runs no model and decides nothing.
+      The criterion asks for a general issue generator in this repository,
+      a workflow or a script. Running one that chooses what to file would be
+      a second autonomous path next to Hive, of the kind PR #118 removed. See
+      docs/SECURITY-AI.md, "One autonomous path, and it is Hive".
+
+  - id: aef:audit-trail
+    satisfied_by: hive
+    reason: >
+      Hive's audit log records agent_issue_created and agent_pr_created
+      events, each naming the repository, the issue or pull request number,
+      the agent, the backend and the model. Hive also signs what it opens
+      here: a footer naming the agent, backend and model on its pull
+      requests, and the agent on its issues. A person merges, as
+      docs/SECURITY-AI.md requires. The files this criterion accepts are an
+      in-repository audit workflow or script, which would duplicate a record
+      Hive already keeps outside this repository; see docs/SECURITY-AI.md,
+      "One autonomous path, and it is Hive".
