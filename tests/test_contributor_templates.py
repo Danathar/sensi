@@ -650,7 +650,7 @@ def test_every_waiver_is_well_formed() -> None:
     ids = []
     for waiver in _acmm()["waivers"]:
         assert set(waiver) == {"id", "satisfied_by", "reason"}, waiver
-        assert waiver["id"].startswith("acmm:"), waiver["id"]
+        assert waiver["id"].startswith(("acmm:", "aef:")), waiver["id"]
         assert waiver["satisfied_by"].strip()
         assert len(waiver["reason"].split()) >= 20, waiver["id"]
         ids.append(waiver["id"])
