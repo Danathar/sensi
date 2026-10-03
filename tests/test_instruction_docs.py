@@ -62,6 +62,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 _AGENTS = _ROOT / "AGENTS.md"
 _CLAUDE = _ROOT / "CLAUDE.md"
 _CONTRIBUTING = _ROOT / "CONTRIBUTING.md"
+_AGENT_TASKS_DOC = _ROOT / "docs" / "agent-tasks" / "README.md"
 _COPILOT = _ROOT / ".github" / "copilot-instructions.md"
 _CURSOR = _ROOT / ".cursor" / "rules" / "sensi.mdc"
 _PROMPT_CATALOG = _ROOT / ".github" / "prompts" / "README.md"
@@ -108,6 +109,7 @@ _PROSE_FILES = (
     _README,
     _CHECKPOINT,
     _SESSION_SUMMARY,
+    _AGENT_TASKS_DOC,
 )
 
 
