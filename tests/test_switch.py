@@ -537,7 +537,7 @@ class TestSensiAuxHeatSwitch:
             mock_invoke_setter.return_value = ActionResponse(None, {"mode": "cool"})
             await client.async_set_operating_mode(mock_device, OperatingMode.COOL)
 
-            mock_invoke_setter.return_value = ActionResponse(None, "accepted")
+            mock_invoke_setter.return_value = ActionResponse(None, {})
             await switch.async_turn_on()
             await switch.async_turn_off()
 

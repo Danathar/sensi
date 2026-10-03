@@ -513,29 +513,61 @@ def test_the_baseline_fixture_the_prompt_diffs_against_is_a_payload() -> None:
 
 
 def test_the_two_shape_setter_the_prompt_cites_still_accepts_both() -> None:
-    """Step 2 holds up one method as the pattern to copy.
+    """Step 2 holds up one function as the pattern to copy.
 
-    "the way `async_set_operating_mode` already accepts either a string or a
-    dict" is a claim about code. If that method stops branching on the
+    "the way `_interpret_setter_ack` accepts a setter ack as either a string
+    or a dict" is a claim about code. If that function stops branching on the
     response type, the prompt is teaching a pattern the tree no longer shows.
     """
     assert (
-        "`async_set_operating_mode` already accepts either a string or a dict"
-        in _flat(_PROTOCOL_CHANGE)
+        "the way `_interpret_setter_ack` accepts a setter ack as either a string "
+        "or a dict" in _flat(_PROTOCOL_CHANGE)
     )
-    method = _function(_CLIENT, "async_set_operating_mode")
-    checks = [
+    assert _string_checks(_function(_CLIENT, "_interpret_setter_ack")), (
+        "_interpret_setter_ack no longer branches on a string response; "
+        "protocol-change.md cites it as the both-shapes pattern"
+    )
+
+
+def test_no_public_setter_decides_for_itself_what_a_string_ack_means() -> None:
+    """Step 2 says a setter ack's meaning is decided once, for every setter.
+
+    The setters used to decide it for themselves and disagreed, so the same
+    reply from the thermostat was an error for one control and a success for
+    another. A public setter that branches on a string ack again is that
+    disagreement coming back.
+    """
+    assert "A setter ack's meaning is decided there, once, for every setter" in (
+        _flat(_PROTOCOL_CHANGE)
+    )
+    setters = [
         node
-        for node in ast.walk(method)
+        for node in ast.walk(_module_tree(_CLIENT))
+        if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("async_set_")
+    ]
+    assert len(setters) >= 8, "the public setters are no longer recognisable"
+    deciding = [
+        node.name
+        for node in setters
+        if _string_checks(node)
+        or any(
+            isinstance(const, ast.Constant) and const.value == "accepted"
+            for const in ast.walk(node)
+        )
+    ]
+    assert not deciding, f"{deciding} decide what a string ack means themselves"
+
+
+def _string_checks(function: ast.AST) -> list[ast.Call]:
+    """Return the `isinstance(x, str)` calls in `function`."""
+    return [
+        node
+        for node in ast.walk(function)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "isinstance"
         and any(isinstance(arg, ast.Name) and arg.id == "str" for arg in node.args[1:])
     ]
-    assert checks, (
-        "async_set_operating_mode no longer branches on a string response; "
-        "protocol-change.md cites it as the both-shapes pattern"
-    )
 
 
 def test_every_setter_goes_through_the_helper_the_prompt_names() -> None:

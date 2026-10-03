@@ -68,6 +68,34 @@ RETRYABLE_SETTER_ERRORS = frozenset({"Forbidden"})
 UNKNOWN_SETTER_ERROR = "Unknown error"
 
 
+def _interpret_setter_ack(data: any) -> ActionResponse:
+    """Decide whether a setter's ack, which carried no error, is an acceptance.
+
+    This is the one place that decision is made, so every setter treats the
+    same reply the same way. The setters used to make it for themselves and
+    disagreed: an argument-less ack failed `async_set_operating_mode` but
+    succeeded everywhere else, and a string other than "accepted" was a
+    refusal for temperature and mode but a success for the rest.
+
+    - No payload, an empty one, or the string "accepted" is a success with
+      `{}` as its data.
+    - Any other string is a refusal, reported as that string.
+    - Anything else (in practice a dict) is a success, passed through for the
+      setters that read detail out of it.
+
+    It runs inside `_async_emit_setter`, so a refusal string reaches the retry
+    in `_async_invoke_setter` the same way an error payload does.
+    """
+
+    if not data or data == "accepted":
+        return ActionResponse(None, {})
+
+    if isinstance(data, str):
+        return ActionResponse(data, None)
+
+    return ActionResponse(None, data)
+
+
 @dataclass
 class ActionResponse:
     """Response for an action.
@@ -464,32 +492,17 @@ class SensiClient:
 
         response = action_response.data
 
-        # An ack that never arrived is already an error above - the timeout in
-        # _async_invoke_setter returns "Future not done" - so anything reaching
-        # here means the thermostat took the change. The only question left is
-        # how much detail it sent back, and the answer is not always the
-        # three-key dict: the sibling async_set_operating_mode exists in its
-        # current shape because this backend answers a setter with a bare
-        # "accepted" string, and _async_invoke_setter turns an argument-less
-        # ack into {}. Unpacking straight into the dataclass raised TypeError
-        # on every one of those, which is not a HomeAssistantError - the
-        # service call surfaced a raw traceback and the setpoint was left
-        # unapplied even though the thermostat had accepted it.
-
-        # We can receive a string instead of JSON
-        if isinstance(response, str):
-            if response == "accepted":
-                self._apply_target_temperature(device, mode, value)
-                return ActionResponse(None, None)
-
-            # Treat anything else other than "accepted" as error
-            return ActionResponse(response, None)
-
+        # _interpret_setter_ack has already decided the thermostat took the
+        # change, so the only question left is how much detail it sent back.
+        # An "accepted" string and an argument-less ack both arrive here as {}.
+        # Unpacking that straight into the dataclass raised TypeError, which
+        # is not a HomeAssistantError - the service call surfaced a raw
+        # traceback and the setpoint was left unapplied even though the
+        # thermostat had accepted it.
         if not response:
-            # An empty ack is what every other setter in this file is given,
-            # and it is a success there. The requested value is the only figure
-            # available; display_temp is left alone because the thermostat did
-            # not report one and the next state event carries it.
+            # The requested value is the only figure available; display_temp
+            # is left alone because the thermostat did not report one and the
+            # next state event carries it.
             self._apply_target_temperature(device, mode, value)
             return ActionResponse(None, None)
 
@@ -547,30 +560,27 @@ class SensiClient:
 
         response = action_response.data
 
-        # We can receive a string instead of JSON
-        if isinstance(response, str):
-            if response == "accepted":
-                device.state.operating_mode = value
-                return action_response
+        # _interpret_setter_ack has already decided the thermostat took the
+        # change. An "accepted" string or an argument-less ack carries no mode
+        # back, so the one asked for is the one to record - the same rule
+        # every other setter follows.
+        if not response:
+            device.state.operating_mode = value
+            return ActionResponse(None, None)
 
-            # Treat anything else other than "accepted" as error
-            return ActionResponse(response, None)
+        try:
+            parsed_response = SetOperatingModeEventSuccess(**response)
+        except ValueError, TypeError:
+            return ActionResponse(f"Failed to parse `{response}`", None)
 
-        if response:
-            try:
-                parsed_response = SetOperatingModeEventSuccess(**response)
-                # The ack carries the mode as a plain string. Store an
-                # OperatingMode, as State parsing does, because callers read
-                # `.value` from it. The backend accepted the request, so a mode
-                # the enum does not know falls back to the one asked for.
-                device.state.operating_mode = (
-                    try_parse_enum(OperatingMode, parsed_response.mode) or value
-                )
-                return ActionResponse(None, None)
-            except ValueError, TypeError:
-                return ActionResponse(f"Failed to parse `{response}`", None)
-
-        return ActionResponse("No response received", None)
+        # The ack carries the mode as a plain string. Store an OperatingMode,
+        # as State parsing does, because callers read `.value` from it. The
+        # backend accepted the request, so a mode the enum does not know falls
+        # back to the one asked for.
+        device.state.operating_mode = (
+            try_parse_enum(OperatingMode, parsed_response.mode) or value
+        )
+        return ActionResponse(None, None)
 
     async def async_set_circulating_fan_mode(
         self, device: SensiDevice, enabled: bool, duty_cycle: int
@@ -911,7 +921,7 @@ class SensiClient:
                 None,
             )
 
-        return ActionResponse(None, response_data or {})
+        return _interpret_setter_ack(response_data)
 
     async def _wait_for_event(
         self,
