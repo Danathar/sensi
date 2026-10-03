@@ -68,6 +68,7 @@ _PROMPT_CATALOG = _ROOT / ".github" / "prompts" / "README.md"
 _QUALITY_DOC = _ROOT / "docs" / "quality.md"
 _METRICS_DOC = _ROOT / "docs" / "metrics" / "README.md"
 _BRANCH_PROTECTION_DOC = _ROOT / "docs" / "branch-protection.md"
+_STRATEGY_DOC = _ROOT / "docs" / "strategy.md"
 _REVIEW_RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _SECURITY_AI_DOC = _ROOT / "docs" / "SECURITY-AI.md"
 _README = _ROOT / "README.md"
@@ -103,6 +104,7 @@ _PROSE_FILES = (
     _QUALITY_DOC,
     _METRICS_DOC,
     _BRANCH_PROTECTION_DOC,
+    _STRATEGY_DOC,
     _REVIEW_RUBRIC,
     _SECURITY_AI_DOC,
     _README,
