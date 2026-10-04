@@ -1,9 +1,10 @@
 # Tracing agent work
 
-Every change an agent makes here can be followed back to the task that asked
-for it, and forward to the commit that landed it. No task list is kept in this
-directory, because GitHub already holds the record. This page explains how to
-read it.
+Almost every change an agent makes here can be followed back to the task
+that asked for it, and forward to the commit that landed it. The exceptions
+are listed under [Where the gaps are](#where-the-gaps-are). No task list is
+kept in this directory, because GitHub already holds the record. This page
+explains how to read it.
 
 ## The chain
 
@@ -14,17 +15,18 @@ merge commit on master
             └─ Hive's audit log   (agent_issue_created / agent_pr_created)
 ```
 
-1. **Merge commit.** Pull requests land as merge commits, so `master`'s
-   first-parent history is one `Merge pull request #N from Danathar/<branch>`
-   line per change:
+1. **Merge commit.** Every pull request since 2026-09-05 has landed as a
+   merge commit. The ruleset also allows squash and rebase, so this is a
+   habit, not a rule. While the habit holds, `master`'s first-parent history
+   has one `Merge pull request #N from Danathar/<branch>` line per change:
 
    ```bash
    git log --first-parent --oneline master
    ```
 
 2. **Pull request.** An agent's pull request is authored by the
-   `danathar-atomic-hive` GitHub App. It ends with a footer that names the
-   agent and the model that wrote it:
+   `danathar-atomic-hive` GitHub App. It normally ends with a footer that
+   names the agent and the model that wrote it:
 
    ```text
    — hive: agent=quality backend=claude model=… effort=…
