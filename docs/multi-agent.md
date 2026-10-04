@@ -21,8 +21,8 @@ each agent is allowed to do at ACMM L5 are described in the README, under
 
 ## Recognising which agent did what
 
-Everything Hive opens is authored by the `danathar-atomic-hive` GitHub App
-and signed with a footer naming the agent:
+Hive opens its issues and pull requests as the `danathar-atomic-hive` GitHub
+App, and nearly all of them end with a footer naming the agent:
 
 ```text
 — hive: agent=quality backend=claude model=… effort=…
@@ -48,8 +48,8 @@ always check the author before reading a branch name as an agent's.
 
 ## How parallel work is kept apart
 
-- **One issue, one pull request.** An agent's pull request names the issue it
-  closes (`Closes #N`), so its scope is the issue's scope.
+- **Usually one issue, one pull request.** An agent's pull request normally
+  names the issue it closes (`Closes #N`), so its scope is the issue's scope.
 - **Every pull request goes through the same gates.** The required checks and
   the `protect master` ruleset apply to an agent's pull request exactly as to
   a person's ([docs/branch-protection.md](branch-protection.md)), and every
