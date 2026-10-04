@@ -40,11 +40,14 @@ follow that boundary:
   multi-agent orchestration (#419), this strategy page (#420), the operations
   runbook (#423) and task traceability (#424).
 - **Waived to Hive** in `.acmm.yml`, because Hive already provides the
-  capability and an in-repository copy would be a second autonomous writer:
-  issue generation (#418) and the audit trail (#425).
-- **No file added** where every accepted file would have been a duplicate
-  or a claim this repository cannot honestly make: the merge queue (#421)
-  and the risk-assessment config (#422). Each issue explains why.
+  capability outside this repository: issue generation (#418) and the audit
+  trail (#425).
+- **Waived to an existing file** in `.acmm.yml`: the risk-assessment config
+  (#422). The rules already live at `.github/policies/risk-tiers.yml`, and a
+  copy under the criterion's file names would drift.
+- **Not planned:** the merge queue (#421). Every accepted file would have
+  been either a merging workflow or a config GitHub does not read. The issue
+  explains why.
 
 A waiver cannot advance an ACMM level. The L6 file check is therefore not
 expected to pass. Moving Hive itself to L6, where agents may merge, would

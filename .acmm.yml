@@ -1,4 +1,4 @@
-# ACMM waivers — criteria satisfied outside this repository.
+# ACMM waivers — criteria satisfied where the file check cannot see them.
 #
 # The ACMM evaluation detects capability by looking for files, which cannot
 # distinguish "never built this" from "deliberately moved this somewhere the
@@ -7,8 +7,10 @@
 #
 # A waiver cannot advance an ACMM level — level pass/fail is computed on
 # detected criteria alone. The L4 entries restore an accurate reading of a
-# level this repository meets; the L6 entries record two capabilities Hive
-# provides. None of them claims a level this repository has not earned.
+# level this repository meets. The L6 entries record two capabilities Hive
+# provides outside this repository, and one rule set kept here at a path the
+# check does not list. None of them claims a level this repository has not
+# earned.
 #
 # See docs/SECURITY-AI.md and https://github.com/hivecommons/hive/issues/6263.
 
@@ -56,3 +58,16 @@ waivers:
       in-repository audit workflow or script, which would duplicate a record
       Hive already keeps outside this repository; see docs/SECURITY-AI.md,
       "One autonomous path, and it is Hive".
+
+  - id: acmm:risk-assessment-config
+    satisfied_by: .github/policies/risk-tiers.yml
+    reason: >
+      Risk assessment is configured in this repository, at a path the
+      criterion does not list. .github/policies/risk-tiers.yml holds the tier
+      and size rules, scripts/classify_pr.py applies them, the Triage
+      workflow labels every pull request with the result, and
+      docs/risk-tiers.md explains each tier. PR #269 moved the rules into
+      .github/policies/ deliberately, as policy-as-code. A copy under one of
+      this criterion's file names would be a second source of truth that
+      nothing reads. docs/SECURITY-AI.md points readers at docs/risk-tiers.md
+      for which paths carry which consequence.
