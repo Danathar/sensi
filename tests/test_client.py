@@ -24,6 +24,7 @@ from custom_components.sensi.event import (
     SetOperatingModeEvent,
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
+    SettingEventName,
 )
 from custom_components.sensi.utils import redact_identifier
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
@@ -325,8 +326,8 @@ class TestSetTemperature:
 
     @pytest.mark.parametrize(
         "ack",
-        [{}, None, "accepted"],
-        ids=["empty_dict", "no_payload", "accepted_string"],
+        [{}, None],
+        ids=["empty_dict", "no_payload"],
     )
     async def test_an_ack_without_detail_still_applies_the_setpoint(
         self, mock_device, mock_coordinator, ack
@@ -361,28 +362,10 @@ class TestSetTemperature:
         # event rather than overwritten with the setpoint.
         assert mock_device.state.display_temp == previous_display_temp
 
-    async def test_a_string_ack_that_is_not_accepted_is_an_error(
-        self, mock_device, mock_coordinator
-    ) -> None:
-        """Only "accepted" means accepted, as in async_set_operating_mode."""
-        previous_heat_temp = mock_device.state.current_heat_temp
-
-        with patch.object(
-            mock_coordinator.client, "_async_invoke_setter"
-        ) as mock_async_invoke_setter:
-            mock_async_invoke_setter.return_value = ActionResponse(None, "rejected")
-
-            response = await mock_coordinator.client.async_set_temperature(
-                mock_device, OperatingMode.HEAT, 68
-            )
-
-        assert response.error == "rejected"
-        assert mock_device.state.current_heat_temp == previous_heat_temp
-
     @pytest.mark.parametrize(
         "ack",
-        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 71}],
-        ids=["empty_dict", "accepted_string", "three_key_dict"],
+        [{}, {"current_temp": 70, "mode": "heat", "target_temp": 71}],
+        ids=["empty_dict", "three_key_dict"],
     )
     async def test_an_aux_setpoint_is_recorded_as_the_heat_setpoint(
         self, mock_device, mock_coordinator, ack
@@ -519,8 +502,8 @@ class TestSetTemperature:
 
     @pytest.mark.parametrize(
         "ack",
-        [{}, "accepted", {"current_temp": 70, "mode": "heat", "target_temp": 72}],
-        ids=["empty_dict", "accepted_string", "detailed"],
+        [{}, {"current_temp": 70, "mode": "heat", "target_temp": 72}],
+        ids=["empty_dict", "detailed"],
     )
     async def test_setpoint_survives_a_state_refresh_during_the_setter(
         self, mock_device, mock_coordinator, mock_json, ack
@@ -785,11 +768,12 @@ class TestSetters:
     @pytest.mark.parametrize(
         ("response_error", "response_data", "expect_error"),
         [
-            (None, None, True),
             ("Failed", None, True),
-            (None, "not_accepted", True),
             (None, {"invalid_property": "cool"}, True),
-            (None, "accepted", False),
+            # What _async_invoke_setter returns for an argument-less ack or an
+            # "accepted" string. It used to be "No response received" here
+            # alone, while every other setter took it as a success.
+            (None, {}, False),
             (None, {"mode": "heat"}, False),
         ],
     )
@@ -1119,6 +1103,89 @@ class TestWaitForDevices:
             for record in caplog.records
             if "account lists no thermostats" in record.getMessage()
         ] == ["WARNING"]
+
+
+def _snapshot(value: object) -> object:
+    """Return a comparable copy of a State, descending into nested objects."""
+
+    if isinstance(value, list):
+        return [_snapshot(item) for item in value]
+    if hasattr(value, "__dict__") and not isinstance(value, type):
+        return {key: _snapshot(item) for key, item in vars(value).items()}
+    return value
+
+
+# Each public setter, called with a value that differs from the fixture state.
+_EVERY_SETTER = {
+    "temperature": lambda c, d: c.async_set_temperature(d, OperatingMode.HEAT, 61),
+    "operating_mode": lambda c, d: c.async_set_operating_mode(d, OperatingMode.COOL),
+    "circulating_fan": lambda c, d: c.async_set_circulating_fan_mode(d, True, 55),
+    "fan_mode": lambda c, d: c.async_set_fan_mode(
+        d, (FanMode.AUTO if d.state.fan_mode == FanMode.ON else FanMode.ON).value
+    ),
+    "temperature_offset": lambda c, d: c.async_set_temperature_offset(d, -4),
+    "humidity_offset": lambda c, d: c.async_set_humidity_offset(d, -15),
+    "bool_setting": lambda c, d: c.async_set_bool_setting(
+        d, SettingEventName.KEYPAD_LOCKOUT, not d.state.keypad_lockout
+    ),
+    "humidification": lambda c, d: c.async_enable_humidification(
+        d, not d.state.humidity_control.humidification.enabled
+    ),
+}
+
+
+class TestEverySetterReadsAnAckTheSameWay:
+    """One thermostat reply means the same thing whichever control sent it.
+
+    Each setter used to decide for itself whether the ack was an acceptance.
+    A string other than "accepted" was a refusal for temperature and mode
+    and a success for the other six, which then showed the requested value
+    until the next state event. These drive the real ack path, so the rule
+    under test is the shared one in _interpret_setter_ack.
+    """
+
+    @staticmethod
+    async def _set(client, device, setter: str, ack: tuple):
+        async def reply(name, data, callback=None, future=None):
+            callback(*ack)
+
+        with patch.object(client, "_send_event", reply):
+            return await _EVERY_SETTER[setter](client, device)
+
+    @pytest.mark.parametrize("setter", _EVERY_SETTER)
+    async def test_a_string_that_is_not_accepted_is_a_refusal(
+        self, mock_device_with_humidification, mock_coordinator, setter
+    ) -> None:
+        """A "rejected" string is an error and leaves the state untouched."""
+
+        mock_device = mock_device_with_humidification
+        mock_device.capabilities.circulating_fan.capable = True
+        before = _snapshot(mock_device.state)
+
+        response = await self._set(
+            mock_coordinator.client, mock_device, setter, ("rejected",)
+        )
+
+        assert response.error == "rejected"
+        assert _snapshot(mock_device.state) == before
+
+    @pytest.mark.parametrize("setter", _EVERY_SETTER)
+    @pytest.mark.parametrize(
+        "ack", [(), (None,), ("accepted",)], ids=["no_args", "none", "accepted"]
+    )
+    async def test_an_ack_without_detail_is_an_acceptance(
+        self, mock_device_with_humidification, mock_coordinator, setter, ack
+    ) -> None:
+        """No payload, a null one and "accepted" are a success for every setter."""
+
+        mock_device = mock_device_with_humidification
+        mock_device.capabilities.circulating_fan.capable = True
+        before = _snapshot(mock_device.state)
+
+        response = await self._set(mock_coordinator.client, mock_device, setter, ack)
+
+        assert response.error is None
+        assert _snapshot(mock_device.state) != before
 
 
 class TestSetterErrorsLeaveStateAlone:

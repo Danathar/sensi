@@ -14,7 +14,9 @@ changes it without notice and there is no spec. Read `AGENTS.md` first.
    crash. A removed field becomes "unknown" or an unavailable entity; a new
    error code becomes a `HomeAssistantError` with the code in the message; a
    changed response type is handled for both shapes, the way
-   `async_set_operating_mode` already accepts either a string or a dict.
+   `_interpret_setter_ack` accepts a setter ack as either a string or a dict.
+   A setter ack's meaning is decided there, once, for every setter; a setter
+   only reads detail out of a dict it was given.
 
 3. **Fix it in the parsing layer, not at the call sites.** `data.py`,
    `capabilities.py` and `event.py` own payload shape. If a platform module has

@@ -758,6 +758,30 @@ class TestSetterAcks:
         assert response.error is None
         assert response.data == {}
 
+    @pytest.mark.parametrize("payload", ["accepted", ""], ids=["accepted", "empty"])
+    async def test_an_accepting_string_is_a_success_with_no_detail(
+        self, client: SensiClient, payload: str
+    ) -> None:
+        """An "accepted" string carries no detail, like an empty ack."""
+        response = await self._invoke(client, (payload,))
+        assert response.error is None
+        assert response.data == {}
+
+    @pytest.mark.parametrize("ack", [("rejected",), (None, "rejected")])
+    async def test_any_other_string_is_a_refusal(
+        self, client: SensiClient, ack: tuple
+    ) -> None:
+        """A text reply other than "accepted" is the thermostat saying no."""
+        response = await self._invoke(client, ack)
+        assert response.error == "rejected"
+        assert response.data is None
+
+    async def test_a_dict_payload_is_passed_through(self, client: SensiClient) -> None:
+        """A setter that reads detail out of the ack gets it unchanged."""
+        response = await self._invoke(client, ({"mode": "heat"},))
+        assert response.error is None
+        assert response.data == {"mode": "heat"}
+
     async def test_error_payload_becomes_the_error_description(
         self, client: SensiClient
     ) -> None:
