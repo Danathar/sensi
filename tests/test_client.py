@@ -1187,6 +1187,52 @@ class TestEverySetterReadsAnAckTheSameWay:
         assert response.error is None
         assert _snapshot(mock_device.state) != before
 
+    @pytest.mark.parametrize("setter", _EVERY_SETTER)
+    @pytest.mark.parametrize(
+        "refusal",
+        [("Forbidden",), (None, "Forbidden")],
+        ids=["one_arg", "null_error_and_string"],
+    )
+    async def test_a_forbidden_string_is_retried_like_a_forbidden_error(
+        self, mock_device_with_humidification, mock_coordinator, setter, refusal
+    ) -> None:
+        """A bare "Forbidden" string reaches the retry, not just an error payload.
+
+        _interpret_setter_ack runs inside _async_emit_setter so that a refusal
+        string is seen by _async_invoke_setter's Forbidden retry the same way
+        an error payload is. Every retry test stubs _async_emit_setter with a
+        ready-made ActionResponse, so none of them sends a string through the
+        real ack path: deciding a string's meaning above the retry instead -
+        a refusal, but one the retry never sees - passed the whole suite.
+        """
+
+        client = mock_coordinator.client
+        mock_device = mock_device_with_humidification
+        mock_device.capabilities.circulating_fan.capable = True
+        before = _snapshot(mock_device.state)
+        acks = iter([refusal, ()])
+        sent = []
+
+        async def reply(name, data, callback=None, future=None):
+            sent.append(name)
+            callback(*next(acks))
+
+        with (
+            patch.object(client, "_send_event", reply),
+            patch.object(client, "try_refresh_access_token") as mock_refresh,
+            patch.object(client, "_async_disconnect"),
+            patch.object(client, "_connect"),
+        ):
+            response = await _EVERY_SETTER[setter](client, mock_device)
+
+        # Refused once, recovered, re-sent the same event, and the second
+        # attempt's acceptance is what the caller and the state reflect.
+        assert response.error is None
+        assert len(sent) == 2
+        assert sent[0] == sent[1]
+        mock_refresh.assert_awaited_once()
+        assert _snapshot(mock_device.state) != before
+
 
 class TestSetterErrorsLeaveStateAlone:
     """A rejected setter must not update the cached device state.
