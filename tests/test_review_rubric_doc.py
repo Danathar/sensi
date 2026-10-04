@@ -70,6 +70,8 @@ import subprocess
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 _RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _REVIEW = _ROOT / ".github" / "prompts" / "review.md"
@@ -323,7 +325,7 @@ def _definition() -> dict:
 def _check_jobs() -> dict[str, tuple[str, dict]]:
     """Return every workflow job's check name, mapped to (workflow path, job)."""
     jobs: dict[str, tuple[str, dict]] = {}
-    for path in sorted(_WORKFLOWS.glob("*.y*ml")):
+    for path in workflow_paths():
         for job_id, job in (yaml.safe_load(_read(path)).get("jobs") or {}).items():
             workflow = path.relative_to(_ROOT).as_posix()
             jobs[job.get("name", job_id)] = (workflow, job)

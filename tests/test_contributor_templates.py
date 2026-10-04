@@ -69,6 +69,7 @@ import pytest
 import yaml
 
 from homeassistant.components.logger import DOMAIN as LOGGER_DOMAIN, SERVICE_SET_LEVEL
+from tests._workflows import workflow_paths
 
 _ROOT = Path(__file__).resolve().parent.parent
 _PR_TEMPLATE = _ROOT / ".github" / "pull_request_template.md"
@@ -692,7 +693,7 @@ def test_no_workflow_reintroduces_the_waived_criterion() -> None:
     criteria was removed. A new workflow carrying the same markers makes that
     statement false, from outside, with nothing here to notice.
     """
-    workflows = sorted(_WORKFLOWS.glob("*.yml")) + sorted(_WORKFLOWS.glob("*.yaml"))
+    workflows = workflow_paths()
     assert len(workflows) >= 5, workflows
     for path in workflows:
         text = _read(path)

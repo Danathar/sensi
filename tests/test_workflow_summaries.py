@@ -64,7 +64,9 @@ def _workflow(name: str) -> dict:
 
 
 _COMMITTED_WORKFLOWS = sorted(
-    Path(path).name for path in _tracked(".github/workflows/*.yml")
+    Path(path).name
+    for pattern in (".github/workflows/*.yml", ".github/workflows/*.yaml")
+    for path in _tracked(pattern)
 )
 
 # --------------------------------------------------------------------------

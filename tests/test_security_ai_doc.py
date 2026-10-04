@@ -53,6 +53,8 @@ import subprocess
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parents[1]
 _DOC = _ROOT / "docs" / "SECURITY-AI.md"
 _SETTINGS = _ROOT / ".claude" / "settings.json"
@@ -298,7 +300,7 @@ def test_the_workflows_named_as_gates_are_the_ones_the_ruleset_requires() -> Non
     required = set(_required())
     gating = set()
     produced = set()
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in workflow_paths():
         for job_id, job in _workflow(path)["jobs"].items():
             checks = _check_names(job_id, job) & required
             if checks:
@@ -527,7 +529,7 @@ def test_labeler_is_the_only_pull_request_target_and_checks_out_the_base() -> No
     )
     targets = [
         path.name
-        for path in sorted(_WORKFLOWS.glob("*.yml"))
+        for path in workflow_paths()
         if "pull_request_target" in _triggers(_workflow(path))
     ]
     assert targets == ["labeler.yml"], targets
@@ -549,7 +551,7 @@ def test_the_removed_workflow_and_what_armed_it_are_gone() -> None:
     assert f"`{_REMOVED}` ran Claude" in _flat()
     assert _REMOVED not in _tracked()
     armed = ("ANTHROPIC_API_KEY", "AI_FIX_ENABLED", "ai-fix-requested", "@claude")
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in workflow_paths():
         text = path.read_text(encoding="utf-8")
         found = [needle for needle in armed if needle in text]
         assert not found, f"{path.name} still carries {found}"

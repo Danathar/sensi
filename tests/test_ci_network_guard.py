@@ -184,6 +184,7 @@ def test_no_test_or_configuration_opts_out_of_the_guard() -> None:
         "pyproject.toml",
         "tox.ini",
         ".github/workflows/*.yml",
+        ".github/workflows/*.yaml",
     )
     assert _ROOT / "tests" / "e2e" / "conftest.py" in scanned
     assert _ROOT / "pytest.ini" in scanned

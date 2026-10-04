@@ -36,9 +36,10 @@ import subprocess
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parents[1]
 _CONFIG = _ROOT / ".github" / "dependabot.yml"
-_WORKFLOWS = _ROOT / ".github" / "workflows"
 _AGENTS = _ROOT / "AGENTS.md"
 _CLAUDE = _ROOT / "CLAUDE.md"
 
@@ -50,10 +51,6 @@ _ACTIONS = "github-actions"
 # shape `test_workflow_action_pins.py` reads; here only the owner/repo half
 # matters, because that is what a Dependabot group pattern is matched against.
 _USES = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)")
-
-# GitHub Actions runs either extension, so both are scanned - a `.yaml`
-# workflow left out of the count below would understate the actions in play.
-_WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 
 # The owner every action GitHub publishes sits under. "First-party" in the
 # header means these.
@@ -146,11 +143,6 @@ def _actions_entry() -> dict:
     return entries[0]
 
 
-def _workflow_paths() -> list[Path]:
-    """Return every workflow file, whichever extension it uses."""
-    return sorted(path for glob in _WORKFLOW_GLOBS for path in _WORKFLOWS.glob(glob))
-
-
 def _action_names() -> set[str]:
     """Return every `owner/repo` a workflow runs an action from.
 
@@ -159,7 +151,7 @@ def _action_names() -> set[str]:
     what the group covers.
     """
     names: set[str] = set()
-    for path in _workflow_paths():
+    for path in workflow_paths():
         for line in _text(path).splitlines():
             match = _USES.match(line)
             if match is None:
@@ -538,7 +530,7 @@ def test_the_python_side_really_is_pinned_inside_workflow_run_blocks() -> None:
     would move that decision somewhere the header does not describe.
     """
     running, installing = set(), set()
-    for path in _workflow_paths():
+    for path in workflow_paths():
         for line in _text(path).splitlines():
             stripped = line.strip()
             if _RUNS_PYTEST.match(stripped):

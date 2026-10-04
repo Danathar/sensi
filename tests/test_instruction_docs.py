@@ -57,6 +57,8 @@ import tomllib
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 _AGENTS = _ROOT / "AGENTS.md"
@@ -1327,7 +1329,7 @@ def test_every_workflow_the_checkpoint_calls_live_is_committed() -> None:
     )
 
     gone = set(_NAMED_TO_SAY_IT_IS_GONE)
-    committed = {path.name for path in _WORKFLOWS.iterdir() if path.suffix == ".yml"}
+    committed = {path.name for path in workflow_paths()}
     for workflow in named:
         if workflow in gone:
             assert workflow not in committed, (

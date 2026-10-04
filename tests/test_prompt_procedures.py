@@ -69,6 +69,8 @@ import subprocess
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 _PROMPTS_DIR = _ROOT / ".github" / "prompts"
@@ -371,7 +373,7 @@ def _workflows_that_build_the_harness() -> set[str]:
     requirements_test.txt", not "pins Python".
     """
     found = set()
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
+    for path in workflow_paths():
         text = _read(path)
         if "python-version" in text and "requirements_test.txt" in text:
             found.add(path.name)
