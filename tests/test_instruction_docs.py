@@ -72,6 +72,7 @@ _BRANCH_PROTECTION_DOC = _ROOT / "docs" / "branch-protection.md"
 _STRATEGY_DOC = _ROOT / "docs" / "strategy.md"
 _REVIEW_RUBRIC = _ROOT / "docs" / "review-rubric.md"
 _SECURITY_AI_DOC = _ROOT / "docs" / "SECURITY-AI.md"
+_RUNBOOK_DOC = _ROOT / "docs" / "ai-ops-runbook.md"
 _README = _ROOT / "README.md"
 
 # The two files under `.claude/` that an agent session is told to read first.
@@ -109,6 +110,7 @@ _PROSE_FILES = (
     _STRATEGY_DOC,
     _REVIEW_RUBRIC,
     _SECURITY_AI_DOC,
+    _RUNBOOK_DOC,
     _README,
     _CHECKPOINT,
     _SESSION_SUMMARY,
