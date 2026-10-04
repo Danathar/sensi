@@ -18,10 +18,13 @@ merge commit on master
 1. **Merge commit.** Every pull request since 2026-09-05 has landed as a
    merge commit. The ruleset also allows squash and rebase, so this is a
    habit, not a rule. While the habit holds, `master`'s first-parent history
-   has one `Merge pull request #N from Danathar/<branch>` line per change:
+   has one `Merge pull request #N from Danathar/<branch>` line per change.
+   The upstream `iprak/sensi` history sits underneath it, and its own
+   `Merge pull request #N` lines (from `iprak/` and other contributors'
+   branches) reuse many of the same numbers, so keep only this repository's:
 
    ```bash
-   git log --first-parent --oneline master
+   git log --first-parent --oneline --grep='^Merge pull request #[0-9]* from Danathar/' master
    ```
 
 2. **Pull request.** An agent's pull request is authored by the
