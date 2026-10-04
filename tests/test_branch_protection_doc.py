@@ -42,6 +42,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parents[1]
 _DOC = _ROOT / "docs" / "branch-protection.md"
 _DEFINITION = _ROOT / ".github" / "rulesets" / "master.json"
@@ -153,7 +155,7 @@ def _check_names(job_id: str, job: dict) -> list[str]:
 def _pull_request_jobs() -> dict[str, tuple[str, dict]]:
     """Every check name a pull request shows, mapped to (workflow file, job)."""
     jobs: dict[str, tuple[str, dict]] = {}
-    for path in sorted(_WORKFLOWS.glob("*.y*ml")):
+    for path in workflow_paths():
         workflow = _workflow(path)
         if not any(event in _triggers(workflow) for event in _PULL_REQUEST_EVENTS):
             continue

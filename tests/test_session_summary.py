@@ -77,6 +77,8 @@ import subprocess
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 _SUMMARY = _ROOT / ".claude" / "session-summary.md"
@@ -709,7 +711,7 @@ def test_no_workflow_reaches_a_real_thermostat() -> None:
         f"{_rel(_SUMMARY)} no longer carries the no-thermostat rule; drop "
         "this test in the same change"
     )
-    workflows = sorted(_WORKFLOWS.glob("*.yml"))
+    workflows = workflow_paths()
     assert len(workflows) >= 5, (
         f"the workflow scan found {len(workflows)} files, so this assertion "
         "is not looking at the repository's CI"

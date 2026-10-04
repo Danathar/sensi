@@ -42,6 +42,7 @@ import pytest
 import yaml
 
 from homeassistant.const import Platform
+from tests._workflows import workflow_paths
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DOC = _ROOT / "docs" / "risk-tiers.md"
@@ -558,7 +559,7 @@ def test_the_pipeline_example_diffs_against_the_default_branch() -> None:
     assert match, f"{_rel(_DOC)}'s piped example is no longer a git diff"
 
     branches = set()
-    for workflow in sorted((_ROOT / ".github" / "workflows").glob("*.yml")):
+    for workflow in workflow_paths():
         # PyYAML resolves the `on:` key to the boolean True.
         triggers = yaml.safe_load(_read(workflow)).get(True) or {}
         if not isinstance(triggers, dict):

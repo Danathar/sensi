@@ -59,6 +59,8 @@ import tomllib
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 _MEMORY = _ROOT / ".claude" / "memory"
@@ -875,7 +877,7 @@ def test_the_prefix_correction_agrees_with_the_release_workflow() -> None:
     # Action references only. release.yml's header explains at length why
     # semantic-release is not used here, and a text search would match the
     # explanation - which is the wrong direction to be sensitive in.
-    workflows = sorted((_ROOT / ".github" / "workflows").glob("*.yml"))
+    workflows = workflow_paths()
     assert len(workflows) >= 4
     uses = re.compile(r"^\s*(?:-\s*)?uses:\s*(\S+)", re.MULTILINE)
     for workflow in workflows:

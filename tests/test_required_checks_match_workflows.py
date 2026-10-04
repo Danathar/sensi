@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests._workflows import workflow_paths
+
 _ROOT = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 _DEFINITION = _ROOT / ".github" / "rulesets" / "master.json"
@@ -45,22 +47,11 @@ _spec.loader.exec_module(check_ruleset)
 # a merge, which is exactly the decision that should be visible in a diff.
 _ADVISORY: frozenset[str] = frozenset()
 
-# GitHub Actions runs a file in `.github/workflows/` that ends in either
-# extension, so both are read here. A spelling left out would not narrow the
-# comparisons below - it would exempt that file from all of them, and a job it
-# runs on every pull request could then gate nothing while the suite is green.
-_WORKFLOW_GLOBS = ("*.yml", "*.yaml")
-
-
-def _workflow_paths(directory: Path = _WORKFLOWS) -> list[Path]:
-    """Every workflow file in `directory`, whichever extension it uses."""
-    return sorted(path for glob in _WORKFLOW_GLOBS for path in directory.glob(glob))
-
 
 def _workflows() -> dict[str, dict]:
     """Every workflow document, keyed by file name."""
     documents = {}
-    for path in _workflow_paths():
+    for path in workflow_paths():
         documents[path.name] = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert documents, f"no workflows found under {_WORKFLOWS}"
     return documents
@@ -261,4 +252,4 @@ def test_the_reader_opens_both_workflow_extensions(tmp_path: Path) -> None:
     (tmp_path / "two.yaml").write_text(document, encoding="utf-8")
     (tmp_path / "README.md").write_text("not a workflow\n", encoding="utf-8")
 
-    assert [path.name for path in _workflow_paths(tmp_path)] == ["one.yml", "two.yaml"]
+    assert [path.name for path in workflow_paths(tmp_path)] == ["one.yml", "two.yaml"]
