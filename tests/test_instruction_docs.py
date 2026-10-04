@@ -66,6 +66,7 @@ _COPILOT = _ROOT / ".github" / "copilot-instructions.md"
 _CURSOR = _ROOT / ".cursor" / "rules" / "sensi.mdc"
 _PROMPT_CATALOG = _ROOT / ".github" / "prompts" / "README.md"
 _QUALITY_DOC = _ROOT / "docs" / "quality.md"
+_MULTI_AGENT_DOC = _ROOT / "docs" / "multi-agent.md"
 _METRICS_DOC = _ROOT / "docs" / "metrics" / "README.md"
 _BRANCH_PROTECTION_DOC = _ROOT / "docs" / "branch-protection.md"
 _REVIEW_RUBRIC = _ROOT / "docs" / "review-rubric.md"
@@ -101,6 +102,7 @@ _PROSE_FILES = (
     *_INSTRUCTION_FILES,
     _PROMPT_CATALOG,
     _QUALITY_DOC,
+    _MULTI_AGENT_DOC,
     _METRICS_DOC,
     _BRANCH_PROTECTION_DOC,
     _REVIEW_RUBRIC,
