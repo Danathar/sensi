@@ -13,7 +13,7 @@ this page does not restate them.
 | Checks on `master` | the CI, Coverage gate and Validate workflows | all six required checks green ([docs/branch-protection.md](branch-protection.md)) |
 | Nightly compliance, 06:17 UTC | the Nightly compliance workflow | `pinned Home Assistant` green; no open `Nightly compliance failing` issue |
 | Home Assistant advance warning | the `latest Home Assistant (advance warning)` job in the same run | green, or a failure already understood |
-| Monthly release, 09:00 UTC on the 1st | the Release workflow | the run publishes, or skips because nothing user-visible changed |
+| Monthly release, 09:00 UTC on the 1st | the Release workflow | the run publishes, or skips because nothing user-visible changed; a red run is covered under [A release is refused](#a-release-is-refused) |
 | Agent pull requests waiting | `gh pr list -R Danathar/sensi --label hold` | reviewed in batches; none left to go stale |
 
 ## Stopping the agents
@@ -68,12 +68,29 @@ needs work, and read the warnings summary in that job's log.
 
 ## A release is refused
 
-**Signal:** the Release workflow stops at `Require green checks on this
-commit`.
+**Signal:** the Release workflow fails at one of the steps below. Each one
+stops before anything is tagged, so nothing has been published.
 
-The commit on `master` has a check that is not green. Fix or rerun that check
-on `master`, then dispatch the release again. Do not work around the step:
-it is what keeps a commit with a red check from being published.
+- **`Validate the version`**, with "Tag ... already exists": the manifest
+  still carries the number of the last release. The scheduled run on the 1st
+  does this whenever something under `custom_components/sensi` changed but
+  the version-bump pull request was not merged first, as on 2026-10-01. Run
+  the Release workflow with **prepare**, close and reopen the pull request it
+  opens so its checks start, merge it, then dispatch the release again. The
+  step's other refusals (a number that is not CalVer, is not newer than the
+  latest tag, or disagrees with the pre-release box) mean the bump pull
+  request carried the wrong number: run **prepare** again with the right one.
+- **`Decide the version`**: the manifest's version is not CalVer, or the
+  version typed into a manual run is not the one the manifest carries. The
+  workflow releases what the manifest says; to release a different number,
+  run **prepare** for it and merge that first.
+- **`Require green checks on this commit`**: the commit on `master` has a
+  check that is not green. Fix or rerun that check on `master`, then dispatch
+  the release again. Do not work around the step: it is what keeps a commit
+  with a red check from being published.
+
+[CONTRIBUTING.md, "Releases"](../CONTRIBUTING.md#releases) has the full two-step
+procedure.
 
 ## `master` may no longer be protected
 
