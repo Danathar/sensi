@@ -24,7 +24,8 @@
     },
     "abort": {
       "entry_not_found": "The configuration entry is no longer available",
-      "reauth_successful": "Re-authentication was successful"
+      "reauth_successful": "Re-authentication was successful",
+      "single_instance_allowed": "Already configured. Only a single configuration is possible."
     }
   },
   "entity": {
