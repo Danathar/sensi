@@ -7,7 +7,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, callback
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .auth import (
@@ -99,10 +99,11 @@ class SensiFlowHandler(config_entries.ConfigFlow, domain=SENSI_DOMAIN):
                 # entry exists or it never will.
                 claims: set[str] = self.hass.data.setdefault(_SAVE_CLAIMS, set())
                 if self._async_current_entries() or claims - {self.flow_id}:
-                    return self.async_abort(
-                        reason="single_instance_allowed",
-                        translation_domain=HOMEASSISTANT_DOMAIN,
-                    )
+                    # The integration's own string, not Home Assistant's
+                    # through translation_domain: async_abort takes that
+                    # keyword only from 2026.9.0, and hacs.json promises
+                    # 2026.3.0, where passing it raises TypeError (#449).
+                    return self.async_abort(reason="single_instance_allowed")
                 claims.add(self.flow_id)
                 try:
                     await async_save_config(self.hass, result.config)

@@ -24,7 +24,7 @@ from custom_components.sensi.config_flow import (
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN, SENSI_NAME
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 STRINGS_FILES = (
@@ -933,9 +933,13 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
 
         assert result2["type"] == FlowResultType.ABORT
         assert result2["reason"] == "single_instance_allowed"
-        # The same reason and domain Home Assistant uses for this abort, so
-        # the user sees its translated message rather than a bare key.
-        assert result2["translation_domain"] == HOMEASSISTANT_DOMAIN
+        # Translated from this integration's own strings. Home Assistant's
+        # copy is reachable only through async_abort's translation_domain,
+        # which cores before 2026.9.0 reject with a TypeError (#449).
+        assert result2.get("translation_domain") is None
+        for path in STRINGS_FILES:
+            strings = json.loads(path.read_text(encoding="utf-8"))
+            assert strings["config"]["abort"]["single_instance_allowed"]
         mock_save.assert_not_called()
 
     async def test_a_flow_aborted_mid_validation_leaves_the_store_alone(
