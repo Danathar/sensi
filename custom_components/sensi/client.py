@@ -807,6 +807,12 @@ class SensiClient:
             try:
                 if self._recovery_epoch == epoch:
                     await self.try_refresh_access_token()
+                    # The same wait as async_update_devices: another setter on
+                    # the wire would lose its ack to this disconnect. This
+                    # setter's own ack has already settled, so it is not
+                    # counted and cannot hold up its own recovery.
+                    while self._setter_acks_in_flight:
+                        await self._no_setter_ack_in_flight.wait()
                     await self._async_disconnect()
                     await self._connect()
                     self._recovery_epoch += 1

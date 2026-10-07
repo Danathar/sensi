@@ -470,6 +470,73 @@ async def test_a_setter_recovery_queued_behind_stop_does_not_reconnect(
     await sensi_backend.shutdown()
 
 
+async def test_a_setter_recovery_waits_for_another_setters_ack_in_flight(
+    client: SensiClient, sensi_backend: FakeSensiBackend
+) -> None:
+    """A refused setter's reconnect does not drop another setter's ack.
+
+    python-socketio drops pending ack callbacks on disconnect. The refresh
+    waits for every setter on the wire before it tears the socket down; the
+    `Forbidden` recovery did not, so a second setter whose ack was still on
+    its way timed out with "Future not done" although the thermostat had
+    accepted it.
+    """
+    await client.wait_for_devices()
+    (device,) = client.get_devices()
+
+    fan_refused = asyncio.Event()
+
+    def ack_for(name, _data):
+        if name == "set_fan_mode" and not fan_refused.is_set():
+            fan_refused.set()
+            return ({"error": {"description": "Forbidden"}},)
+        return (None,)
+
+    sensi_backend.ack_for = ack_for
+
+    offset_emitted = asyncio.Event()
+    release_offset_ack = asyncio.Event()
+    invoke_ack = FakeSensiSocket.invoke_ack
+
+    async def slow_first_ack(socket: FakeSensiSocket, callback, args: tuple) -> None:
+        if not offset_emitted.is_set():
+            # The first ack is the offset's: the backend's round trip.
+            offset_emitted.set()
+            await release_offset_ack.wait()
+            if not socket.connected:
+                return
+        await invoke_ack(socket, callback, args)
+
+    connections_before = len(sensi_backend.connections)
+
+    with (
+        patch.object(FakeSensiSocket, "invoke_ack", slow_first_ack),
+        patch.object(client, "try_refresh_access_token", AsyncMock()),
+    ):
+        offset = asyncio.create_task(client.async_set_temperature_offset(device, 2))
+        await offset_emitted.wait()
+
+        fan = asyncio.create_task(client.async_set_fan_mode(device, "on"))
+        # The fan setter is refused while the offset's ack is still on its
+        # way. Its recovery must wait for that ack, not reconnect under it.
+        await asyncio.wait_for(fan_refused.wait(), 3)
+        await asyncio.sleep(0.2)
+        assert not fan.done()
+        assert len(sensi_backend.connections) == connections_before
+
+        release_offset_ack.set()
+        fan_response = await fan
+        offset_response = await offset
+
+    assert offset_response.error is None
+    assert fan_response.error is None
+    assert sensi_backend.emitted_names().count("set_temp_offset") == 1
+    assert len(sensi_backend.connections) == connections_before + 1
+
+    await client.stop()
+    await sensi_backend.shutdown()
+
+
 async def test_devices_that_never_answer_fail_setup_cleanly(
     client: SensiClient, sensi_backend: FakeSensiBackend
 ) -> None:
