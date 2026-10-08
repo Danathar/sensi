@@ -484,18 +484,15 @@ def test_the_except_tuple_correction_quotes_the_settings_that_make_it_true() -> 
 
 def test_the_home_assistant_floor_is_still_enforced_by_the_test_it_names() -> None:
     """The correction's fallback for an older core is `test_metadata.py`."""
-    floor = json.loads(_read(_HACS))["homeassistant"]
-    constants = {
-        target.id: ast.literal_eval(node.value)
+    functions = {
+        node.name
         for node in ast.walk(_module(_METADATA_TEST))
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant)
+        if isinstance(node, ast.FunctionDef)
     }
-    assert floor in constants.values(), (
-        f"tests/test_metadata.py no longer pins {floor!r}, so nothing keeps "
-        "hacs.json's floor from being dropped and the correction's "
-        "'HACS refuses the download' fallback is not enforced"
+    assert "test_hacs_floor_matches_the_home_assistant_the_tests_run_on" in functions, (
+        "tests/test_metadata.py no longer ties hacs.json's floor to the tested "
+        "Home Assistant, so the correction's 'HACS refuses the download' "
+        "fallback is not enforced"
     )
 
 

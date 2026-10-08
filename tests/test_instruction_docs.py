@@ -553,11 +553,11 @@ def test_home_assistant_floor_agents_md_quotes_matches_hacs_json() -> None:
         "different version as the reason the tree cannot reach an interpreter "
         "that rejects PEP 758 syntax"
     )
-    assert f'FIRST_HOME_ASSISTANT_ON_PYTHON_314 = "{pinned}"' in _read(
+    assert "def test_hacs_floor_matches_the_home_assistant_the_tests_run_on" in _read(
         _METADATA_TEST
     ), (
-        "tests/test_metadata.py enforces the floor AGENTS.md cites; the two "
-        "no longer name the same release"
+        "AGENTS.md says tests/test_metadata.py keeps the hacs.json floor equal "
+        "to the Home Assistant release the tests run on; that test is gone"
     )
 
 

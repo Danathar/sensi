@@ -1,7 +1,9 @@
 """Repository metadata that decides where this integration can be installed."""
 
+from importlib.metadata import PackageNotFoundError, requires, version
 import json
 from pathlib import Path
+import re
 
 from awesomeversion import AwesomeVersion
 
@@ -26,4 +28,60 @@ def test_hacs_declares_a_home_assistant_floor_that_guarantees_python_314() -> No
     )
     assert AwesomeVersion(hacs["homeassistant"]) >= AwesomeVersion(
         FIRST_HOME_ASSISTANT_ON_PYTHON_314
+    )
+
+
+def _pinned_test_dependency_home_assistant() -> str:
+    """Return the Home Assistant version the pinned test dependency brings.
+
+    `pytest-homeassistant-custom-component` pins an exact `homeassistant`, so
+    the pin in `requirements_test.txt` decides which core the suite runs on.
+    The version is read from the installed distribution's metadata, after
+    checking the installed copy is the one `requirements_test.txt` names, so a
+    stale environment cannot make the comparison pass or fail by accident.
+    """
+
+    requirements = (_ROOT / "requirements_test.txt").read_text(encoding="utf-8")
+    pin = re.search(
+        r"^pytest-homeassistant-custom-component==(\S+)$", requirements, re.MULTILINE
+    )
+    assert pin, "requirements_test.txt must pin pytest-homeassistant-custom-component"
+
+    try:
+        installed = version("pytest-homeassistant-custom-component")
+    except PackageNotFoundError:  # pragma: no cover - the suite cannot run without it
+        raise AssertionError(
+            "pytest-homeassistant-custom-component is not installed"
+        ) from None
+    assert installed == pin.group(1), (
+        f"installed pytest-homeassistant-custom-component {installed} differs from "
+        f"the {pin.group(1)} pinned in requirements_test.txt; reinstall "
+        "requirements_test.txt"
+    )
+
+    for requirement in requires("pytest-homeassistant-custom-component") or []:
+        match = re.match(r"homeassistant==([^\s;]+)", requirement)
+        if match:
+            return match.group(1)
+    raise AssertionError(
+        "pytest-homeassistant-custom-component no longer pins homeassistant exactly"
+    )
+
+
+def test_hacs_floor_matches_the_home_assistant_the_tests_run_on() -> None:
+    """The version HACS promises must be a version the suite actually runs.
+
+    A floor below the tested core lets a call that only exists in the newer core
+    reach older installs untested (#449); a floor above it refuses installs the
+    suite shows working. So the two must agree whenever the pin is bumped.
+    """
+
+    hacs = json.loads((_ROOT / "hacs.json").read_text(encoding="utf-8"))
+    tested = _pinned_test_dependency_home_assistant()
+
+    assert AwesomeVersion(hacs["homeassistant"]) == AwesomeVersion(tested), (
+        f'hacs.json declares "homeassistant": "{hacs["homeassistant"]}" but the '
+        f"pinned pytest-homeassistant-custom-component runs the suite on Home "
+        f"Assistant {tested}; set the hacs.json floor, README.md and AGENTS.md "
+        "to the tested version (or bump the pin)"
     )
