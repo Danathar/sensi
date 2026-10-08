@@ -51,6 +51,8 @@ DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
 CIRCULATING_FAN = "switch.sensi_living_room_circulating_fan"
 CIRCULATING_DUTY_CYCLE = "number.sensi_living_room_circulating_duty_cycle"
+TEMPERATURE_OFFSET = "number.sensi_living_room_temperature_offset"
+HUMIDITY_OFFSET = "number.sensi_living_room_humidity_offset"
 FAN_SUPPORT = "switch.sensi_living_room_fan_support"
 ONLINE = "binary_sensor.sensi_living_room_online"
 ICD_ID = "aa-bb-cc-dd-ee-ff-00-01"
@@ -510,6 +512,49 @@ async def test_circulating_fan_duty_cycle_is_snapped_to_the_thermostats_step(
         "enabled": "on",
         "duty_cycle": 40,
     }
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "event", "state_key", "value"),
+    [
+        (TEMPERATURE_OFFSET, "set_temp_offset", "temp_offset", -2),
+        (HUMIDITY_OFFSET, "set_humidity_offset", "humidity_offset", 7),
+    ],
+    ids=["temperature_offset", "humidity_offset"],
+)
+async def test_offset_number_reaches_the_wire(
+    hass: HomeAssistant,
+    sensi_entry: MockConfigEntry,
+    sensi_backend: FakeSensiBackend,
+    entity_id: str,
+    event: str,
+    state_key: str,
+    value: int,
+) -> None:
+    """Each offset number emits its own setting event with the offset as `value`.
+
+    Every other control has its event name and payload pinned here. These two
+    did not: the fake backend acks any event name it does not know, so a
+    renamed event or payload key kept the whole suite green while the real
+    thermostat would never have seen the change.
+    """
+    assert hass.states.get(entity_id).state == "0"
+
+    # The number refreshes the coordinator after a write, and the fake
+    # backend serves its scripted state on every connect. Script the value
+    # the thermostat would report once it has accepted the write.
+    sensi_backend.devices[ICD_ID]["state"][state_key] = value
+
+    await hass.services.async_call(
+        NUMBER_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_ENTITY_ID: entity_id, ATTR_VALUE: value},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted(event) == {"icd_id": ICD_ID, "value": value}
+    assert hass.states.get(entity_id).state == str(value)
 
 
 async def test_backend_error_surfaces_to_the_caller(
