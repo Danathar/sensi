@@ -24,8 +24,9 @@ py312. An unparseable gate hook fails open (#410).
 
 The one real exposure behind this report is a core older than 2026.3.0, which
 still runs Python 3.13 and cannot import the tree at all. `hacs.json` declares
-`"homeassistant": "2026.3.0"` so HACS refuses the download with a clear message
-instead; `tests/test_metadata.py` keeps that floor from being dropped.
+`"homeassistant": "2026.9.0"` so HACS refuses the download with a clear message
+instead; `tests/test_metadata.py` keeps that floor equal to the Home Assistant
+release the test suite runs against.
 
 **Source** — false-positive bug reports raised against `client.py`, and again
 as #79 against `__init__.py` and `client.py`.

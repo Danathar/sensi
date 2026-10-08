@@ -74,8 +74,9 @@ This is [PEP 758](https://peps.python.org/pep-0758/) syntax, valid since Python
 `target-version = "py314"`, under which the parentheses are redundant and
 `ruff format` strips them back out — so adding them turns `ruff format --check`
 red in CI. Nor can the tree reach an interpreter that rejects the form:
-`hacs.json` pins Home Assistant `2026.3.0`, which itself requires Python 3.14.2,
-and `tests/test_metadata.py` enforces that floor. Automated scanners have filed
+`hacs.json` pins Home Assistant `2026.9.0`, which itself requires Python 3.14.2,
+and `tests/test_metadata.py` keeps that floor equal to the Home Assistant release
+the pinned test dependency brings. Automated scanners have filed
 this as a fatal syntax error five times (#79, #95, #133, #147, #148); run
 `python3 -m py_compile` before reporting any syntax problem in this repository.
 
