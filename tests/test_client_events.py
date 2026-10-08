@@ -23,6 +23,7 @@ import pytest
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import (
     UNKNOWN_SETTER_ERROR,
+    ActionResponse,
     EventInfo,
     SensiClient,
     SensiDevice,
@@ -1300,3 +1301,92 @@ class TestExtractIcdId:
     def test_empty_dict(self):
         """An empty payload yields an empty string."""
         assert extract_icd_id({}) == ""
+
+
+class TestTheSetterAckWaitIsRecheckedAfterEveryWake:
+    """Both disconnects re-check the in-flight count after every wake.
+
+    async_update_devices and the `Forbidden` recovery in _async_invoke_setter
+    each wait for setters on the wire before they tear the socket down,
+    because python-socketio drops pending ack callbacks on disconnect. The
+    event that wakes them is set when the count reaches zero, but the emit
+    loop can put another setter on the wire before the waiter resumes. A
+    single wait then disconnects under that setter, and its write - which the
+    thermostat accepted - fails with "Future not done".
+
+    The hand-over is made deterministic with done callbacks: the first ack's
+    own bookkeeping sets the event, and the next callback in line tracks a
+    second setter before the waiting coroutine gets control back.
+    """
+
+    def _hand_over(self, client: SensiClient) -> tuple[asyncio.Future, asyncio.Future]:
+        """Track a setter whose settling puts a second one on the wire."""
+        loop = asyncio.get_running_loop()
+        first: asyncio.Future = loop.create_future()
+        second: asyncio.Future = loop.create_future()
+        client._track_setter_ack(first)
+        # Registered after _track_setter_ack's own callback, so it runs right
+        # behind the one that sets the event and before the waiter resumes.
+        first.add_done_callback(lambda _future: client._track_setter_ack(second))
+        return first, second
+
+    async def _settle_first_and_check(
+        self,
+        first: asyncio.Future,
+        second: asyncio.Future,
+        disconnect: AsyncMock,
+        task: asyncio.Task,
+    ) -> None:
+        """Settle the first ack, then require the disconnect to wait for the second."""
+        await asyncio.sleep(0)
+        assert disconnect.await_count == 0, "disconnected before the first ack"
+
+        first.set_result(None)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert disconnect.await_count == 0, (
+            "disconnected under a setter put on the wire as the first ack settled"
+        )
+        assert not task.done()
+
+        second.set_result(None)
+        await asyncio.wait_for(task, 1)
+        disconnect.assert_awaited_once()
+
+    async def test_the_refresh_waits_for_a_setter_sent_as_the_last_ack_settled(
+        self, client: SensiClient
+    ) -> None:
+        """The coordinator's reconnect does not drop the second setter's ack."""
+        first, second = self._hand_over(client)
+        disconnect = AsyncMock()
+
+        with (
+            patch.object(client, "_async_disconnect", disconnect),
+            patch.object(client, "_connect", AsyncMock()),
+        ):
+            refresh = asyncio.create_task(client.async_update_devices())
+            await self._settle_first_and_check(first, second, disconnect, refresh)
+
+    async def test_a_setter_recovery_waits_for_a_setter_sent_as_the_last_ack_settled(
+        self, client: SensiClient
+    ) -> None:
+        """A refused setter's reconnect does not drop the second setter's ack."""
+        first, second = self._hand_over(client)
+        disconnect = AsyncMock()
+        emit = AsyncMock(
+            side_effect=[ActionResponse("Forbidden", None), ActionResponse(None, {})]
+        )
+
+        with (
+            patch.object(client, "_async_emit_setter", emit),
+            patch.object(client, "try_refresh_access_token", AsyncMock()),
+            patch.object(client, "_async_disconnect", disconnect),
+            patch.object(client, "_connect", AsyncMock()),
+        ):
+            setter = asyncio.create_task(
+                client._async_invoke_setter("set_thing", {"icd_id": ICD_ID})
+            )
+            await self._settle_first_and_check(first, second, disconnect, setter)
+
+        assert setter.result().error is None
+        assert emit.await_count == 2
