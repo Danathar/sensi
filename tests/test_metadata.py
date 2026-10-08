@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from awesomeversion import AwesomeVersion
+import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,11 +54,13 @@ def _pinned_test_dependency_home_assistant() -> str:
         raise AssertionError(
             "pytest-homeassistant-custom-component is not installed"
         ) from None
-    assert installed == pin.group(1), (
-        f"installed pytest-homeassistant-custom-component {installed} differs from "
-        f"the {pin.group(1)} pinned in requirements_test.txt; reinstall "
-        "requirements_test.txt"
-    )
+    if installed != pin.group(1):
+        # nightly.yml's latest-Home-Assistant leg upgrades the harness on purpose;
+        # the floor is only compared against the pinned harness's core.
+        pytest.skip(
+            f"installed pytest-homeassistant-custom-component {installed} is not "
+            f"the {pin.group(1)} pinned in requirements_test.txt"
+        )
 
     for requirement in requires("pytest-homeassistant-custom-component") or []:
         match = re.match(r"homeassistant==([^\s;]+)", requirement)
