@@ -24,14 +24,16 @@ Work is ranked by what it can cost a user. The first two come from
    the early warning.
 4. **Everything else:** documentation, tooling, refactoring.
 
-## How it is maintained: ACMM L5, on purpose
+## How it is maintained: ACMM L6, on purpose
 
 [Hive](https://github.com/hivecommons/hive) agents file issues and open pull
-requests, and a human merges
-([Maintained with Hive (ACMM L5)](../README.md#maintained-with-hive-acmm-l5)).
+requests, and merge them once the required checks pass; outreach pull
+requests stay held for a person
+([Maintained with Hive (ACMM L6)](../README.md#maintained-with-hive-acmm-l6)).
 That split is deliberate. The repository controls physical equipment, and
-the protocol behind it is undocumented. No CI check can stand in for a
-person deciding that a change is safe to ship.
+the protocol behind it is undocumented. That is why the required checks
+and the `protect master` ruleset apply to agent pull requests exactly as to
+a person's.
 
 The ACMM evaluation opened eight L6 issues (#418 to #425). Their outcomes
 follow that boundary:

@@ -14,7 +14,7 @@ this page does not restate them.
 | Nightly compliance, 06:17 UTC | the Nightly compliance workflow | `pinned Home Assistant` green; no open `Nightly compliance failing` issue |
 | Home Assistant advance warning | the `latest Home Assistant (advance warning)` job in the same run | green, or a failure already understood |
 | Monthly release, 09:00 UTC on the 1st | the Release workflow | the run publishes, or skips because nothing user-visible changed; a red run is covered under [A release is refused](#a-release-is-refused) |
-| Agent pull requests waiting | `gh pr list -R Danathar/sensi --label hold` | reviewed in batches; none left to go stale |
+| Agent pull requests waiting | `gh pr list -R Danathar/sensi --label hold` | only outreach pull requests are held; reviewed promptly, none left to go stale |
 
 ## Stopping the agents
 
@@ -31,8 +31,9 @@ nothing in it starts an agent.
 
 **Signal:** a pull request from `danathar-atomic-hive` that should not merge.
 
-Comment on what is wrong, or close it with the reason. It cannot merge
-itself, so leave the `hold` label on until someone has reviewed it. The
+Comment on what is wrong, or close it with the reason. Close it before its checks go green, because a non-outreach pull
+request merges on its own once they pass; an outreach pull request keeps
+the `hold` label until someone has reviewed it. The
 footer at the end of the body names the agent that opened it
 (`— hive: agent=<name>`), which tells you which lane the mistake came from.
 

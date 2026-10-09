@@ -35,7 +35,7 @@ findings that followed.
   against the *latest* Home Assistant as advance warning. A failure opens one
   self-closing issue.
 - `ai-fix.yml` is **gone**: issue #110, removed by PR #118. Autonomous
-  maintenance runs through Hive at ACMM L5 and through nothing else; there is
+  maintenance runs through Hive at ACMM L6 and through nothing else; there is
   no repository-local agent workflow to enable. See `docs/SECURITY-AI.md`,
   "One autonomous path, and it is Hive".
 

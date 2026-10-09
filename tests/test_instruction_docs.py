@@ -349,7 +349,7 @@ def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text(
         "# Coming from `iprak/sensi`\n"
-        "## Maintained with Hive (ACMM L5) ##\n"
+        "## Maintained with Hive (ACMM L6) ##\n"
         "## See [the rubric](docs/review-rubric.md)\n"
         "```bash\n"
         "# not a heading\n"
@@ -365,7 +365,7 @@ def test_heading_anchors_follow_githubs_rules(tmp_path: Path) -> None:
     )
     assert _heading_anchors(doc) == {
         "coming-from-ipraksensi",
-        "maintained-with-hive-acmm-l5",
+        "maintained-with-hive-acmm-l6",
         "see-the-rubric",
         "twice",
         "twice-1",

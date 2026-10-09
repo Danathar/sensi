@@ -16,8 +16,8 @@ that started agents would be a second writer, and `.github/workflows/` is
 outside what an automated change may touch anyway.
 
 Hive's governor starts each agent on its own schedule. The roster and what
-each agent is allowed to do at ACMM L5 are described in the README, under
-[Maintained with Hive (ACMM L5)](../README.md#maintained-with-hive-acmm-l5).
+each agent is allowed to do at ACMM L6 are described in the README, under
+[Maintained with Hive (ACMM L6)](../README.md#maintained-with-hive-acmm-l6).
 
 ## Recognising which agent did what
 
@@ -54,9 +54,10 @@ always check the author before reading a branch name as an agent's.
   the `protect master` ruleset apply to an agent's pull request exactly as to
   a person's ([docs/branch-protection.md](branch-protection.md)), and every
   agent is told to read [AGENTS.md](../AGENTS.md) first.
-- **Nothing merges itself.** At ACMM L5, agent pull requests are hold-gated
-  and a human merges. A human merge is therefore the point where overlapping
-  work gets reconciled.
+- **Checks gate the merge.** At ACMM L6, non-outreach agent pull requests
+  auto-merge when the required checks pass; outreach pull requests stay held
+  for a human. Overlapping work therefore gets reconciled by whichever
+  pull request lands first and by a person closing the loser.
 
 Overlap still happens. #384 (`architect`) and #385 (`scanner`) made the same
 fix to `SensiClient.async_update_devices`. #385 merged, and #384 was closed
