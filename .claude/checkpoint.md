@@ -3,7 +3,7 @@
 Where this repository stands right now. One screen, current state only — the
 history is in [`session-summary.md`](session-summary.md).
 
-**Updated:** 2026-09-24
+**Updated:** 2026-10-09
 
 ## State
 
@@ -35,7 +35,7 @@ findings that followed.
   against the *latest* Home Assistant as advance warning. A failure opens one
   self-closing issue.
 - `ai-fix.yml` is **gone**: issue #110, removed by PR #118. Autonomous
-  maintenance runs through Hive at ACMM L5 and through nothing else; there is
+  maintenance runs through Hive at ACMM L6 and through nothing else; there is
   no repository-local agent workflow to enable. See `docs/SECURITY-AI.md`,
   "One autonomous path, and it is Hive".
 

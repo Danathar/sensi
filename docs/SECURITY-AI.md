@@ -194,10 +194,11 @@ data, not instructions.
 ## One autonomous path, and it is Hive
 
 Autonomous maintenance on this repository goes through
-[Hive](https://github.com/hivecommons/hive) at ACMM L5, and through nothing
+[Hive](https://github.com/hivecommons/hive) at ACMM L6, and through nothing
 else. Hive agents file issues and open pull requests; the gates in `ci.yml`,
 `coverage-gate.yml` and `validate.yml` apply to their output exactly as to
-anyone else's, and a human reviews and merges. No agent merges its own work.
+anyone else's. Non-outreach agent pull requests auto-merge when those
+checks pass; outreach pull requests stay held for a human to review.
 
 There used to be a second path. `.github/workflows/ai-fix.yml` ran Claude
 in-repository, triggered by an issue label or an `@claude` comment, in a job
