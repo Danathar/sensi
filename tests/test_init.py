@@ -722,9 +722,7 @@ async def test_a_failed_platform_unload_leaves_the_client_running(
     mock_entry = mock_coordinator.config_entry
 
     with (
-        patch.object(
-            hass.config_entries, "async_unload_platforms", return_value=False
-        ),
+        patch.object(hass.config_entries, "async_unload_platforms", return_value=False),
         patch(STOP_TARGET) as mock_stop,
     ):
         assert await async_unload_entry(hass, mock_entry) is False
