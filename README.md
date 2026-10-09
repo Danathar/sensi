@@ -3,7 +3,7 @@
 [![Coverage gate](https://github.com/Danathar/sensi/actions/workflows/coverage-gate.yml/badge.svg?branch=master)](https://github.com/Danathar/sensi/actions/workflows/coverage-gate.yml)
 [![Nightly compliance](https://github.com/Danathar/sensi/actions/workflows/nightly.yml/badge.svg?branch=master)](https://github.com/Danathar/sensi/actions/workflows/nightly.yml)
 [![Unit coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fsensi%2Fcoverage-data%2Fcoverage-unit.json)](docs/quality.md#coverage)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/sensi)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-1f6feb)](https://deepwiki.com/Danathar/sensi)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
 [![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](#maintained-with-hive-acmm-l6)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
