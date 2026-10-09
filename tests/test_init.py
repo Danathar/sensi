@@ -677,3 +677,56 @@ async def test_unload_without_a_coordinator_still_unloads_the_platforms(
         assert await async_unload_entry(hass, mock_entry) is True
 
     mock_unload_platforms.assert_awaited_once_with(mock_entry, SUPPORTED_PLATFORMS)
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_unload_stops_the_client_after_the_platforms_unload(
+    hass: HomeAssistant, mock_coordinator
+) -> None:
+    """A successful unload removes the entities first, then stops the client."""
+
+    mock_entry = mock_coordinator.config_entry
+    order: list[str] = []
+
+    async def fake_unload_platforms(*_args) -> bool:
+        order.append("platforms")
+        return True
+
+    async def fake_stop(*_args) -> None:
+        order.append("stop")
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            side_effect=fake_unload_platforms,
+        ),
+        patch(STOP_TARGET, side_effect=fake_stop) as mock_stop,
+    ):
+        assert await async_unload_entry(hass, mock_entry) is True
+
+    mock_stop.assert_awaited_once()
+    assert order == ["platforms", "stop"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_failed_platform_unload_leaves_the_client_running(
+    hass: HomeAssistant, mock_coordinator
+) -> None:
+    """stop() is final, so a failed unload must not stop a still-loaded entry.
+
+    Home Assistant keeps the entry and its coordinator when the platforms fail
+    to unload; a stopped client would leave it unavailable until a restart.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+
+    with (
+        patch.object(
+            hass.config_entries, "async_unload_platforms", return_value=False
+        ),
+        patch(STOP_TARGET) as mock_stop,
+    ):
+        assert await async_unload_entry(hass, mock_entry) is False
+
+    mock_stop.assert_not_awaited()

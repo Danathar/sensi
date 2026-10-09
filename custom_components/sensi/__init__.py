@@ -172,10 +172,16 @@ def _adopt_stored_user_id(
 
 async def async_unload_entry(hass: HomeAssistant, entry: SensiConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        entry, SUPPORTED_PLATFORMS
+    )
+    # Stop the client only once the platforms are gone. stop() is final (the
+    # client refuses to reconnect), and a failed unload leaves the entry
+    # loaded with its coordinator still polling.
     coordinator = entry.runtime_data
-    if coordinator:
+    if unload_ok and coordinator:
         await coordinator.client.stop()
-    return await hass.config_entries.async_unload_platforms(entry, SUPPORTED_PLATFORMS)
+    return unload_ok
 
 
 def get_config_option(
