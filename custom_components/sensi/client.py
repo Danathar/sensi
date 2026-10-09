@@ -602,7 +602,7 @@ class SensiClient:
             device.identifier, SetCirculatingFanEventValue(enabled, duty_cycle)
         )
         action_response = await self._async_invoke_setter(
-            SettingEventName.CIRCULATING_FAN.value, asdict(request)
+            "set_circulating_fan", asdict(request)
         )
 
         if not action_response.error:

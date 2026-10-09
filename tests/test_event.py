@@ -1,5 +1,8 @@
 """Tests for Sensi event module."""
 
+import pytest
+
+from custom_components.sensi.data import State
 from custom_components.sensi.event import (
     BoolEventData,
     SetCirculatingFanEvent,
@@ -11,6 +14,7 @@ from custom_components.sensi.event import (
     SetOperatingModeEventSuccess,
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
+    SettingEventName,
 )
 
 
@@ -170,3 +174,24 @@ def test_set_humidity_event_creation() -> None:
     assert event.value == humidity_value
     assert event.value.enabled == "on"
     assert event.value.target_percent == 35
+
+
+@pytest.mark.parametrize("event", list(SettingEventName), ids=str)
+@pytest.mark.parametrize(("wire", "expected"), [("on", True), ("off", False)])
+def test_setting_event_names_an_on_off_state_attribute(
+    event: SettingEventName, wire: str, expected: bool
+) -> None:
+    """Each SettingEventName member names an on/off setting State parses.
+
+    async_set_bool_setting sends the member with an on/off value and, on
+    success, writes the bool to the State attribute named by the event minus
+    its "set_" prefix. A member with no such attribute, or one whose setting is
+    not on/off, would send a value the thermostat does not expect and leave
+    the entity showing a value nothing reads.
+    """
+    assert event.value.startswith("set_")
+    key = event.value.removeprefix("set_")
+
+    state = State({key: wire})
+
+    assert getattr(state, key) is expected

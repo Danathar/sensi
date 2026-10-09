@@ -7,20 +7,19 @@ from .utils import bool_to_onoff
 
 
 class SettingEventName(StrEnum):
-    """Thermostat properties."""
+    """Setter events for on/off thermostat settings.
+
+    `SensiClient.async_set_bool_setting` sends a member as an on/off value and,
+    on success, writes the bool to the `State` attribute named by the event
+    with its `set_` prefix removed. A member therefore has to name an on/off
+    setting that `State` parses under that name; `tests/test_event.py` checks
+    it.
+    """
 
     DISPLAY_TIME = "set_display_time"
     DISPLAY_HUMIDITY = "set_display_humidity"
     CONTINUOUS_BACKLIGHT = "set_continuous_backlight"
     KEYPAD_LOCKOUT = "set_keypad_lockout"
-    HEAT_BOOST = "set_heat_boost"
-    COOL_BOOST = "set_cool_boost"
-    AUX_BOOST = "set_aux_boost"
-    AC_PROTECTION = "set_compressor_lockout"
-    EARLY_START = "set_early_start"
-    CIRCULATING_FAN = "set_circulating_fan"
-    HEAT_MAX_TEMP = "set_heat_max_temp"
-    COOL_MIN_TEMP = "set_cool_min_temp"
 
 
 @dataclass
