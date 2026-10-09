@@ -88,3 +88,69 @@ def test_hacs_floor_matches_the_home_assistant_the_tests_run_on() -> None:
         f"Assistant {tested}; set the hacs.json floor, README.md and AGENTS.md "
         "to the tested version (or bump the pin)"
     )
+
+
+def _readme_home_assistant_requirement() -> str:
+    """Return the Home Assistant bullet under README.md's `## Requirements`."""
+
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    section = re.search(
+        r"^## Requirements\n(.*?)^## ", readme, re.MULTILINE | re.DOTALL
+    )
+    assert section, "README.md no longer has a `## Requirements` section"
+    bullets = [
+        line
+        for line in section.group(1).splitlines()
+        if line.startswith("- Home Assistant ")
+    ]
+    assert len(bullets) == 1, (
+        "README.md's Requirements section should have exactly one Home Assistant "
+        f"bullet, found {len(bullets)}"
+    )
+    return bullets[0]
+
+
+def test_readme_requirements_quote_the_hacs_floor() -> None:
+    """README.md tells a manual installer the floor HACS enforces for everyone else.
+
+    A manual install skips hacs.json, so the README bullet is the only place
+    that reader learns the minimum. It names the floor twice: as the minimum
+    and as the release the suite runs on. Both must be the hacs.json value.
+    """
+
+    hacs = json.loads((_ROOT / "hacs.json").read_text(encoding="utf-8"))
+    floor = hacs["homeassistant"]
+    bullet = _readme_home_assistant_requirement()
+
+    minimum = re.match(r"- Home Assistant \*\*(\S+) or newer\*\*", bullet)
+    assert minimum, (
+        "README.md's Home Assistant requirement no longer reads "
+        "'- Home Assistant **<version> or newer**'"
+    )
+    assert minimum.group(1) == floor, (
+        f"README.md asks for Home Assistant {minimum.group(1)} or newer, but "
+        f'hacs.json declares "homeassistant": "{floor}"'
+    )
+
+    tested = re.search(r"(\S+) is the release the test suite runs against", bullet)
+    assert tested, (
+        "README.md no longer says which Home Assistant release the test suite "
+        "runs against"
+    )
+    assert tested.group(1) == floor, (
+        f"README.md says the suite runs against Home Assistant {tested.group(1)}, "
+        f"but hacs.json's floor is {floor} and "
+        "test_hacs_floor_matches_the_home_assistant_the_tests_run_on keeps the "
+        "two equal"
+    )
+
+    others = set(re.findall(r"\b20\d\d\.\d+\.\d+\b", bullet)) - {floor}
+    assert not others, (
+        f"README.md's Home Assistant requirement also names {sorted(others)}; "
+        f"the only release it should name is the hacs.json floor {floor}"
+    )
+
+    assert "HACS enforces the floor, a manual install does not" in bullet, (
+        "README.md no longer warns that only HACS enforces the floor; a manual "
+        "install reads nothing but this bullet"
+    )
