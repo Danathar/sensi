@@ -250,10 +250,10 @@ def test_every_l6_waiver_in_the_policy_is_one_the_page_reports() -> None:
 
 
 def test_the_rule_the_page_cites_is_in_the_security_policy() -> None:
-    """The page says the policy states no agent merges its own work; it does."""
-    assert "states that no agent merges its own work" in _collapse(
+    """The page says the policy lets agent pull requests auto-merge; it does."""
+    assert "states that non-outreach agent pull requests auto-merge" in _collapse(
         _DOC.read_text(encoding="utf-8")
     )
-    assert "No agent merges its own work." in _collapse(
-        _SECURITY.read_text(encoding="utf-8")
+    assert "Non-outreach agent pull requests auto-merge when those checks pass" in (
+        _collapse(_SECURITY.read_text(encoding="utf-8"))
     )

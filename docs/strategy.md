@@ -52,10 +52,10 @@ follow that boundary:
   explains why.
 
 A waiver cannot advance an ACMM level. The L6 file check is therefore not
-expected to pass. Moving Hive itself to L6, where agents may merge, would
-first need [docs/SECURITY-AI.md](SECURITY-AI.md) to change, because it states
-that no agent merges its own work. That is a maintainer decision, made on
-purpose, not something a criterion should drift into.
+expected to pass. Moving Hive itself to L6, where agents may merge, was a
+maintainer decision, made on purpose rather than drifted into through a
+criterion. [docs/SECURITY-AI.md](SECURITY-AI.md) changed with it and now
+states that non-outreach agent pull requests auto-merge when the checks pass.
 
 ## Where to look
 
