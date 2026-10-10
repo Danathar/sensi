@@ -925,3 +925,41 @@ async def test_a_celsius_thermostat_without_a_cool_limit_accepts_a_cooling_setpo
     assert emitted["scale"] == "c"
 
     await sensi_backend.shutdown()
+
+
+async def test_a_metric_instance_sends_whole_fahrenheit_degrees(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """22 °C reaches a Fahrenheit thermostat as 72, not 71.6 (#608).
+
+    Home Assistant converts the service value into the thermostat's unit
+    without rounding it to the whole-degree step the entity advertises.
+    """
+    hass.config.units = METRIC_SYSTEM
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_TEMPERATURE,
+        {ATTR_ENTITY_ID: CLIMATE, ATTR_TEMPERATURE: 22},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    emitted = sensi_backend.last_emitted("set_temperature")
+    assert emitted["scale"] == "f"
+    assert emitted["target_temp"] == 72
+
+    await sensi_backend.shutdown()
