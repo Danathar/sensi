@@ -62,6 +62,20 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+def _round_setpoint(value: float | None) -> int | None:
+    """Return a setpoint rounded to the whole degree the entity advertises.
+
+    Home Assistant converts a set_temperature value into the thermostat's
+    unit without rounding it to target_temperature_step, so on a metric
+    instance 22 °C reaches a Fahrenheit thermostat as 71.6. The app only
+    ever sends whole degrees, and the client records what it sent as the
+    local setpoint, so the fraction must not get that far.
+    """
+    if value is None:
+        return None
+    return round(value)
+
+
 class SensiThermostat(SensiEntity, ClimateEntity):
     """Representation of a Sensi thermostat."""
 
@@ -289,6 +303,8 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             demand_status = self._state.demand_status
             if demand_status.aux > 0 or demand_status.heat > 0:
                 return HVACAction.HEATING
+            if demand_status.fan > 0:
+                return HVACAction.FAN
             return HVACAction.IDLE
 
         # https://sensi.copeland.com/en-us/support/how-do-i-configure-my-thermostat
@@ -340,6 +356,10 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             return HVACAction.HEATING
         if demand_status.cool > 0:
             return HVACAction.COOLING
+        # Fan mode on, or the circulating fan in its duty window: the state=heat
+        # "target temp low" samples above have 'fan': 100 with no heat or cool.
+        if demand_status.fan > 0:
+            return HVACAction.FAN
 
         return HVACAction.IDLE
 
@@ -506,8 +526,8 @@ class SensiThermostat(SensiEntity, ClimateEntity):
         # ATTR_TEMPERATURE => ClimateEntityFeature.TARGET_TEMPERATURE
         # ATTR_TARGET_TEMP_LOW/ATTR_TARGET_TEMP_HIGH => TARGET_TEMPERATURE_RANGE
         if operating_mode == OperatingMode.AUTO:
-            temperature_low = kwargs.get(ATTR_TARGET_TEMP_LOW)
-            temperature_high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
+            temperature_low = _round_setpoint(kwargs.get(ATTR_TARGET_TEMP_LOW))
+            temperature_high = _round_setpoint(kwargs.get(ATTR_TARGET_TEMP_HIGH))
 
             response = await self.coordinator.client.async_set_temperature(
                 self._device, OperatingMode.HEAT, temperature_low
@@ -519,7 +539,7 @@ class SensiThermostat(SensiEntity, ClimateEntity):
             )
             raise_if_error(response, "Cool setpoint", temperature_high)
         else:
-            temperature = kwargs.get(ATTR_TEMPERATURE)
+            temperature = _round_setpoint(kwargs.get(ATTR_TEMPERATURE))
             # The operating mode goes out as-is, AUX included. That is what
             # this integration has always sent, and the AUX symptom was a
             # setpoint that snapped back until the next refresh - the shape
