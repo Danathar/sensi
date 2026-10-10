@@ -166,7 +166,9 @@ supply-chain concern.
   piped command ran arbitrary code before a single test body with nothing left
   in the tree to review. An argument starting with `@` is refused before any of the three,
   because pytest replaces it with the lines of the file it names, and none of
-  those lines is checked. The full list, with the reason for each entry, is at
+  those lines is checked. `--pastebin` is refused as well, because it uploads
+  the session log to a public paste service - the rule above forbids exactly
+  that. The full list, with the reason for each entry, is at
   the top of `scripts/run_tests.py`.
 - Say what could not be verified. There is no thermostat in CI and the protocol
   is undocumented; "unverified against hardware" is an acceptable outcome and

@@ -20,7 +20,9 @@ the `--cov-report` destination forms such as `xml:DEST`) are refused too,
 because an option's path is not a target and does not have to be inside the
 repository. Before any of that, an argument starting with `@` is refused:
 pytest replaces it with the lines of the file it names, so every argument in
-that file would reach pytest without passing the three rules.
+that file would reach pytest without passing the three rules. `--pastebin` is
+refused the same way: it uploads the session log to a public paste service,
+which docs/SECURITY-AI.md rules out.
 Running agent-written code is still possible, because that is what a test
 suite is. The point is that the code has to be a file in the tree, where
 `git status` shows it and review reaches it.
@@ -126,6 +128,14 @@ REFUSED_WRITE = frozenset(
 # named.
 REFUSED_CONFIG = frozenset({"--cov-config"})
 
+# `--pastebin=all` (or `=failed`) makes pytest POST the whole session log -
+# the absolute rootdir, every plugin, each failure's traceback and locals - to
+# https://bpa.st, a public paste service, and print the link. That is the one
+# thing docs/SECURITY-AI.md says never to do with logs or fixtures, and this
+# wrapper runs without the prompt that would otherwise stop it. No CI job or
+# documented command uses it.
+REFUSED_SEND = frozenset({"--pastebin"})
+
 # `--cov-report` is the one of these that has a legitimate spelling: AGENTS.md
 # documents `--cov-report=term-missing`. Its value is `TYPE[:SUFFIX]`, and what
 # the suffix means depends on the type: after a terminal type it is a display
@@ -173,7 +183,7 @@ def _refused_option(arg: str) -> bool:
     """
 
     name = arg.split("=", 1)[0]
-    if name in REFUSED_LONG or name in REFUSED_WRITE or name in REFUSED_CONFIG:
+    if name in REFUSED_LONG | REFUSED_WRITE | REFUSED_CONFIG | REFUSED_SEND:
         return True
     if arg.startswith("--"):
         return False
@@ -219,6 +229,8 @@ def refusals(argv: list[str]) -> list[str]:
                     why = "creates, truncates or deletes a path of its own"
                 elif name in REFUSED_CONFIG:
                     why = "chooses the config that names where reports are written"
+                elif name in REFUSED_SEND:
+                    why = "uploads the session log to a public paste service"
                 else:
                     why = "reaches code by a route the target check cannot see"
                 problems.append(f"{arg}: {why}")

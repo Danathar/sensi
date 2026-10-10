@@ -52,7 +52,8 @@ or delete a path of their own (`--junitxml`, `--log-file`, `--basetemp`,
 `--cov-report=xml` are forwarded; the report then lands where `.coveragerc`
 says. An argument starting with `@` is refused before any of the three, because
 pytest replaces it with the lines of the file it names and none of those lines
-is checked. Bare `pytest` still takes everything and asks first.
+is checked. `--pastebin` is refused as well: it uploads the session log to a
+public paste service. Bare `pytest` still takes everything and asks first.
 
 ## Rules
 

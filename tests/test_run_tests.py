@@ -209,6 +209,30 @@ def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
 @pytest.mark.parametrize(
     "argv",
     [
+        ["--pastebin=all"],
+        ["--pastebin=failed", "tests"],
+        ["--pastebin", "all"],
+        ["tests", "--pastebin", "failed"],
+    ],
+)
+def test_an_option_that_uploads_the_session_log_is_refused(argv: list[str]) -> None:
+    """`--pastebin` POSTs the whole session log to https://bpa.st.
+
+    That log carries the absolute rootdir, the plugin list, and every
+    failure's traceback with its locals. docs/SECURITY-AI.md forbids posting
+    logs or fixtures to a pastebin, and this wrapper runs without the prompt
+    that would otherwise catch it, so the option itself has to be refused -
+    in both the `=` and the two-argument spelling.
+    """
+
+    refused = run_tests.refusals(argv)
+    assert refused, f"{argv} uploads the session log"
+    assert any("paste service" in problem for problem in refused)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
         ["@.env"],
         ["@notes.txt"],
         ["tests", "@args.txt"],

@@ -19,7 +19,8 @@ three-rules passage:
 - every copy names the same write options, so dropping one from one copy is
   seen;
 - the `@FILE` refusal (#295) is stated, since the wrapper applies it before any
-  of the three rules.
+  of the three rules;
+- the `--pastebin` refusal is stated, since it is outside the three rules too.
 
 A fourth copy is caught by `test_every_copy_of_the_list_is_classified`.
 """
@@ -151,6 +152,16 @@ def test_the_argument_file_refusal_is_stated(name: str) -> None:
     assert run_tests.FROMFILE_PREFIX == "@"
     assert run_tests.refusals(["@args.txt"])
     assert run_tests.refusals(["tests", "-k", "@args.txt"])
+
+
+@pytest.mark.parametrize("name", sorted(_COPIES))
+def test_the_pastebin_refusal_is_stated(name: str) -> None:
+    """Claim: `--pastebin` is refused, since it uploads the session log."""
+    sentences = re.split(r"(?<=[.:;])\s+", _passage(name))
+    stating = [s for s in sentences if "`--pastebin`" in s and "refused" in s]
+    assert stating, f"{name} does not say `--pastebin` is refused"
+    assert set(run_tests.REFUSED_SEND) == {"--pastebin"}
+    assert run_tests.refusals(["--pastebin=all"])
 
 
 def test_claude_md_sends_readers_to_a_copy_that_has_the_list() -> None:
