@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import itertools
 from typing import Any, Final, override
 
 from homeassistant.components.sensor import (
@@ -21,27 +22,47 @@ from .coordinator import SensiConfigEntry, SensiDevice
 from .data import ActiveSavingsEventState
 from .entity import SensiDescriptionEntity, SensiEntity
 
+# Two alkaline AA cells in series, as (pack voltage, estimated % remaining),
+# highest first. Most of an alkaline cell's life is spent between 2.4V and
+# 2.7V, so a straight line from 3.0V to 2.0V would read far too high for most
+# of it.
+BATTERY_DISCHARGE_CURVE: Final = (
+    (3.0, 100),
+    (2.8, 90),
+    (2.6, 70),
+    (2.4, 40),
+    (2.2, 15),
+    (2.0, 0),
+)
 
-def calculate_battery_level(voltage: float) -> int | None:
-    """Calculate the battery level."""
+
+def calculate_battery_level(voltage: float | None) -> int | None:
+    """Calculate the battery level as a percentage of the pack voltage.
+
+    Interpolates linearly between the points of BATTERY_DISCHARGE_CURVE,
+    an approximated alkaline discharge curve.
+    """
     # https://devzone.nordicsemi.com/f/nordic-q-a/28101/how-to-calculate-battery-voltage-into-percentage-for-aa-2-batteries-without-fluctuations
     # https://forum.arduino.cc/t/calculate-battery-percentage-of-alkaline-batteries-using-the-voltage/669958/17
     if voltage is None:
         return None
-    mvolts = voltage * 1000
-    # return "low" if (((voltage * 1000) - 900) * 100) / (600) <= 30 else "good"
-    if mvolts >= 3000:
-        return 100
-    if mvolts > 2900:
-        return 100 - int(((3000 - mvolts) * 58) / 100)
-    if mvolts > 2740:
-        return 42 - int(((2900 - mvolts) * 24) / 160)
-    if mvolts > 2440:
-        return 18 - int(((2740 - mvolts) * 12) / 300)
-    if mvolts > 2100:
-        return 6 - int(((2440 - mvolts) * 6) / 340)
 
-    return 0
+    v_max, p_max = BATTERY_DISCHARGE_CURVE[0]
+    v_min, p_min = BATTERY_DISCHARGE_CURVE[-1]
+    if voltage >= v_max:
+        return p_max
+    if voltage <= v_min:
+        return p_min
+
+    # The bounds above leave v_min < voltage < v_max, so some segment always
+    # matches; the last one is reached at worst.
+    (v_high, p_high), (v_low, p_low) = next(
+        segment
+        for segment in itertools.pairwise(BATTERY_DISCHARGE_CURVE)
+        if voltage >= segment[1][0]
+    )
+
+    return round(p_low + (voltage - v_low) / (v_high - v_low) * (p_high - p_low))
 
 
 @dataclass(frozen=True)
