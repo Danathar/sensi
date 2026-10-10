@@ -533,12 +533,11 @@ class SensiClient:
 
         self._apply_target_temperature(device, mode, target_temp)
 
-        ack_mode = response.get("mode")
         return ActionResponse(
             None,
             SetTemperatureEventSuccess(
                 current_temp=current_temp,
-                mode=ack_mode if isinstance(ack_mode, str) else mode.value,
+                mode=(_ack_mode(response) or mode).value,
                 target_temp=target_temp,
             ),
         )
@@ -603,10 +602,7 @@ class SensiClient:
         # as State parsing does, because callers read `.value` from it. The
         # backend accepted the request, so a mode that is missing or that the
         # enum does not know falls back to the one asked for.
-        ack_mode = response.get("mode")
-        device.state.operating_mode = (
-            isinstance(ack_mode, str) and try_parse_enum(OperatingMode, ack_mode)
-        ) or value
+        device.state.operating_mode = _ack_mode(response) or value
         return ActionResponse(None, None)
 
     async def async_set_circulating_fan_mode(
@@ -1404,6 +1400,18 @@ class SensiClient:
                     self._devices[icd_id].update_capabilities(data)
 
                 self._resolve_futures("capabilities", icd_id, data)
+
+
+def _ack_mode(ack: dict) -> OperatingMode | None:
+    """Return the mode a dict ack reports, or None when it reports none we know.
+
+    A missing or null mode, or one the enum does not know, is None, so the
+    caller falls back to the mode it asked for.
+    """
+    try:
+        return OperatingMode(ack.get("mode"))
+    except ValueError, TypeError:
+        return None
 
 
 def _unreadable_setter_ack(event: str, ack: any) -> ActionResponse:

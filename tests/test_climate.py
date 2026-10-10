@@ -316,7 +316,7 @@ async def test_set_temperature_in_aux_keeps_aux_on_the_wire_and_applies_locally(
 async def test_set_temperature_reports_an_unreadable_ack_as_an_error(
     hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
 ) -> None:
-    """A dict the client cannot parse reaches the user as HomeAssistantError."""
+    """An ack the client cannot read reaches the user as HomeAssistantError."""
 
     with (
         patch.object(mock_thermostat, "async_write_ha_state"),
@@ -327,7 +327,7 @@ async def test_set_temperature_reports_an_unreadable_ack_as_an_error(
         pytest.raises(HomeAssistantError) as context,
     ):
         mock_async_invoke_setter.return_value = ActionResponse(
-            None, {"unexpected": "shape"}
+            None, ["unexpected", "shape"]
         )
 
         await mock_thermostat.async_set_temperature(temperature=68)

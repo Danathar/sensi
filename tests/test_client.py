@@ -874,7 +874,9 @@ class TestSetters:
         ("response_error", "response_data", "expect_error"),
         [
             ("Failed", None, True),
-            (None, {"invalid_property": "cool"}, True),
+            # A dict ack is an acceptance whatever its keys; without a mode
+            # the one asked for is recorded.
+            (None, {"invalid_property": "cool"}, False),
             # What _async_invoke_setter returns for an argument-less ack or an
             # "accepted" string. It used to be "No response received" here
             # alone, while every other setter took it as a success.
