@@ -191,6 +191,59 @@ async def test_set_temperature(
         mock_async_update_listeners.assert_called_once()
 
 
+async def test_set_temperature_rounds_to_a_whole_degree(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """A converted setpoint goes out, and is recorded, as a whole degree (#608).
+
+    Home Assistant converts 22 °C to 71.6 °F for a Fahrenheit thermostat and
+    does not round it to target_temperature_step.
+    """
+
+    mock_device.state.operating_mode = OperatingMode.HEAT
+    sent = {}
+
+    async def fake_invoke(event, request_data):
+        sent[event] = request_data
+        return ActionResponse(None, {})
+
+    with (
+        patch.object(mock_coordinator.client, "_async_invoke_setter", new=fake_invoke),
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+    ):
+        await mock_thermostat.async_set_temperature(temperature=71.6)
+
+    assert sent["set_temperature"]["target_temp"] == 72
+    assert isinstance(sent["set_temperature"]["target_temp"], int)
+    assert mock_device.state.current_heat_temp == 72
+
+
+async def test_set_temperature_auto_rounds_both_setpoints(
+    hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
+) -> None:
+    """The low/high path rounds each converted setpoint as well (#608)."""
+
+    with (
+        patch.object(mock_thermostat, "async_write_ha_state"),
+        patch.object(mock_coordinator, "async_update_listeners"),
+        patch.object(
+            mock_thermostat.coordinator.client, "async_set_temperature"
+        ) as mock_async_set_temperature,
+    ):
+        mock_async_set_temperature.return_value = ActionResponse(None, None)
+        mock_device.state.operating_mode = OperatingMode.AUTO
+
+        await mock_thermostat.async_set_temperature(
+            target_temp_low=64.4, target_temp_high=75.2
+        )
+
+    assert mock_async_set_temperature.call_args_list == [
+        call(mock_device, OperatingMode.HEAT, 64),
+        call(mock_device, OperatingMode.COOL, 75),
+    ]
+
+
 async def test_set_temperature_survives_an_ack_without_detail(
     hass: HomeAssistant, mock_device, mock_thermostat, mock_coordinator
 ) -> None:
@@ -636,27 +689,36 @@ class TestSensiThermostatHvacModes:
 
 
 @pytest.mark.parametrize(
-    ("mode", "heat", "cool", "aux", "expected"),
+    ("mode", "heat", "cool", "aux", "fan", "expected"),
     [
-        (OperatingMode.OFF, 0, 0, 0, HVACAction.OFF),
-        (OperatingMode.HEAT, 100, 0, 0, HVACAction.HEATING),
-        (OperatingMode.COOL, 0, 100, 0, HVACAction.COOLING),
-        (OperatingMode.HEAT, 0, 0, 0, HVACAction.IDLE),
+        (OperatingMode.OFF, 0, 0, 0, 0, HVACAction.OFF),
+        # The OFF sample has 'fan': 100; Home Assistant's thermostats report
+        # off in that mode, so the fan does not change it.
+        (OperatingMode.OFF, 0, 0, 0, 100, HVACAction.OFF),
+        (OperatingMode.HEAT, 100, 0, 0, 100, HVACAction.HEATING),
+        (OperatingMode.COOL, 0, 100, 0, 100, HVACAction.COOLING),
+        (OperatingMode.HEAT, 0, 0, 0, 0, HVACAction.IDLE),
+        # Fan only: fan mode on, or the circulating fan in its duty window.
+        (OperatingMode.HEAT, 0, 0, 0, 100, HVACAction.FAN),
+        (OperatingMode.COOL, 0, 0, 0, 100, HVACAction.FAN),
+        (OperatingMode.AUTO, 0, 0, 0, 100, HVACAction.FAN),
         # AUX is heating only while there is demand; the HP1 state=aux sample
         # has all demand at 0 once the setpoint is met.
-        (OperatingMode.AUX, 0, 0, 0, HVACAction.IDLE),
-        (OperatingMode.AUX, 0, 0, 100, HVACAction.HEATING),
-        (OperatingMode.AUX, 100, 0, 0, HVACAction.HEATING),
+        (OperatingMode.AUX, 0, 0, 0, 0, HVACAction.IDLE),
+        (OperatingMode.AUX, 0, 0, 100, 100, HVACAction.HEATING),
+        (OperatingMode.AUX, 100, 0, 0, 100, HVACAction.HEATING),
+        (OperatingMode.AUX, 0, 0, 0, 100, HVACAction.FAN),
     ],
 )
 def test_hvac_action(
-    mock_device, mock_thermostat, mode, heat, cool, aux, expected
+    mock_device, mock_thermostat, mode, heat, cool, aux, fan, expected
 ) -> None:
     """Test cases for HVAC action determination."""
     mock_device.state.operating_mode = mode
     mock_device.state.demand_status.heat = heat
     mock_device.state.demand_status.cool = cool
     mock_device.state.demand_status.aux = aux
+    mock_device.state.demand_status.fan = fan
     assert mock_thermostat.hvac_action == expected
 
 
