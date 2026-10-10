@@ -167,6 +167,10 @@ def test_an_option_that_loads_code_is_refused(argv: list[str]) -> None:
         ["--report-log=/tmp/pwned.jsonl"],
         ["--basetemp=.claude/hooks"],
         ["--basetemp", "/tmp/victim"],
+        ["--rootdir=/tmp"],
+        ["--rootdir", ".claude"],
+        ["--snapshot-dirname=/tmp/pwned"],
+        ["--snapshot-dirname", "../../.claude"],
         ["--cov-report=xml:/tmp/pwned.xml"],
         ["--cov-report", "html:/tmp/pwned"],
         ["--cov-report=lcov:docs/SECURITY-AI.md"],
@@ -184,7 +188,8 @@ def test_an_option_that_writes_a_path_is_refused(argv: list[str]) -> None:
     option carrying its own path is invisible to it, and nothing requires the
     path to be inside `tests/` or inside the repository. `--junitxml` is
     written even when collection fails, so no test has to run; `--basetemp`
-    deletes the directory recursively before pytest uses it. Every one of
+    deletes the directory recursively before pytest uses it; `--rootdir`
+    puts `.pytest_cache/` inside whatever directory it names. Every one of
     them reaches the `Edit` deny list in `.claude/settings.json` from a
     command that list allows without a prompt.
 
@@ -228,6 +233,37 @@ def test_an_option_that_uploads_the_session_log_is_refused(argv: list[str]) -> N
     refused = run_tests.refusals(argv)
     assert refused, f"{argv} uploads the session log"
     assert any("paste service" in problem for problem in refused)
+
+
+def test_every_pytest_option_is_forwarded_or_refused(
+    pytestconfig: pytest.Config,
+) -> None:
+    """Claim: no option the installed plugins accept is left unreviewed.
+
+    The refused sets are a denylist, and a denylist misses what nobody read:
+    ten follow-up commits each closed a route the lists had missed, `--rootdir`
+    the latest. This reads the live parser - pytest's own options and every
+    plugin's - so an option that a dependency bump adds is seen the first time
+    the suite runs with it, and has to be put on one side or the other.
+    `FORWARDED` lives in the wrapper rather than here; see its comment.
+
+    `_parser.optparser` is private to pytest. If an upgrade renames it, this
+    test errors rather than passing.
+    """
+
+    parser = pytestconfig._parser.optparser
+    live = {name for action in parser._actions for name in action.option_strings}
+    refused = (
+        run_tests.REFUSED_LONG
+        | run_tests.REFUSED_SHORT
+        | run_tests.REFUSED_WRITE
+        | run_tests.REFUSED_CONFIG
+        | run_tests.REFUSED_SEND
+        | run_tests.VALUED_WRITE
+    )
+    assert not run_tests.FORWARDED & refused, "an option cannot be on both sides"
+    unreviewed = live - run_tests.FORWARDED - refused
+    assert not unreviewed, f"forward or refuse in run_tests.py: {sorted(unreviewed)}"
 
 
 @pytest.mark.parametrize(

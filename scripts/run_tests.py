@@ -113,10 +113,27 @@ REFUSED_SHORT = frozenset({"-p", "-c", "-o"})
 # inside `tests/` - or inside the repository. `--basetemp` is the sharpest of
 # them: pytest `rm_rf`s the directory before it uses it.
 #
+# `--rootdir` belongs here although it reads like a setting: pytest keeps its
+# cache under the root directory, so `--rootdir=DIR` creates `.pytest_cache/`
+# (a README, a `.gitignore`, `CACHEDIR.TAG` and `v/cache/*`) inside any existing
+# DIR, and `--cache-clear` then deletes that folder there. `--snapshot-dirname`
+# is syrupy's, another dependency of the test harness: it names the directory
+# snapshots are written to and cleaned out of, joined to each test's directory,
+# and an absolute name replaces that directory outright.
+#
 # Same rule as the list above - an option that writes a path and is not here is
 # a bug in the list.
 REFUSED_WRITE = frozenset(
-    {"--junitxml", "--junit-xml", "--log-file", "--debug", "--basetemp", "--report-log"}
+    {
+        "--junitxml",
+        "--junit-xml",
+        "--log-file",
+        "--debug",
+        "--basetemp",
+        "--report-log",
+        "--rootdir",
+        "--snapshot-dirname",
+    }
 )
 
 # `--cov-config` names the coverage configuration file, and that file chooses
@@ -145,6 +162,107 @@ REFUSED_SEND = frozenset({"--pastebin"})
 # only a suffix on a type outside TERMINAL_REPORTS is refused.
 VALUED_WRITE = frozenset({"--cov-report"})
 TERMINAL_REPORTS = frozenset({"term", "term-missing"})
+
+# Every other option the installed pytest and its plugins accept, each one
+# reviewed and judged safe to forward. The wrapper does not consult this set -
+# anything not refused above is forwarded whether or not it is here. The suite
+# does: `test_every_pytest_option_is_forwarded_or_refused` reads the live
+# parser and fails on an option that is in neither this set nor a refused one,
+# so a plugin option that a dependency bump adds turns the suite red until
+# someone decides which side it belongs on, instead of reaching this
+# no-prompt command unread. Moving an option from here to a refused set is
+# always allowed; adding one here needs the same review the refused sets got.
+#
+# The list lives here and not in the test file because the network guard's own
+# test refuses any file under `tests/` that spells pytest-socket's escape
+# options, and two of them are on this list.
+FORWARDED = frozenset(
+    {
+        # pytest core: selection, collection and its reporting. None of these
+        # names a path pytest writes or a module it imports by name; `--ignore`
+        # and `--deselect` only narrow what the target check already allowed,
+        # and `--doctest-modules` imports only the modules under the targets.
+        *("-k", "-m", "-x", "--exitfirst", "--maxfail", "--markers"),
+        *("--strict", "--strict-config", "--strict-markers"),
+        *("--co", "--collect-only", "--collectonly", "--noconftest"),
+        *("--ignore", "--ignore-glob", "--deselect", "--import-mode"),
+        *("--keep-duplicates", "--keepduplicates", "--collect-in-virtualenv"),
+        *("--continue-on-collection-errors", "--disable-plugin-autoload"),
+        *("--doctest-modules", "--doctest-glob", "--doctest-report"),
+        *("--doctest-ignore-import-errors", "--doctest-continue-on-failure"),
+        *("--fixtures", "--funcargs", "--fixtures-per-test", "--runxfail"),
+        *("--setup-only", "--setuponly", "--setup-show", "--setupshow"),
+        *("--setup-plan", "--setupplan", "-h", "--help", "-V", "--version"),
+        *("--trace-config", "--traceconfig", "--assert"),
+        # `-W` sets a warnings filter. A category written as `module.Class`
+        # makes pytest import that module, but only from `sys.path`, where an
+        # agent-written module is a file in the tree like any test.
+        *("-W", "--pythonwarnings"),
+        # pytest core: terminal output only.
+        *("-v", "--verbose", "-q", "--quiet", "--verbosity", "-r", "--tb"),
+        *("--no-header", "--no-summary", "--no-fold-skipped"),
+        *("--force-short-summary", "--disable-warnings"),
+        *("--disable-pytest-warnings", "-l", "--showlocals", "--no-showlocals"),
+        *("--xfail-tb", "--show-capture", "--full-trace", "--fulltrace"),
+        *("--color", "--code-highlight", "--durations", "--durations-min"),
+        *("-s", "--capture", "--junit-prefix", "--junitprefix"),
+        # pytest core: the cache and stepwise state. They write only under the
+        # root directory's `.pytest_cache/`, which is this repository once
+        # `--rootdir` and `-o cache_dir` are refused.
+        *("--lf", "--last-failed", "--ff", "--failed-first", "--nf"),
+        *("--new-first", "--lfnf", "--last-failed-no-failures"),
+        *("--cache-show", "--cache-clear", "--sw", "--stepwise"),
+        *("--sw-skip", "--stepwise-skip", "--sw-reset", "--stepwise-reset"),
+        # pytest core: logging formats and levels. The one that names a file,
+        # `--log-file`, is refused; the mode and format of that file are inert
+        # without it.
+        *("--log-level", "--log-format", "--log-date-format", "--log-cli-level"),
+        *("--log-cli-format", "--log-cli-date-format", "--log-file-mode"),
+        *("--log-file-level", "--log-file-format", "--log-file-date-format"),
+        *("--log-auto-indent", "--log-disable"),
+        # pytest-picked: the mode only chooses between `git status` and
+        # `git diff`, and does nothing without the refused `--picked`.
+        "--mode",
+        # pytest-github-actions-annotate-failures: output only.
+        "--exclude-warning-annotations",
+        # pytest-timeout: durations and the mechanism that enforces them.
+        *("--timeout", "--timeout-method", "--timeout_method"),
+        *("--timeout-disable-debugger-detection", "--session-timeout"),
+        # pytest-xdist: local workers only. `--tx` and `--px`, the options that
+        # choose a worker's interpreter, are refused; without a remote gateway
+        # `--rsyncdir` copies nothing, and `--looponfail` reruns the same
+        # targets in a subprocess of this interpreter.
+        *("-n", "--numprocesses", "--maxprocesses", "--max-worker-restart"),
+        *("-d", "--dist", "--loadscope-reorder", "--no-loadscope-reorder"),
+        *("--rsyncdir", "--rsyncignore", "--testrunuid", "--maxschedchunk"),
+        *("-f", "--looponfail"),
+        # pytest-homeassistant-custom-component: the recorder fixtures' database
+        # URL. This repository loads no recorder fixture, so nothing reads it.
+        *("--dburl", "--drop-existing-db"),
+        # anyio and pytest-asyncio: event loop modes.
+        *("--anyio-mode", "--asyncio-mode", "--asyncio-debug"),
+        # pytest-cov: what is measured and how it is judged. The options that
+        # choose where a report is written are `--cov-config` and the file
+        # forms of `--cov-report`, both refused above.
+        *("--cov", "--cov-reset", "--no-cov-on-fail", "--no-cov"),
+        *("--cov-fail-under", "--cov-append", "--cov-branch"),
+        *("--cov-precision", "--cov-context"),
+        # pytest-socket: forwarded, but they do not lift the network guard -
+        # Home Assistant's test plugin disables sockets again before every
+        # test, and tests/test_ci_network_guard.py runs green with each one.
+        *("--disable-socket", "--force-enable-socket", "--allow-hosts"),
+        "--allow-unix-socket",
+        # syrupy: snapshot behaviour. The snapshot directory's name is refused
+        # above; the rest only decide what is compared, written or reported
+        # inside the default `__snapshots__/` beside each test.
+        *("--snapshot-update", "--snapshot-update-new-only"),
+        *("--snapshot-warn-unused", "--snapshot-disable-unused"),
+        *("--snapshot-no-cleanup", "--snapshot-details"),
+        *("--snapshot-default-extension", "--snapshot-no-colors"),
+        *("--snapshot-patch-pycharm-diff", "--snapshot-diff-mode"),
+        *("--snapshot-ignore-file-extensions", "--snapshot-declaration-order"),
+    }
+)
 
 # pytest builds its parser with `fromfile_prefix_chars="@"`, so argparse
 # replaces any argument that starts with `@` by the lines of the file it names,
