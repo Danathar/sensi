@@ -120,6 +120,7 @@ class TestCalculateBatteryLevel:
         assert levels == sorted(levels, reverse=True)
         assert all(isinstance(level, int) for level in levels)
 
+
 class TestSensiSensorEntityDescription:
     """Test cases for SensiSensorEntityDescription class."""
 

@@ -22,7 +22,6 @@ from .coordinator import SensiConfigEntry, SensiDevice
 from .data import ActiveSavingsEventState
 from .entity import SensiDescriptionEntity, SensiEntity
 
-
 # Two alkaline AA cells in series, as (pack voltage, estimated % remaining),
 # highest first. Most of an alkaline cell's life is spent between 2.4V and
 # 2.7V, so a straight line from 3.0V to 2.0V would read far too high for most
