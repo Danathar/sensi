@@ -106,6 +106,8 @@ Data refreshes every 30 seconds.
 
 **Auxiliary heating** is a switch under device configuration, not a climate attribute. Home Assistant labels the resulting action as `Heating`.
 
+**Battery** is an estimate. The thermostat reports only the voltage of its two AA cells, kept as the `battery_voltage` attribute, and the percentage follows an approximated alkaline discharge curve: 3.0 V or more reads 100%, 2.6 V about 70%, 2.4 V about 40%, and 2.0 V or less 0%.
+
 **Circulating fan** — on thermostats that support it, the `Circulating Fan` switch turns circulation on and off, and the `Circulating Fan Duty Cycle` number sets how much of each hour the fan runs, as a percentage. The number's range and step are the thermostat's own (typically 10–100% in steps of 5), and it is unavailable while the switch is off. The switch is the same setting the climate entity's `Circulate` fan mode toggles, so the two stay in step.
 
 **Humidification** is only available on thermostats where it was enabled during physical setup. Sensi works in 5% increments and values are rounded to the nearest step. When it is active the climate entity gains `min_humidity`, `max_humidity`, `humidity` (target) and `current_humidity`. The default Home Assistant card exposes the humidity level only, and **dehumidification is not supported**.
