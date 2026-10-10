@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
-from custom_components.sensi.client import ActionResponse, round_humidity
+from custom_components.sensi.client import (
+    UNREADABLE_SETTER_ACK,
+    ActionResponse,
+    round_humidity,
+)
 from custom_components.sensi.data import (
     AuthenticationConfig,
     FanMode,
@@ -394,25 +398,35 @@ class TestSetTemperature:
         assert mock_device.state.operating_mode == OperatingMode.AUX
 
     @pytest.mark.parametrize(
-        "ack",
+        ("ack", "expected_heat_temp"),
         [
-            {"current_temp": 70, "mode": "heat"},
-            {"current_temp": 70, "mode": "heat", "target_temp": 75, "extra": 1},
-            {"unexpected": "shape"},
+            (
+                {
+                    "current_temp": 70,
+                    "mode": "heat",
+                    "target_temp": 72,
+                    "icd_id": "aa-bb-cc-dd-ee-ff-00-01",
+                },
+                72,
+            ),
+            ({"target_temp": 72}, 72),
+            ({"current_temp": 70, "target_temp": 72}, 72),
+            # No readable target_temp: the requested value is the one the
+            # thermostat agreed to.
+            ({"current_temp": 70, "mode": "heat"}, 68),
+            ({"unexpected": "shape"}, 68),
         ],
-        ids=["missing_key", "extra_key", "wrong_keys"],
+        ids=["extra_key", "only_target", "no_mode", "no_target", "wrong_keys"],
     )
-    async def test_an_unreadable_dict_ack_is_an_error_not_a_traceback(
-        self, mock_device, mock_coordinator, ack
+    async def test_an_accepted_ack_with_a_different_key_set_is_still_accepted(
+        self, mock_device, mock_coordinator, ack, expected_heat_temp
     ) -> None:
-        """A dict we cannot parse degrades to an ActionResponse error.
+        """A dict ack is read field by field, not unpacked into the dataclass.
 
-        raise_if_error then turns it into the integration's "Unable to set
-        temperature to ..." HomeAssistantError, which the entity layer knows
-        how to present, rather than a TypeError escaping the service call.
+        Unpacking raised TypeError on one key more or one key less, which was
+        reported as "Failed to parse ..." and kept the old setpoint, although
+        the thermostat had accepted the write (#606).
         """
-        previous_heat_temp = mock_device.state.current_heat_temp
-
         with patch.object(
             mock_coordinator.client, "_async_invoke_setter"
         ) as mock_async_invoke_setter:
@@ -422,8 +436,76 @@ class TestSetTemperature:
                 mock_device, OperatingMode.HEAT, 68
             )
 
-        assert response.error is not None
-        assert "Failed to parse" in response.error
+        assert response.error is None
+        assert mock_device.state.current_heat_temp == expected_heat_temp
+
+    @pytest.mark.parametrize(
+        "ack",
+        [
+            {"current_temp": None, "mode": "heat", "target_temp": 72},
+            {"mode": "heat", "target_temp": 72},
+            {"current_temp": "70", "mode": "heat", "target_temp": 72},
+        ],
+        ids=["null", "missing", "string"],
+    )
+    async def test_an_unreadable_current_temp_leaves_display_temp_alone(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """A current_temp we cannot read must not blank the current temperature.
+
+        A null used to be written straight into display_temp, so the climate
+        entity showed no current temperature until the next state event.
+        """
+        previous_display_temp = mock_device.state.display_temp
+        assert previous_display_temp is not None
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, 72
+            )
+
+        assert response.error is None
+        assert mock_device.state.display_temp == previous_display_temp
+        assert mock_device.state.current_heat_temp == 72
+
+    @pytest.mark.parametrize(
+        "ack",
+        [
+            [{"icd_id": "aa-bb-cc-dd-ee-ff-00-01"}],
+            42,
+        ],
+        ids=["list", "number"],
+    )
+    async def test_an_unreadable_ack_is_an_error_that_does_not_echo_it(
+        self, mock_device, mock_coordinator, caplog, ack
+    ) -> None:
+        """An ack we cannot read at all degrades to a fixed error.
+
+        raise_if_error turns it into the integration's "Unable to set
+        temperature to ..." HomeAssistantError, which is shown to the user and
+        logged, so it must not carry the payload and the icd_id in it (#607).
+        """
+        previous_heat_temp = mock_device.state.current_heat_temp
+
+        with (
+            caplog.at_level("DEBUG"),
+            patch.object(
+                mock_coordinator.client, "_async_invoke_setter"
+            ) as mock_async_invoke_setter,
+        ):
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_temperature(
+                mock_device, OperatingMode.HEAT, 68
+            )
+
+        assert response.error == UNREADABLE_SETTER_ACK
+        assert "aa-bb-cc" not in response.error
+        assert "aa-bb-cc" not in caplog.text
         # Nothing was applied, because nothing was understood.
         assert mock_device.state.current_heat_temp == previous_heat_temp
 
@@ -863,6 +945,56 @@ class TestSetters:
             assert response.error is None
             assert type(mock_device.state.operating_mode) is OperatingMode
             assert mock_device.state.operating_mode == expected
+
+    @pytest.mark.parametrize(
+        "ack",
+        [
+            {"mode": "cool", "icd_id": "aa-bb-cc-dd-ee-ff-00-01"},
+            {"icd_id": "aa-bb-cc-dd-ee-ff-00-01"},
+            {"mode": None},
+        ],
+        ids=["extra_key", "missing_mode", "null_mode"],
+    )
+    async def test_async_set_operating_mode_reads_the_ack_field_by_field(
+        self, mock_device, mock_coordinator, ack
+    ) -> None:
+        """An extra or missing key is not a failure; the backend accepted it."""
+        mock_device.state.operating_mode = OperatingMode.HEAT
+
+        with patch.object(
+            mock_coordinator.client, "_async_invoke_setter"
+        ) as mock_async_invoke_setter:
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_operating_mode(
+                mock_device, OperatingMode.COOL
+            )
+
+        assert response.error is None
+        assert mock_device.state.operating_mode == OperatingMode.COOL
+
+    async def test_async_set_operating_mode_unreadable_ack_does_not_echo_it(
+        self, mock_device, mock_coordinator, caplog
+    ) -> None:
+        """A non-dict ack is a fixed error, without the payload or its icd_id."""
+        mock_device.state.operating_mode = OperatingMode.HEAT
+        ack = [{"mode": "cool", "icd_id": "aa-bb-cc-dd-ee-ff-00-01"}]
+
+        with (
+            caplog.at_level("DEBUG"),
+            patch.object(
+                mock_coordinator.client, "_async_invoke_setter"
+            ) as mock_async_invoke_setter,
+        ):
+            mock_async_invoke_setter.return_value = ActionResponse(None, ack)
+
+            response = await mock_coordinator.client.async_set_operating_mode(
+                mock_device, OperatingMode.COOL
+            )
+
+        assert response.error == UNREADABLE_SETTER_ACK
+        assert "aa-bb-cc" not in caplog.text
+        assert mock_device.state.operating_mode == OperatingMode.HEAT
 
     @pytest.mark.parametrize(
         ("value", "should_succeed"),

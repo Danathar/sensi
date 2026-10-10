@@ -33,12 +33,11 @@ from .event import (
     SetHumidityEvent,
     SetHumidityEventValue,
     SetOperatingModeEvent,
-    SetOperatingModeEventSuccess,
     SetTemperatureEvent,
     SetTemperatureEventSuccess,
     SettingEventName,
 )
-from .utils import redact_identifier
+from .utils import redact_identifier, to_float
 
 SOCKET_URL = "https://rt.sensiapi.io"
 PREPARE_DEVICES_TIMEOUT = 20
@@ -66,6 +65,12 @@ RETRYABLE_SETTER_ERRORS = frozenset({"Forbidden"})
 # ours to rely on; what we can rely on is that the backend put an error in the
 # ack at all, and that must never be reported as an accepted write.
 UNKNOWN_SETTER_ERROR = "Unknown error"
+
+# What an accepted setter reports when its ack is not a shape we can read
+# anything out of. Fixed text, never the payload itself: the backend puts the
+# thermostat's icd_id into its acks, and this string ends up in the
+# HomeAssistantError shown to the user and logged.
+UNREADABLE_SETTER_ACK = "Unreadable reply from the thermostat"
 
 
 def _interpret_setter_ack(data: any) -> ActionResponse:
@@ -506,16 +511,37 @@ class SensiClient:
             self._apply_target_temperature(device, mode, value)
             return ActionResponse(None, None)
 
+        if not isinstance(response, dict):
+            return _unreadable_setter_ack("set_temperature", response)
+
         # {'current_temp': 70, 'mode': 'heat', 'target_temp': 75}
-        try:
-            parsed_response = SetTemperatureEventSuccess(**response)
-        except ValueError, TypeError:
-            return ActionResponse(f"Failed to parse `{response}`", None)
+        # Read field by field rather than unpacking into the dataclass: one key
+        # more (the backend puts icd_id into its acks) or one key less raised
+        # TypeError, and an ack the thermostat had accepted was reported as a
+        # failure with the old setpoint kept.
+        target_temp = to_float(response.get("target_temp"), None)
+        if target_temp is None:
+            # The thermostat accepted the request, so the requested value is
+            # the one it agreed to.
+            target_temp = value
 
-        device.state.display_temp = parsed_response.current_temp
-        self._apply_target_temperature(device, mode, parsed_response.target_temp)
+        # A current_temp that is missing or null says nothing about the room;
+        # leave display_temp for the next state event rather than blank it.
+        current_temp = to_float(response.get("current_temp"), None)
+        if current_temp is not None:
+            device.state.display_temp = current_temp
 
-        return ActionResponse(None, parsed_response)
+        self._apply_target_temperature(device, mode, target_temp)
+
+        ack_mode = response.get("mode")
+        return ActionResponse(
+            None,
+            SetTemperatureEventSuccess(
+                current_temp=current_temp,
+                mode=ack_mode if isinstance(ack_mode, str) else mode.value,
+                target_temp=target_temp,
+            ),
+        )
 
     @staticmethod
     def _apply_target_temperature(
@@ -568,18 +594,19 @@ class SensiClient:
             device.state.operating_mode = value
             return ActionResponse(None, None)
 
-        try:
-            parsed_response = SetOperatingModeEventSuccess(**response)
-        except ValueError, TypeError:
-            return ActionResponse(f"Failed to parse `{response}`", None)
+        if not isinstance(response, dict):
+            return _unreadable_setter_ack("set_operating_mode", response)
 
+        # Read the one field rather than unpacking into the dataclass, which
+        # raised TypeError on any extra key (such as icd_id) or a missing one.
         # The ack carries the mode as a plain string. Store an OperatingMode,
         # as State parsing does, because callers read `.value` from it. The
-        # backend accepted the request, so a mode the enum does not know falls
-        # back to the one asked for.
+        # backend accepted the request, so a mode that is missing or that the
+        # enum does not know falls back to the one asked for.
+        ack_mode = response.get("mode")
         device.state.operating_mode = (
-            try_parse_enum(OperatingMode, parsed_response.mode) or value
-        )
+            isinstance(ack_mode, str) and try_parse_enum(OperatingMode, ack_mode)
+        ) or value
         return ActionResponse(None, None)
 
     async def async_set_circulating_fan_mode(
@@ -1377,6 +1404,17 @@ class SensiClient:
                     self._devices[icd_id].update_capabilities(data)
 
                 self._resolve_futures("capabilities", icd_id, data)
+
+
+def _unreadable_setter_ack(event: str, ack: any) -> ActionResponse:
+    """Report an accepted setter ack whose payload cannot be read.
+
+    Only the payload's type is logged, and the error is fixed text: the ack is
+    a raw backend payload that can carry the thermostat's icd_id, and the error
+    ends up in the HomeAssistantError shown to the user and logged.
+    """
+    LOGGER.debug(f"Unreadable {event} ack of type {type(ack).__name__}")
+    return ActionResponse(UNREADABLE_SETTER_ACK, None)
 
 
 def get_error_description_from_event_callback(error: dict | str | None) -> str:
