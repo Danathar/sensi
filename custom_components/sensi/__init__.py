@@ -5,6 +5,7 @@ from copy import deepcopy
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import StateType
 
 from .auth import (
@@ -127,7 +128,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
                     exc_info=True,
                 )
 
+    _remove_stale_devices(hass, entry)
     return True
+
+
+def _remove_stale_devices(hass: HomeAssistant, entry: SensiConfigEntry) -> None:
+    """Remove this entry's devices that no longer have any entities.
+
+    A thermostat removed from the Sensi account in the mobile app stops
+    arriving from the service, so no entity is created for it any more, but
+    its device entry stayed in the device registry for good. By now the
+    platforms have registered an entity for every thermostat the account
+    still has, disabled ones included, so a device with none is stale.
+    """
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+
+    for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
+        if not er.async_entries_for_device(
+            entity_registry, device.id, include_disabled_entities=True
+        ):
+            LOGGER.debug("Removing Sensi device %s, which has no entities", device.id)
+            device_registry.async_remove_device(device.id)
 
 
 def _adopt_stored_user_id(

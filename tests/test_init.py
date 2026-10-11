@@ -17,6 +17,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -107,6 +108,99 @@ async def test_init_success(
 
         mock_wait_for_devices.assert_called_once()
         assert mock_entry.state is ConfigEntryState.LOADED
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_setup_removes_devices_without_entities(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """A thermostat removed from the Sensi account leaves no dead device behind.
+
+    The service stops reporting it, so no entity is created for it, and the
+    device entry left from earlier runs is removed. A device that still has
+    an entity, even a disabled one, is kept.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+
+    stale_device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, "removed_from_account")},
+    )
+    live_device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, "still_on_account")},
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        SENSI_DOMAIN,
+        "still_on_account_temperature",
+        config_entry=mock_entry,
+        device_id=live_device.id,
+    )
+    disabled_device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, "only_disabled_entities")},
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        SENSI_DOMAIN,
+        "only_disabled_entities_humidity",
+        config_entry=mock_entry,
+        device_id=disabled_device.id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    assert device_registry.async_get(stale_device.id) is None
+    assert device_registry.async_get(live_device.id) is not None
+    assert device_registry.async_get(disabled_device.id) is not None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_a_failed_setup_removes_no_devices(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data
+) -> None:
+    """Cleanup runs only once the platforms are up.
+
+    Before that no entity exists for any thermostat, so cleaning up after a
+    failed setup would remove every device the account still has.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+
+    device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, "not_reported_yet")},
+    )
+
+    with (
+        patch(
+            "custom_components.sensi.client.SensiClient.wait_for_devices",
+            side_effect=ConfigEntryNotReady("no device answered"),
+        ),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id) is False
+        await hass.async_block_till_done()
+
+    assert device_registry.async_get(device.id) is not None
 
 
 REAUTH_TARGET = "homeassistant.config_entries.ConfigEntry.async_start_reauth"
