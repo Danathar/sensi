@@ -192,6 +192,40 @@ async def test_a_reported_device_is_kept_without_entities(
     assert device_registry.async_get(device.id) is not None
 
 
+async def test_cleanup_leaves_other_integrations_devices_alone(
+    hass: HomeAssistant, mock_coordinator, mock_device
+) -> None:
+    """Only this entry's devices are candidates for removal.
+
+    A device another integration owns never carries a Sensi identifier, so
+    judged against the thermostats the account reports it would always look
+    stale. Cleanup must not look past this entry's own devices.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+
+    other_entry = MockConfigEntry(domain="other_integration")
+    other_entry.add_to_hass(hass)
+    other_device = device_registry.async_get_or_create(
+        config_entry_id=other_entry.entry_id,
+        identifiers={("other_integration", "light_1")},
+    )
+    stale_device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, "removed_from_account")},
+    )
+
+    with patch(
+        "custom_components.sensi.client.SensiClient.get_devices",
+        return_value=[mock_device],
+    ):
+        _remove_stale_devices(hass, mock_entry)
+
+    assert device_registry.async_get(stale_device.id) is None
+    assert device_registry.async_get(other_device.id) is not None
+
+
 @pytest.mark.usefixtures("enable_custom_integrations")
 async def test_a_failed_setup_removes_no_devices(
     hass: HomeAssistant, mock_coordinator, mock_auth_data
