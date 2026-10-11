@@ -133,22 +133,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: SensiConfigEntry):
 
 
 def _remove_stale_devices(hass: HomeAssistant, entry: SensiConfigEntry) -> None:
-    """Remove this entry's devices that no longer have any entities.
+    """Remove this entry's devices for thermostats the account no longer has.
 
     A thermostat removed from the Sensi account in the mobile app stops
-    arriving from the service, so no entity is created for it any more, but
-    its device entry stayed in the device registry for good. By now the
-    platforms have registered an entity for every thermostat the account
-    still has, disabled ones included, so a device with none is stale.
+    arriving from the service, but its device entry stayed in the device
+    registry for good. Staleness is decided from the devices the client
+    reported, not from the entity registry: that registry keeps the entities
+    of a vanished thermostat, still linked to its device, so "has no
+    entities" never holds for a device that ever worked. Removing the device
+    also removes those entity registry entries.
+
+    This must only run once setup has succeeded, when `wait_for_devices` has
+    made the client's device list complete.
     """
+    reported = {
+        (SENSI_DOMAIN, device.identifier) for device in entry.runtime_data.get_devices()
+    }
     device_registry = dr.async_get(hass)
-    entity_registry = er.async_get(hass)
 
     for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
-        if not er.async_entries_for_device(
-            entity_registry, device.id, include_disabled_entities=True
-        ):
-            LOGGER.debug("Removing Sensi device %s, which has no entities", device.id)
+        if not device.identifiers & reported:
+            LOGGER.debug(
+                "Removing Sensi device %s, which the account no longer has", device.id
+            )
             device_registry.async_remove_device(device.id)
 
 

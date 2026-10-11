@@ -5,7 +5,11 @@ from unittest.mock import patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.sensi import SUPPORTED_PLATFORMS, async_unload_entry
+from custom_components.sensi import (
+    SUPPORTED_PLATFORMS,
+    _remove_stale_devices,
+    async_unload_entry,
+)
 from custom_components.sensi.auth import (
     KEY_USER_ID,
     OAUTH_URL2,
@@ -111,14 +115,15 @@ async def test_init_success(
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_setup_removes_devices_without_entities(
-    hass: HomeAssistant, mock_coordinator, mock_auth_data
+async def test_setup_removes_devices_the_account_no_longer_has(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data, mock_device
 ) -> None:
     """A thermostat removed from the Sensi account leaves no dead device behind.
 
-    The service stops reporting it, so no entity is created for it, and the
-    device entry left from earlier runs is removed. A device that still has
-    an entity, even a disabled one, is kept.
+    The service stops reporting it, but the entity it had from an earlier run
+    is still in the entity registry, linked to its device. The device is
+    removed anyway, and the entity with it. A device the client still reports
+    is kept.
     """
 
     mock_entry = mock_coordinator.config_entry
@@ -129,32 +134,24 @@ async def test_setup_removes_devices_without_entities(
         config_entry_id=mock_entry.entry_id,
         identifiers={(SENSI_DOMAIN, "removed_from_account")},
     )
+    stale_entity = entity_registry.async_get_or_create(
+        "climate",
+        SENSI_DOMAIN,
+        "removed_from_account",
+        config_entry=mock_entry,
+        device_id=stale_device.id,
+    )
     live_device = device_registry.async_get_or_create(
         config_entry_id=mock_entry.entry_id,
-        identifiers={(SENSI_DOMAIN, "still_on_account")},
-    )
-    entity_registry.async_get_or_create(
-        "sensor",
-        SENSI_DOMAIN,
-        "still_on_account_temperature",
-        config_entry=mock_entry,
-        device_id=live_device.id,
-    )
-    disabled_device = device_registry.async_get_or_create(
-        config_entry_id=mock_entry.entry_id,
-        identifiers={(SENSI_DOMAIN, "only_disabled_entities")},
-    )
-    entity_registry.async_get_or_create(
-        "sensor",
-        SENSI_DOMAIN,
-        "only_disabled_entities_humidity",
-        config_entry=mock_entry,
-        device_id=disabled_device.id,
-        disabled_by=er.RegistryEntryDisabler.USER,
+        identifiers={(SENSI_DOMAIN, mock_device.identifier)},
     )
 
     with (
         patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "custom_components.sensi.client.SensiClient.get_devices",
+            return_value=[mock_device],
+        ),
         patch(
             "homeassistant.helpers.storage.Store.async_load",
             return_value=mock_auth_data,
@@ -165,8 +162,34 @@ async def test_setup_removes_devices_without_entities(
 
     assert mock_entry.state is ConfigEntryState.LOADED
     assert device_registry.async_get(stale_device.id) is None
+    assert entity_registry.async_get(stale_entity.entity_id) is None
     assert device_registry.async_get(live_device.id) is not None
-    assert device_registry.async_get(disabled_device.id) is not None
+
+
+async def test_a_reported_device_is_kept_without_entities(
+    hass: HomeAssistant, mock_coordinator, mock_device
+) -> None:
+    """A thermostat the account still has keeps its device whatever its entities.
+
+    The user may have deleted every entity by hand; that does not mean the
+    thermostat is gone.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+
+    device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, mock_device.identifier)},
+    )
+
+    with patch(
+        "custom_components.sensi.client.SensiClient.get_devices",
+        return_value=[mock_device],
+    ):
+        _remove_stale_devices(hass, mock_entry)
+
+    assert device_registry.async_get(device.id) is not None
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
