@@ -146,8 +146,12 @@ def _remove_stale_devices(hass: HomeAssistant, entry: SensiConfigEntry) -> None:
     This must only run once setup has succeeded, when `wait_for_devices` has
     made the client's device list complete.
     """
+    # Every identifier the service reported, not just the thermostats that
+    # parsed: one whose status cannot be read is still on the account and must
+    # stay listed (unavailable) rather than be deleted.
     reported = {
-        (SENSI_DOMAIN, device.identifier) for device in entry.runtime_data.get_devices()
+        (SENSI_DOMAIN, identifier)
+        for identifier in entry.runtime_data.client.get_reported_identifiers()
     }
     device_registry = dr.async_get(hass)
 

@@ -590,6 +590,11 @@ class TestUpdateState:
         assert await initial_future is None
         assert await healthy_future == mock_json
         assert not broken_future.done()
+        # Unparseable is not the same as not on the account.
+        assert client.get_reported_identifiers() == {
+            broken["icd_id"],
+            mock_json["icd_id"],
+        }
 
         broken_future.cancel()
 

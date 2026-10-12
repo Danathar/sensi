@@ -17,6 +17,7 @@ from custom_components.sensi.auth import (
     SensiConnectionError,
 )
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
+from custom_components.sensi.data import SensiDevice
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -153,6 +154,10 @@ async def test_setup_removes_devices_the_account_no_longer_has(
             return_value=[mock_device],
         ),
         patch(
+            "custom_components.sensi.client.SensiClient.get_reported_identifiers",
+            return_value={mock_device.identifier},
+        ),
+        patch(
             "homeassistant.helpers.storage.Store.async_load",
             return_value=mock_auth_data,
         ),
@@ -184,8 +189,8 @@ async def test_a_reported_device_is_kept_without_entities(
     )
 
     with patch(
-        "custom_components.sensi.client.SensiClient.get_devices",
-        return_value=[mock_device],
+        "custom_components.sensi.client.SensiClient.get_reported_identifiers",
+        return_value={mock_device.identifier},
     ):
         _remove_stale_devices(hass, mock_entry)
 
@@ -217,13 +222,58 @@ async def test_cleanup_leaves_other_integrations_devices_alone(
     )
 
     with patch(
-        "custom_components.sensi.client.SensiClient.get_devices",
-        return_value=[mock_device],
+        "custom_components.sensi.client.SensiClient.get_reported_identifiers",
+        return_value={mock_device.identifier},
     ):
         _remove_stale_devices(hass, mock_entry)
 
     assert device_registry.async_get(stale_device.id) is None
     assert device_registry.async_get(other_device.id) is not None
+
+
+async def test_a_reported_but_unparseable_device_is_kept(
+    hass: HomeAssistant, mock_coordinator, mock_json
+) -> None:
+    """A thermostat the account reports but whose payload fails to parse stays.
+
+    It never enters the client's device list, but it is still on the account:
+    its device and entities must survive cleanup rather than be deleted.
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    broken_id = "aa-bb-cc-dd-ee-ff-00-04"
+
+    device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, broken_id)},
+    )
+    entity = entity_registry.async_get_or_create(
+        "climate",
+        SENSI_DOMAIN,
+        broken_id,
+        config_entry=mock_entry,
+        device_id=device.id,
+    )
+
+    client = mock_coordinator.client
+
+    real_create = SensiDevice.create
+
+    def create(item):
+        if item["icd_id"] == broken_id:
+            raise AttributeError("'NoneType' object has no attribute 'get'")
+        return real_create(item)
+
+    with patch("custom_components.sensi.client.SensiDevice.create", side_effect=create):
+        client._update_state([{**mock_json, "icd_id": broken_id}])
+
+    assert client.get_devices() == []
+    _remove_stale_devices(hass, mock_entry)
+
+    assert device_registry.async_get(device.id) is not None
+    assert entity_registry.async_get(entity.entity_id) is not None
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
