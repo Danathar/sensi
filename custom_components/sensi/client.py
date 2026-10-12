@@ -136,6 +136,10 @@ class SensiClient:
         self._sio: socketio.AsyncClient = None
         self._connect_error_data = None
         self._devices: dict[str, SensiDevice] = {}
+        # Every icd_id the service has reported, recorded before the payload
+        # is parsed. `_devices` holds only what parsed, so it cannot answer
+        # "which thermostats does the account have".
+        self._reported_ids: set[str] = set()
 
         # Serializes every disconnect/connect pair on this client: the
         # coordinator's 30-second refresh, a refused setter's recovery, setup
@@ -186,6 +190,14 @@ class SensiClient:
     def get_devices(self) -> list[SensiDevice]:
         """Get the list of thermostat devices."""
         return list(self._devices.values())
+
+    def get_reported_identifiers(self) -> set[str]:
+        """Identifiers of every thermostat the service has reported.
+
+        Includes thermostats whose payload could not be parsed, which
+        `get_devices` leaves out.
+        """
+        return set(self._reported_ids)
 
     async def wait_for_devices(self) -> None:
         """Wait for devices to be ready.
@@ -1341,6 +1353,7 @@ class SensiClient:
         for item in data:
             icd_id = extract_icd_id(item)
             if icd_id:
+                self._reported_ids.add(icd_id)
                 have_state = False
 
                 # The first state event received on connect usually only contains registration and capabilities.
