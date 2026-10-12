@@ -17,7 +17,7 @@ from custom_components.sensi.auth import (
     SensiConnectionError,
 )
 from custom_components.sensi.const import CONFIG_REFRESH_TOKEN, SENSI_DOMAIN
-from custom_components.sensi.sensi_device import SensiDevice
+from custom_components.sensi.data import SensiDevice
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
