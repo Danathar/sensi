@@ -192,7 +192,7 @@ class SensiClient:
         return list(self._devices.values())
 
     def get_reported_identifiers(self) -> set[str]:
-        """Identifiers of every thermostat the service has reported.
+        """Return the identifiers of every thermostat the service has reported.
 
         Includes thermostats whose payload could not be parsed, which
         `get_devices` leaves out.

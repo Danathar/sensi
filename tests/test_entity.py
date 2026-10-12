@@ -108,6 +108,10 @@ class TestSensiEntity:
         with (
             patch(f"{CLIENT}.wait_for_devices"),
             patch(f"{CLIENT}.get_devices", return_value=[mock_device]),
+            patch(
+                f"{CLIENT}.get_reported_identifiers",
+                return_value={mock_device.identifier},
+            ),
             patch(f"{CLIENT}.stop"),
             patch(
                 "homeassistant.helpers.storage.Store.async_load",
