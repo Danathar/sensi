@@ -6,7 +6,7 @@
 # Bump it deliberately, not incidentally.
 -r requirements_component.txt
 
-pytest-homeassistant-custom-component==0.13.363
+pytest-homeassistant-custom-component==0.13.364
 # The pinned nightly leg uses this file. Keep its coverage runner fixed while
 # the separate latest-Home-Assistant leg deliberately upgrades pytest-cov.
 pytest-cov==7.1.0
