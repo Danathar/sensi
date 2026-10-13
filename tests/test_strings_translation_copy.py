@@ -44,4 +44,3 @@ def test_the_shipped_english_text_is_the_validated_text() -> None:
         for key in strings
         if strings[key] != english[key]
     } == {}
-
