@@ -67,6 +67,25 @@ A failure in `latest Home Assistant (advance warning)` alone opens no issue
 and gates nothing. Treat it as notice that the next Home Assistant upgrade
 needs work, and read the warnings summary in that job's log.
 
+## No Dependabot pull request appears
+
+**Signal:** no pull request from `app/dependabot` has ever been opened, although
+[`.github/dependabot.yml`](../.github/dependabot.yml) asks for a weekly grouped
+update of the pinned GitHub Actions.
+
+This repository is a fork, and GitHub does not run Dependabot version updates
+on a fork until they are enabled in the fork itself. Committing the config file
+is not enough. A repository admin turns it on in the web UI (the API does not
+expose it): Insights, Dependency graph, Dependabot. That page also shows the log
+of the last run, which says why a run opened nothing.
+
+Until the switch is on, bump the pinned actions by hand. Once it is on, expect
+the first pull request to be a grouped set of major-version bumps, since the
+pins have never moved; read it like any other workflow change
+([review-rubric.md](review-rubric.md)) and watch the `actions/labeler` bump
+against `.github/labeler.yml`, because major versions of that action change its
+config format.
+
 ## A release is refused
 
 **Signal:** the Release workflow fails at one of the steps below. Each one
