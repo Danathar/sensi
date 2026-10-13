@@ -933,13 +933,8 @@ class TestCredentialsReachDiskOnlyOnAcceptance:
 
         assert result2["type"] == FlowResultType.ABORT
         assert result2["reason"] == "single_instance_allowed"
-        # Translated from this integration's own strings. Home Assistant's
-        # copy is reachable only through async_abort's translation_domain,
-        # which cores before 2026.9.0 reject with a TypeError (#449).
-        assert result2.get("translation_domain") is None
-        for path in STRINGS_FILES:
-            strings = json.loads(path.read_text(encoding="utf-8"))
-            assert strings["config"]["abort"]["single_instance_allowed"]
+        # Home Assistant's own translation of the abort, not a copy shipped here.
+        assert result2["translation_domain"] == "homeassistant"
         mock_save.assert_not_called()
 
     async def test_a_flow_aborted_mid_validation_leaves_the_store_alone(
