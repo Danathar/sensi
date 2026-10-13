@@ -80,7 +80,7 @@ homeassistant-frontend==20260903.0
 pytest==9.1.2
 pytest-asyncio==1.3.0
 pytest-cov==7.1.0
-pytest-homeassistant-custom-component==0.13.363
+pytest-homeassistant-custom-component==0.13.364
 python-socketio==5.16.4
 types-homeassistant==2026.9.0
 voluptuous==0.15.2
@@ -90,7 +90,7 @@ _EXPECTED_RECORDED = [
     "homeassistant==2026.9.1",
     "pytest==9.1.2",
     "pytest-cov==7.1.0",
-    "pytest-homeassistant-custom-component==0.13.363",
+    "pytest-homeassistant-custom-component==0.13.364",
     "python-socketio==5.16.4",
 ]
 
