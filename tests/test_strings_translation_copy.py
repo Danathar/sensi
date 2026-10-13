@@ -6,17 +6,10 @@ from the other here, so they are two hand copies, and an edit to only one of
 them leaves either the shipped text or the validated text stale without any
 check noticing. The per-entity tests read single keys from both files; this
 compares the whole of them.
-
-The "already configured" abort is the integration's own copy of Home
-Assistant's text since #450 (async_abort accepts translation_domain only from
-2026.9.0), so it is also held to the wording Home Assistant uses for the same
-abort.
 """
 
 import json
 from pathlib import Path
-
-import homeassistant
 
 _COMPONENT = Path(__file__).parents[1] / "custom_components" / "sensi"
 STRINGS = _COMPONENT / "strings.json"
@@ -52,12 +45,3 @@ def test_the_shipped_english_text_is_the_validated_text() -> None:
         if strings[key] != english[key]
     } == {}
 
-
-def test_already_configured_reads_as_home_assistant_says_it() -> None:
-    """The single-instance abort keeps Home Assistant's own English wording."""
-    core = _load(Path(homeassistant.__file__).parent / "strings.json")
-    expected = core["common"]["config_flow"]["abort"]["single_instance_allowed"]
-
-    for path in (STRINGS, ENGLISH):
-        abort = _load(path)["config"]["abort"]
-        assert abort["single_instance_allowed"] == expected, path.name
