@@ -21,8 +21,10 @@ an `::error::` has to be named in that entry.
 Everything else here joins a name on the page to the file that defines it:
 workflow names to `name:`, schedules to `cron:`, job and step names to the jobs
 and steps, the nightly issue title to the script that files it, "six required
-checks" to `.github/rulesets/master.json`, and the security-boundary path list
-to `docs/SECURITY-AI.md` and `.github/CODEOWNERS`.
+checks" to `.github/rulesets/master.json`, the security-boundary path list
+to `docs/SECURITY-AI.md` and `.github/CODEOWNERS`, and the Dependabot entry's
+description of the update to `.github/dependabot.yml` and of the action bump
+to watch to the workflow step that runs that action.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import pytest
 import yaml
 
 from tests._workflows import workflow_paths
+from tests.test_dependabot_config import _actions_entry, _updates
 from tests.test_required_checks_match_workflows import _job_names
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +46,7 @@ _SECURITY = _ROOT / "docs" / "SECURITY-AI.md"
 _CODEOWNERS = _ROOT / ".github" / "CODEOWNERS"
 _DEFINITION = _ROOT / ".github" / "rulesets" / "master.json"
 _CHECK_RULESET = _ROOT / "scripts" / "check_ruleset.py"
+_DEPENDABOT = _ROOT / ".github" / "dependabot.yml"
 
 _NUMBER_WORDS = {
     "one": 1,
@@ -354,3 +358,59 @@ def test_the_ruleset_command_and_its_offline_flag_exist() -> None:
     assert "`--offline`" in section
     assert _CHECK_RULESET.is_file()
     assert '"--offline"' in _CHECK_RULESET.read_text(encoding="utf-8")
+
+
+# --- No Dependabot pull request appears ---------------------------------------
+
+
+def _dependabot_entry() -> str:
+    return _squashed(_section("No Dependabot pull request appears"))
+
+
+def test_the_dependabot_entry_describes_the_configured_update() -> None:
+    """`a weekly grouped update of the pinned GitHub Actions` is the config.
+
+    The entry tells the reader what the missing pull request would have been.
+    If `.github/dependabot.yml` moves to another cadence, stops grouping, or
+    starts covering a second ecosystem, the reader is told to wait for the
+    wrong thing.
+    """
+    entry = _dependabot_entry()
+    assert "(../.github/dependabot.yml)" in entry, (
+        "the Dependabot entry no longer links the config it describes"
+    )
+    assert _DEPENDABOT.is_file()
+
+    assert [update.get("package-ecosystem") for update in _updates()] == [
+        "github-actions"
+    ], "the entry describes an update of the GitHub Actions only"
+    actions = _actions_entry()
+    interval = actions["schedule"]["interval"]
+    assert actions.get("groups"), "the entry describes a grouped update"
+    assert f"a {interval} grouped update of the pinned GitHub Actions" in entry, (
+        f"the Dependabot entry should describe a {interval} grouped update of "
+        "the pinned GitHub Actions, which is what .github/dependabot.yml asks for"
+    )
+
+
+def test_the_bump_the_dependabot_entry_warns_about_is_a_pinned_action() -> None:
+    """`watch the X bump against Y`: X is a pinned action and reads config Y."""
+    claim = re.search(
+        r"watch the `([^`@]+)` bump against `([^`]+)`", _dependabot_entry()
+    )
+    assert claim, "the Dependabot entry no longer names the action bump to watch"
+    action, config = claim.groups()
+
+    steps = [
+        step
+        for document in _workflows_by_name().values()
+        for job in document.get("jobs", {}).values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith(f"{action}@")
+    ]
+    assert steps, f"no workflow step uses {action}, so Dependabot never bumps it"
+    for step in steps:
+        assert step.get("with", {}).get("configuration-path") == config, (
+            f"{action} does not read {config}, so its bump cannot break that file"
+        )
+    assert (_ROOT / config).is_file(), config
