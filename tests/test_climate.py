@@ -6,7 +6,11 @@ import pytest
 
 from custom_components.sensi import set_config_option
 from custom_components.sensi.client import ActionResponse
-from custom_components.sensi.climate import SensiThermostat, async_setup_entry
+from custom_components.sensi.climate import (
+    SensiThermostat,
+    _round_setpoint,
+    async_setup_entry,
+)
 from custom_components.sensi.const import (
     ATTR_AUX_STAGE,
     ATTR_CIRCULATING_FAN,
@@ -242,6 +246,19 @@ async def test_set_temperature_auto_rounds_both_setpoints(
         call(mock_device, OperatingMode.HEAT, 64),
         call(mock_device, OperatingMode.COOL, 75),
     ]
+
+
+def test_round_setpoint_passes_a_missing_setpoint_through() -> None:
+    """A missing setpoint stays missing instead of raising TypeError.
+
+    No service call gets here with None: Home Assistant refuses a
+    set_temperature that lacks the setpoint the current mode's
+    supported_features ask for, and `_check_setpoint_arguments` does the same
+    for a call that switches mode. The helper still takes `float | None`, so
+    this is the only way to reach that arm.
+    """
+
+    assert _round_setpoint(None) is None
 
 
 async def test_set_temperature_survives_an_ack_without_detail(
