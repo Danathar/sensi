@@ -231,6 +231,78 @@ async def test_cleanup_leaves_other_integrations_devices_alone(
     assert device_registry.async_get(other_device.id) is not None
 
 
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_an_empty_answer_at_startup_removes_no_devices(
+    hass: HomeAssistant, mock_coordinator, mock_auth_data, mock_device
+) -> None:
+    """An account that reports no thermostat keeps the devices it had.
+
+    An empty `state` event lets setup complete with nothing reported. Taken
+    as the whole account, it would delete every thermostat the entry has,
+    with its entities, on the strength of one answer (#630).
+    """
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+
+    device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, mock_device.identifier)},
+    )
+    entity = entity_registry.async_get_or_create(
+        "climate",
+        SENSI_DOMAIN,
+        mock_device.identifier,
+        config_entry=mock_entry,
+        device_id=device.id,
+    )
+
+    with (
+        patch("custom_components.sensi.client.SensiClient.wait_for_devices"),
+        patch(
+            "custom_components.sensi.client.SensiClient.get_devices",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.sensi.client.SensiClient.get_reported_identifiers",
+            return_value=set(),
+        ),
+        patch(
+            "homeassistant.helpers.storage.Store.async_load",
+            return_value=mock_auth_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    assert device_registry.async_get(device.id) is not None
+    assert entity_registry.async_get(entity.entity_id) is not None
+
+
+async def test_an_empty_state_event_removes_no_devices(
+    hass: HomeAssistant, mock_coordinator, mock_device
+) -> None:
+    """The client's own empty-`state` path reports nothing, and nothing goes."""
+
+    mock_entry = mock_coordinator.config_entry
+    device_registry = dr.async_get(hass)
+
+    device = device_registry.async_get_or_create(
+        config_entry_id=mock_entry.entry_id,
+        identifiers={(SENSI_DOMAIN, mock_device.identifier)},
+    )
+
+    client = mock_coordinator.client
+    client._update_state([])
+
+    assert client.get_reported_identifiers() == set()
+    _remove_stale_devices(hass, mock_entry)
+
+    assert device_registry.async_get(device.id) is not None
+
+
 async def test_a_reported_but_unparseable_device_is_kept(
     hass: HomeAssistant, mock_coordinator, mock_json
 ) -> None:

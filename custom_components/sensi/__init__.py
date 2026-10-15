@@ -145,6 +145,11 @@ def _remove_stale_devices(hass: HomeAssistant, entry: SensiConfigEntry) -> None:
 
     This must only run once setup has succeeded, when `wait_for_devices` has
     made the client's device list complete.
+
+    An account that reports no thermostat at all removes nothing. A single
+    empty `state` event is enough for setup to complete, and one bad answer
+    must not delete every thermostat the user has, with its entities. Once
+    the account reports any thermostat, the cleanup applies again.
     """
     # Every identifier the service reported, not just the thermostats that
     # parsed: one whose status cannot be read is still on the account and must
@@ -153,6 +158,13 @@ def _remove_stale_devices(hass: HomeAssistant, entry: SensiConfigEntry) -> None:
         (SENSI_DOMAIN, identifier)
         for identifier in entry.runtime_data.client.get_reported_identifiers()
     }
+    if not reported:
+        LOGGER.debug(
+            "Not removing any Sensi device: the account reported no thermostats, "
+            "which is not enough to tell that they are gone"
+        )
+        return
+
     device_registry = dr.async_get(hass)
 
     for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
