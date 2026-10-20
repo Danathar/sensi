@@ -73,6 +73,15 @@ UNKNOWN_SETTER_ERROR = "Unknown error"
 # HomeAssistantError shown to the user and logged.
 UNREADABLE_SETTER_ACK = "Unreadable reply from the thermostat"
 
+# What a setter reports when it was never put on the wire because the caller
+# said, through EventInfo.still_wanted, that it no longer wanted it. Only the
+# dropped-setpoint re-send passes that predicate (#638).
+SETTER_NOT_WANTED = "No longer wanted"
+
+# The result the emit loop gives a discarded setter's future, so that
+# _async_emit_setter can tell "not sent" from an ack. Never an ack shape.
+_NOT_SENT = object()
+
 
 def _interpret_setter_ack(data: any) -> ActionResponse:
     """Decide whether a setter's ack, which carried no error, is an acceptance.
@@ -112,6 +121,8 @@ class ActionResponse:
 
     error: str | None
     data: any
+    sent: bool = True
+    """False when the setter never reached the wire (SETTER_NOT_WANTED)."""
 
 
 class SensiClient:
@@ -180,7 +191,7 @@ class SensiClient:
         self._setpoint_watch = SetpointWatch(
             hass,
             self._devices,
-            resend=lambda event, data: self._async_invoke_setter(event, data),
+            resend=lambda *args, **kwargs: self._async_invoke_setter(*args, **kwargs),
             apply=self._apply_target_temperature,
             on_applied=self._update_coordinator_listeners,
         )
@@ -816,7 +827,10 @@ class SensiClient:
         )
 
     async def _async_invoke_setter(
-        self, event: str, request_data: dict
+        self,
+        event: str,
+        request_data: dict,
+        still_wanted: Callable[[], bool] | None = None,
     ) -> ActionResponse:
         """Emit event to update a setting, retrying once if it is refused.
 
@@ -879,11 +893,20 @@ class SensiClient:
         a write the thermostat had accepted into "Future not done".
         async_update_devices lets every setter on the wire have its answer
         before it tears the socket down. See _track_setter_ack.
+
+        `still_wanted`, when given, is asked before each emit: by the emit
+        loop for both attempts, and here before the retry. A setter it turns
+        down is not sent and reports SETTER_NOT_WANTED. The recovery itself
+        still runs to the end: it is not cancelled part-way, because a token
+        exchange cut off after Sensi rotated the refresh token would lose the
+        new one and turn a healthy credential into a reauth (#638).
         """
 
         epoch = self._recovery_epoch
 
-        response = await self._async_emit_setter(event, request_data)
+        response = await self._async_emit_setter(
+            event, request_data, still_wanted=still_wanted
+        )
         if response.error not in RETRYABLE_SETTER_ERRORS:
             return response
 
@@ -930,7 +953,18 @@ class SensiClient:
                 )
                 return response
 
-            retry_response = await self._async_emit_setter(event, request_data)
+            if still_wanted is not None and not still_wanted():
+                LOGGER.debug(
+                    "Setter %s was refused with '%s'; reconnected, but not "
+                    "retrying it: no longer wanted",
+                    event,
+                    response.error,
+                )
+                return ActionResponse(SETTER_NOT_WANTED, None, sent=False)
+
+            retry_response = await self._async_emit_setter(
+                event, request_data, still_wanted=still_wanted
+            )
 
         # One WARNING carrying both attempts. A recurrence has to be visible
         # in a default-configured log: the first attempt failing is the whole
@@ -948,9 +982,15 @@ class SensiClient:
         return retry_response
 
     async def _async_emit_setter(
-        self, event: str, request_data: dict
+        self,
+        event: str,
+        request_data: dict,
+        still_wanted: Callable[[], bool] | None = None,
     ) -> ActionResponse:
-        """Emit event to update a setting, once."""
+        """Emit event to update a setting, once.
+
+        `still_wanted` goes on the queue with the event. See EventInfo.
+        """
 
         future = self._hass.loop.create_future()
 
@@ -981,7 +1021,9 @@ class SensiClient:
         # The future goes on the queue with the event so the emit loop can tell
         # whether anyone is still waiting for the answer by the time it gets
         # there. See _emit_loop.
-        await self._send_event(event, request_data, event_callback, future)
+        await self._send_event(
+            event, request_data, event_callback, future, still_wanted=still_wanted
+        )
 
         with contextlib.suppress(asyncio.exceptions.TimeoutError):
             await asyncio.wait_for(future, SET_EVENT_TIMEOUT)
@@ -997,6 +1039,9 @@ class SensiClient:
         # instead of the intended "Unable to set ..." HomeAssistantError.
         if future.cancelled() or not future.done():
             return ActionResponse("Future not done", None)
+
+        if future.result() is _NOT_SENT:
+            return ActionResponse(SETTER_NOT_WANTED, None, sent=False)
 
         (response_error, response_data) = future.result()
 
@@ -1116,9 +1161,12 @@ class SensiClient:
         data: dict,
         callback: Callable[[any, any], None] | None = None,
         future: asyncio.Future | None = None,
+        still_wanted: Callable[[], bool] | None = None,
     ) -> None:
         LOGGER.debug(f"Queuing event {name}")
-        await self._event_queue.put(EventInfo(name, data, callback, future))
+        await self._event_queue.put(
+            EventInfo(name, data, callback, future, still_wanted)
+        )
 
     async def _emit_loop(self):
         """Emit queued events."""
@@ -1145,6 +1193,23 @@ class SensiClient:
                                 "Discarding queued %s: nothing is waiting for it any more",
                                 item.name,
                             )
+                            continue
+
+                        if item.still_wanted is not None and not item.still_wanted():
+                            # The caller withdrew it while it waited for the
+                            # wire: a dropped-setpoint re-send whose record a
+                            # newer value replaced (#638). Answer its future so
+                            # the caller hears "not sent" now, not after
+                            # SET_EVENT_TIMEOUT. Nothing yields between here
+                            # and the emit below, so the answer cannot change.
+                            LOGGER.debug(
+                                "Discarding queued %s: no longer wanted", item.name
+                            )
+                            if item.future is not None:
+                                with contextlib.suppress(
+                                    asyncio.exceptions.InvalidStateError
+                                ):
+                                    item.future.set_result(_NOT_SENT)
                             continue
 
                         if self._sio and self._sio.connected:
@@ -1207,6 +1272,7 @@ class SensiClient:
         @sio.event
         async def connect():
             self._ensure_emit_loop()
+            self._setpoint_watch.on_connect()
             self._on_event("connected", None)
 
         @sio.event
@@ -1573,6 +1639,13 @@ class EventInfo:
     # reported as not having happened. Getters queue no future because they
     # legitimately want to survive a reconnect.
     future: asyncio.Future | None = None
+
+    # Asked just before the event goes on the wire; False discards it, and
+    # the caller's future is answered with "not sent". Lets a caller withdraw
+    # a queued setter without cancelling the task that waits on it - the
+    # dropped-setpoint re-send uses it (#638). Once emitted, an event cannot
+    # be withdrawn.
+    still_wanted: Callable[[], bool] | None = None
 
 
 def raise_if_error(response: ActionResponse, property: str, value: any) -> None:
