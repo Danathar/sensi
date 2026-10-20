@@ -985,6 +985,25 @@ class TestEmitLoop:
         assert response.sent is False
         assert client._setter_acks_in_flight == 0
 
+    async def test_a_withdrawn_event_with_no_caller_is_discarded(
+        self, client: SensiClient
+    ) -> None:
+        """No future to answer: the event is dropped and the queue moves on."""
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        client._event_queue.put_nowait(
+            EventInfo("set_temperature", {"value": 72}, None, None, lambda: False)
+        )
+        client._event_queue.put_nowait(EventInfo("get_info", {}, None))
+
+        await self._run_once(client)
+
+        sio.emit.assert_awaited_once_with("get_info", {}, None, None)
+        assert client._event_queue.qsize() == 0
+
     async def test_a_setter_still_wanted_is_emitted(self, client: SensiClient) -> None:
         """A predicate that still says yes leaves the setter alone."""
         sio = MagicMock()
@@ -1443,3 +1462,32 @@ class TestTheSetterAckWaitIsRecheckedAfterEveryWake:
 
         assert setter.result().error is None
         assert emit.await_count == 2
+
+
+class TestUpdateCoordinatorListeners:
+    """The redraw a re-sent setpoint asks for once it has been applied."""
+
+    async def test_a_client_without_a_config_entry_has_nothing_to_redraw(
+        self, client: SensiClient
+    ) -> None:
+        """No entry, so no coordinator: nothing is called and nothing raises."""
+        client._update_coordinator_listeners()
+
+    async def test_an_entry_without_runtime_data_has_nothing_to_redraw(
+        self, client: SensiClient
+    ) -> None:
+        """An entry not set up yet, or already unloaded, carries no coordinator."""
+        client._config_entry = MagicMock(spec=[])
+
+        client._update_coordinator_listeners()
+
+    async def test_the_coordinator_listeners_are_updated(
+        self, client: SensiClient
+    ) -> None:
+        """With a coordinator, its listeners are told once."""
+        entry = MagicMock()
+        client._config_entry = entry
+
+        client._update_coordinator_listeners()
+
+        entry.runtime_data.async_update_listeners.assert_called_once_with()
