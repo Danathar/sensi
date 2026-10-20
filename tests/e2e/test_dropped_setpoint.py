@@ -14,8 +14,9 @@ from unittest.mock import patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.sensi.client import SETPOINT_CONFIRM_WINDOW, SensiClient
+from custom_components.sensi.client import SensiClient
 from custom_components.sensi.data import OperatingMode
+from custom_components.sensi.setpoint_watch import SETPOINT_CONFIRM_WINDOW
 from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
     ATTR_TARGET_TEMP_HIGH,
@@ -64,17 +65,17 @@ async def _report(backend: FakeSensiBackend, **state) -> None:
 
 async def _wait_for_resend(client: SensiClient) -> None:
     """Wait for the re-send the last ``state`` event started to be answered."""
-    tasks = list(client._setpoint_resend_tasks.values())  # noqa: SLF001
+    tasks = list(client._setpoint_watch._resend_tasks.values())  # noqa: SLF001
     assert tasks, "no re-send was started"
     await asyncio.wait_for(asyncio.gather(*tasks), 5)
 
 
 def _no_resend(client: SensiClient) -> bool:
-    return not client._setpoint_resend_tasks  # noqa: SLF001
+    return not client._setpoint_watch._resend_tasks  # noqa: SLF001
 
 
 def _pending(client: SensiClient) -> set:
-    return {mode for _, mode in client._pending_setpoints}  # noqa: SLF001
+    return {mode for _, mode in client._setpoint_watch._pending}  # noqa: SLF001
 
 
 def _warnings(caplog, text: str) -> list[str]:
@@ -189,7 +190,7 @@ async def test_a_revert_after_the_window_is_not_resent(
     await _set_temperature(hass, **{ATTR_TEMPERATURE: 72})
 
     later = time.monotonic() + SETPOINT_CONFIRM_WINDOW + 1
-    with patch("custom_components.sensi.client._monotonic", return_value=later):
+    with patch("custom_components.sensi.setpoint_watch._monotonic", return_value=later):
         await _report(sensi_backend, current_heat_temp=OLD_HEAT)
 
     assert _no_resend(client)
@@ -275,7 +276,7 @@ async def test_offline_past_the_window_is_not_resent(
     await _report(sensi_backend, status="offline", current_heat_temp=OLD_HEAT)
 
     later = time.monotonic() + SETPOINT_CONFIRM_WINDOW + 1
-    with patch("custom_components.sensi.client._monotonic", return_value=later):
+    with patch("custom_components.sensi.setpoint_watch._monotonic", return_value=later):
         await _report(sensi_backend, status="online")
 
     assert _no_resend(client)
@@ -332,13 +333,13 @@ async def test_a_revert_delivered_under_the_refresh_lock_resends(
     sensi_backend.state_before_connect_returns = True
 
     lock_held: list[bool] = []
-    check = client._check_pending_setpoints  # noqa: SLF001
+    check = client._setpoint_watch.check  # noqa: SLF001
 
     def check_and_record(device) -> None:
         lock_held.append(client._reconnect_lock.locked())  # noqa: SLF001
         check(device)
 
-    with patch.object(client, "_check_pending_setpoints", new=check_and_record):
+    with patch.object(client._setpoint_watch, "check", new=check_and_record):
         await asyncio.wait_for(client.async_update_devices(), 3)
 
     assert lock_held == [True]
@@ -358,7 +359,7 @@ async def test_stop_cancels_a_resend_in_flight(
     # Down, so the re-send is still waiting for the wire when stop() runs.
     sensi_backend.sockets[-1].connected = False
     await _report(sensi_backend, current_heat_temp=OLD_HEAT)
-    [resend] = client._setpoint_resend_tasks.values()  # noqa: SLF001
+    [resend] = client._setpoint_watch._resend_tasks.values()  # noqa: SLF001
 
     await client.stop()
 
