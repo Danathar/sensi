@@ -8,6 +8,7 @@ callback that runs once a re-send has been applied.
 
 import asyncio
 from collections.abc import Callable, Iterator
+import copy
 import logging
 import time
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,7 @@ import pytest
 from custom_components.sensi.client import SETTER_NOT_WANTED, ActionResponse
 from custom_components.sensi.data import OperatingMode, SensiDevice
 from custom_components.sensi.setpoint_watch import (
+    SETPOINT_CONFIRM_WINDOW,
     SETPOINT_REVERT_CONFIRM,
     SetpointWatch,
     reported_setpoint,
@@ -231,7 +233,7 @@ async def test_a_resend_that_raises_is_read_as_a_refusal(
 
 
 async def test_a_stopped_watch_forgets_and_ignores_state(
-    hass: HomeAssistant, mock_device: SensiDevice
+    hass: HomeAssistant, mock_device: SensiDevice, clock: _Clock
 ) -> None:
     """After stop() nothing is watched and a revert starts no re-send."""
     watch, sent, _apply, _on_applied = _watch(
@@ -242,8 +244,10 @@ async def test_a_stopped_watch_forgets_and_ignores_state(
     await watch.stop()
     assert not watch.watching
 
+    # A revert confirmed on two connections would start a re-send on a
+    # running watch.
     _track_heat(watch, mock_device)
-    watch.check(mock_device)
+    _confirm_revert(watch, mock_device, clock)
 
     assert not watch._resend_tasks
     assert sent == []
@@ -368,3 +372,136 @@ async def test_a_withdrawn_resend_applies_nothing_and_says_why(
     assert "heat setpoint 72" in message
     assert "no longer wanted (other value)" in message
     assert mock_device.identifier not in message
+
+
+async def test_a_write_in_a_mode_without_a_setpoint_is_not_watched(
+    hass: HomeAssistant, mock_device: SensiDevice
+) -> None:
+    """A write sent in a mode that holds no setpoint has nothing to compare."""
+    watch, *_ = _watch(hass, mock_device, ActionResponse(None, {}))
+
+    mode = OperatingMode.UNKNOWN
+    watch.track(mock_device.identifier, mode, 72, OLD_HEAT, mode, REQUEST)
+
+    assert not watch.watching
+
+
+async def test_another_thermostats_state_leaves_the_record_alone(
+    hass: HomeAssistant, mock_json: dict, mock_device: SensiDevice, clock: _Clock
+) -> None:
+    """Only the thermostat a write went to can confirm or contradict it."""
+    other_json = copy.deepcopy(mock_json)
+    other_json["icd_id"] = "aa-bb-cc-dd-ee-ff-00-02"
+    _have_state, other = SensiDevice.create(other_json)
+    watch, sent, *_ = _watch(hass, mock_device, ActionResponse(None, {}))
+    _track_heat(watch, mock_device)
+    [record] = watch._pending.values()
+
+    # The other thermostat shows the old value on two refreshes...
+    _confirm_revert(watch, other, clock)
+    # ...and then a value of its own.
+    other.state.current_heat_temp = 65
+    watch.check(other)
+
+    assert not watch._resend_tasks
+    assert sent == []
+    assert watch._pending == {(mock_device.identifier, OperatingMode.HEAT): record}
+    assert record.revert_seen_at is None
+    assert record.ended is None
+
+
+async def test_a_state_without_the_setpoint_keeps_the_record(
+    hass: HomeAssistant, mock_device: SensiDevice
+) -> None:
+    """A state event with no heat setpoint in it says nothing about the write."""
+    watch, *_ = _watch(hass, mock_device, ActionResponse(None, {}))
+    _track_heat(watch, mock_device)
+    [record] = watch._pending.values()
+
+    mock_device.state.current_heat_temp = None
+    watch.on_connect()
+    watch.check(mock_device)
+
+    assert watch._pending == {(mock_device.identifier, OperatingMode.HEAT): record}
+    assert record.ended is None
+    assert record.revert_seen_at is None
+
+
+async def test_a_revert_while_the_resend_is_in_flight_starts_no_second(
+    hass: HomeAssistant, mock_device: SensiDevice, clock: _Clock
+) -> None:
+    """More reports of the old value during a re-send do not send it again."""
+    release = asyncio.Event()
+    sent: list = []
+
+    async def resend(
+        event: str, data: dict, still_wanted: Callable[[], bool]
+    ) -> ActionResponse:
+        sent.append((event, data))
+        await release.wait()
+        return ActionResponse(None, {})
+
+    watch = SetpointWatch(
+        hass,
+        {mock_device.identifier: mock_device},
+        resend=resend,
+        apply=MagicMock(),
+        on_applied=MagicMock(),
+    )
+    _track_heat(watch, mock_device)
+
+    _confirm_revert(watch, mock_device, clock)
+    [first] = watch._resend_tasks.values()
+    await asyncio.sleep(0)
+    clock.advance(SETPOINT_REVERT_CONFIRM)
+    watch.on_connect()
+    watch.check(mock_device)
+    await asyncio.sleep(0)
+
+    assert list(watch._resend_tasks.values()) == [first]
+    release.set()
+    await first
+    assert sent == [("set_temperature", REQUEST)]
+    [record] = watch._pending.values()
+    assert record.attempts == 2
+
+
+async def test_a_revert_confirmed_at_the_end_of_the_window_is_resent(
+    hass: HomeAssistant, mock_device: SensiDevice, clock: _Clock
+) -> None:
+    """The window is inclusive: a confirmation exactly at its end still counts."""
+    watch, sent, *_ = _watch(hass, mock_device, ActionResponse(None, {}))
+    _track_heat(watch, mock_device)
+
+    clock.advance(SETPOINT_CONFIRM_WINDOW - SETPOINT_REVERT_CONFIRM)
+    await _resend_once(watch, mock_device, clock)
+
+    assert sent == [("set_temperature", REQUEST)]
+
+
+async def test_an_accepted_resend_starts_a_new_window(
+    hass: HomeAssistant, mock_device: SensiDevice, clock: _Clock, caplog
+) -> None:
+    """A re-send is watched for a full window from when it was accepted.
+
+    Reported dropped again after the first write's window has passed, but
+    inside the re-send's, it is logged and given up on - not let go of as if
+    the window had run out.
+    """
+    watch, sent, *_ = _watch(hass, mock_device, ActionResponse(None, {}))
+    _track_heat(watch, mock_device)
+
+    clock.advance(SETPOINT_CONFIRM_WINDOW - SETPOINT_REVERT_CONFIRM - 10)
+    await _resend_once(watch, mock_device, clock)
+    assert sent == [("set_temperature", REQUEST)]
+    # Let the finished re-send's done callback forget it.
+    await asyncio.sleep(0)
+
+    # Past the first write's window, inside the re-send's.
+    clock.advance(SETPOINT_REVERT_CONFIRM)
+    _confirm_revert(watch, mock_device, clock)
+
+    assert not watch.watching
+    assert sent == [("set_temperature", REQUEST)]
+    [message] = _warnings(caplog, "after resend; not retrying")
+    assert f"({SETPOINT_REVERT_CONFIRM * 2}s after accepting 72" in message
