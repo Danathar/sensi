@@ -33,8 +33,13 @@ class _Clock:
     """The watch's clock, moved only when a test moves it."""
 
     def __init__(self) -> None:
-        """Start at the real monotonic time."""
-        self.now = time.monotonic()
+        """Start at the real monotonic time, in whole seconds.
+
+        Whole seconds keep `advance` exact. From a fractional start, adding
+        SETPOINT_REVERT_CONFIRM can cross a power of two and round down, so
+        a gap of exactly SETPOINT_REVERT_CONFIRM reads as just under it.
+        """
+        self.now = float(int(time.monotonic()))
 
     def __call__(self) -> float:
         """Return the current time."""
