@@ -277,6 +277,7 @@ class FakeSensiBackend:
 
         payload = data or {}
         if name == "set_temperature":
+            self.apply_setpoint(payload)
             return (
                 None,
                 {
@@ -290,6 +291,24 @@ class FakeSensiBackend:
 
         # Every other setter is treated as an empty success ack.
         return (None,)
+
+    def apply_setpoint(self, payload: dict) -> None:
+        """Write an accepted setpoint into the state this backend serves.
+
+        What a thermostat that applied the write reports afterwards, so a
+        later ``state`` event carries the new value. A test scripts a dropped
+        write by putting the old value back into ``devices`` (#634).
+        """
+        state = self.devices.get(payload.get("icd_id"), {}).get("state")
+        if not state:
+            return
+        key = {
+            "heat": "current_heat_temp",
+            "aux": "current_heat_temp",
+            "cool": "current_cool_temp",
+        }.get(payload.get("mode"))
+        if key:
+            state[key] = payload.get("target_temp")
 
     # -- task bookkeeping --------------------------------------------------
 
