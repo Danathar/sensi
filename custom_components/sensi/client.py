@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Callable
 import contextlib
 from dataclasses import asdict, dataclass
-import time
 from types import TracebackType
 from typing import Self
 
@@ -23,7 +22,6 @@ from .data import (
     FanMode,
     OperatingMode,
     SensiDevice,
-    State,
     get_setpoint_mode,
 )
 from .event import (
@@ -39,6 +37,7 @@ from .event import (
     SetTemperatureEventSuccess,
     SettingEventName,
 )
+from .setpoint_watch import SetpointWatch, reported_setpoint
 from .utils import redact_identifier, to_float
 
 SOCKET_URL = "https://rt.sensiapi.io"
@@ -47,20 +46,6 @@ SET_EVENT_TIMEOUT = 5
 EMIT_LOOP_DELAY = 0.5
 EMIT_LOOP_DELAY_WHEN_DISCONNECTED = 1
 DISCONNECT_TIMEOUT = 10
-
-# How long after an accepted set_temperature a `state` event reporting the
-# setpoint from before the write is read as the thermostat having dropped it.
-# An ack is the backend's answer, not the thermostat's: a write was accepted,
-# applied locally, and about four minutes later (249 s, the only data point)
-# a `state` event reported the old setpoint again with nothing having touched
-# the thermostat (#634). The cost of a longer window is that someone setting
-# the old value back by hand inside it is overridden once.
-SETPOINT_CONFIRM_WINDOW = 600
-
-# Re-sends of a dropped set_temperature before giving up on it. One: a write
-# that is dropped twice is not a transient, and a loop would fight whatever
-# is putting the old value back.
-MAX_SETPOINT_RESENDS = 1
 
 # Ack error descriptions that mean the backend refused an otherwise valid
 # write for an auth-shaped reason, rather than rejecting what it contained.
@@ -115,37 +100,6 @@ def _interpret_setter_ack(data: any) -> ActionResponse:
         return ActionResponse(data, None)
 
     return ActionResponse(None, data)
-
-
-def _monotonic() -> float:
-    """Return the clock pending setpoints are timed against.
-
-    A function of its own so tests can move it without moving the event
-    loop's clock, which also runs on time.monotonic.
-    """
-    return time.monotonic()
-
-
-@dataclass
-class PendingSetpoint:
-    """An accepted set_temperature that no `state` event has contradicted yet.
-
-    Kept in memory only, so a restart drops it. See
-    SensiClient._check_pending_setpoints.
-    """
-
-    requested: float
-    """The value that was asked for."""
-    previous: int
-    """The setpoint device.state held before the write went out."""
-    operating_mode: OperatingMode
-    """The thermostat's operating mode when the write went out."""
-    request: dict
-    """The set_temperature payload, re-sent as-is. Carries the icd_id."""
-    sent_at: float
-    """When the write (or its latest re-send) was accepted, by _monotonic."""
-    attempts: int = 1
-    """How many times this value has been sent and accepted."""
 
 
 @dataclass
@@ -220,10 +174,16 @@ class SensiClient:
         self._no_setter_ack_in_flight.set()
 
         # Accepted set_temperature writes still waiting to be contradicted,
-        # keyed by (icd_id, setpoint mode), and the re-send in flight for a
-        # key. See _check_pending_setpoints.
-        self._pending_setpoints: dict[tuple[str, OperatingMode], PendingSetpoint] = {}
-        self._setpoint_resend_tasks: dict[tuple[str, OperatingMode], asyncio.Task] = {}
+        # and the re-send of one the thermostat dropped. See setpoint_watch.py.
+        # The setter is reached through a lambda so that it is looked up on
+        # this client at re-send time, as it was before the watch moved out.
+        self._setpoint_watch = SetpointWatch(
+            hass,
+            self._devices,
+            resend=lambda event, data: self._async_invoke_setter(event, data),
+            apply=self._apply_target_temperature,
+            on_applied=self._update_coordinator_listeners,
+        )
 
     async def __aenter__(self) -> Self:
         """Enter context manager."""
@@ -379,13 +339,7 @@ class SensiClient:
 
         # Before the lock as well: a re-send whose setter is recovering from a
         # refusal holds it, and nothing is left to apply a re-send to.
-        resend_tasks = list(self._setpoint_resend_tasks.values())
-        self._setpoint_resend_tasks.clear()
-        self._pending_setpoints.clear()
-        for task in resend_tasks:
-            task.cancel()
-        if resend_tasks:
-            await asyncio.gather(*resend_tasks, return_exceptions=True)
+        await self._setpoint_watch.stop()
 
         # Under the lock so that an unload landing mid-refresh waits for the
         # refresh's connect to finish and then tears that socket down, rather
@@ -566,7 +520,7 @@ class SensiClient:
         # Read before the emit: a state event can replace device.state while
         # the setter is awaited, and the value to watch for is the one the
         # thermostat had before this write.
-        previous = _reported_setpoint(state, get_setpoint_mode(mode))
+        previous = reported_setpoint(state, get_setpoint_mode(mode))
         sent_in_mode = state.operating_mode
         action_response = await self._async_invoke_setter(
             "set_temperature", asdict(request)
@@ -589,7 +543,7 @@ class SensiClient:
                     for key in ("target_temp", "mode", "current_temp")
                 ),
             )
-            self._track_setpoint(
+            self._setpoint_watch.track(
                 device.identifier, mode, value, previous, sent_in_mode, asdict(request)
             )
 
@@ -663,196 +617,16 @@ class SensiClient:
         if mode == OperatingMode.COOL:
             state.current_cool_temp = target_temp
 
-    def _track_setpoint(
-        self,
-        icd_id: str,
-        mode: OperatingMode,
-        requested: float,
-        previous: int | None,
-        sent_in_mode: OperatingMode,
-        request: dict,
-    ) -> None:
-        """Record an accepted set_temperature so a dropped one can be noticed.
+    def _update_coordinator_listeners(self) -> None:
+        """Redraw the entities after a re-sent setpoint has been applied.
 
-        A newer accepted write for the same key replaces the record. One that
-        asks for the value already shown has no earlier value to tell a drop
-        by, so it keeps the earlier write's pre-write value when that write
-        asked for the same thing, and is not tracked otherwise.
-
-        A re-send still in flight for a replaced record is left to finish
-        rather than cancelled mid-recovery. It finds its record gone and
-        applies nothing.
+        The same refresh climate.py does after a write. The config entry's
+        runtime_data is the coordinator; an entry without one has nothing to
+        redraw.
         """
-
-        key = (icd_id, get_setpoint_mode(mode))
-        existing = self._pending_setpoints.pop(key, None)
-        if existing is not None:
-            if previous == requested and existing.requested == requested:
-                previous = existing.previous
-            else:
-                self._log_setpoint_dropped(key, "superseded")
-
-        if key[1] not in (OperatingMode.HEAT, OperatingMode.COOL):
-            return
-        if previous is None or previous == requested:
-            return
-
-        self._pending_setpoints[key] = PendingSetpoint(
-            requested=requested,
-            previous=previous,
-            operating_mode=sent_in_mode,
-            request=request,
-            sent_at=_monotonic(),
-        )
-
-    def _check_pending_setpoints(self, device: SensiDevice) -> None:
-        """Compare a device's new state with the setpoints it accepted.
-
-        Runs from _update_state, inside the socket.io read loop, and the
-        coordinator's refresh delivers `state` events while it holds
-        _reconnect_lock - so this neither awaits nor takes that lock. A
-        re-send is started as a background task instead.
-
-        A setpoint equal to the requested value is not taken as confirmation:
-        whether the backend echoes a requested value before the thermostat
-        has applied it is not known, so the record stays for the window.
-        """
-
-        if self._stopped:
-            return
-
-        state = device.state
-        for key, record in list(self._pending_setpoints.items()):
-            if key[0] != device.identifier:
-                continue
-
-            elapsed = _monotonic() - record.sent_at
-            if elapsed > SETPOINT_CONFIRM_WINDOW:
-                self._drop_setpoint(key, "window passed")
-                continue
-
-            # An offline thermostat's state says nothing about what it did
-            # with the write. Wait for it to come back, inside the window.
-            if not state.is_online:
-                continue
-
-            if state.operating_mode == OperatingMode.OFF:
-                self._drop_setpoint(key, "off")
-                continue
-            if state.operating_mode != record.operating_mode:
-                self._drop_setpoint(key, "mode change")
-                continue
-
-            reported = _reported_setpoint(state, key[1])
-            if reported is None or reported == record.requested:
-                continue
-            if reported != record.previous:
-                # The wall or the app moved it. Never write over that.
-                self._drop_setpoint(key, "other value")
-                continue
-
-            if key in self._setpoint_resend_tasks:
-                continue
-
-            if record.attempts >= MAX_SETPOINT_RESENDS + 1:
-                LOGGER.warning(
-                    "Thermostat %s still reports %s setpoint %s after resend; not "
-                    "retrying (%ds after accepting %s, status %s, wifi quality %s)",
-                    redact_identifier(key[0]),
-                    key[1].value,
-                    reported,
-                    elapsed,
-                    record.requested,
-                    state.status,
-                    state.wifi_connection_quality,
-                )
-                del self._pending_setpoints[key]
-                continue
-
-            LOGGER.warning(
-                "Thermostat %s reported %s setpoint %s %ds after accepting %s; "
-                "resending (attempt %d of %d, status %s, wifi quality %s)",
-                redact_identifier(key[0]),
-                key[1].value,
-                reported,
-                elapsed,
-                record.requested,
-                record.attempts + 1,
-                MAX_SETPOINT_RESENDS + 1,
-                state.status,
-                state.wifi_connection_quality,
-            )
-            task = self._hass.async_create_background_task(
-                self._async_resend_setpoint(key, record),
-                name=f"{SENSI_DOMAIN}._async_resend_setpoint",
-            )
-            self._setpoint_resend_tasks[key] = task
-
-            def _done(done: asyncio.Task, key=key) -> None:
-                """Forget the re-send once it has finished, unless replaced."""
-                if self._setpoint_resend_tasks.get(key) is done:
-                    del self._setpoint_resend_tasks[key]
-
-            task.add_done_callback(_done)
-
-    async def _async_resend_setpoint(
-        self, key: tuple[str, OperatingMode], record: PendingSetpoint
-    ) -> None:
-        """Send a dropped set_temperature again, once, and apply it if accepted.
-
-        Through _async_invoke_setter, so the Forbidden retry covers it as it
-        covers the first send.
-        """
-
-        try:
-            response = await self._async_invoke_setter(
-                "set_temperature", record.request
-            )
-        except HomeAssistantError as err:
-            response = ActionResponse(str(err), None)
-
-        # Replaced by a newer write, or dropped, while this was on the wire.
-        if self._pending_setpoints.get(key) is not record:
-            return
-
-        if response.error:
-            LOGGER.warning(
-                "Resending %s setpoint %s to thermostat %s was refused with '%s'; "
-                "not retrying",
-                key[1].value,
-                record.requested,
-                redact_identifier(key[0]),
-                response.error,
-            )
-            del self._pending_setpoints[key]
-            return
-
-        record.attempts += 1
-        record.sent_at = _monotonic()
-
-        device = self._devices.get(key[0])
-        if device is not None:
-            self._apply_target_temperature(device, key[1], record.requested)
-
-        # The same refresh climate.py does after a write.
         coordinator = getattr(self._config_entry, "runtime_data", None)
         if coordinator is not None:
             coordinator.async_update_listeners()
-
-    def _drop_setpoint(self, key: tuple[str, OperatingMode], reason: str) -> None:
-        """Forget a pending setpoint without re-sending it."""
-        del self._pending_setpoints[key]
-        self._log_setpoint_dropped(key, reason)
-
-    @staticmethod
-    def _log_setpoint_dropped(key: tuple[str, OperatingMode], reason: str) -> None:
-        """Log at DEBUG that a pending setpoint is no longer watched, and why."""
-        LOGGER.debug(
-            "No longer watching the %s setpoint of %s: %s",
-            key[1].value,
-            redact_identifier(key[0]),
-            reason,
-        )
 
     async def async_set_operating_mode(
         self, device: SensiDevice, value: OperatingMode
@@ -1665,8 +1439,8 @@ class SensiClient:
 
                 if have_state:
                     futures_to_resolve.append((icd_id, item))
-                    if self._pending_setpoints:
-                        self._check_pending_setpoints(device)
+                    if self._setpoint_watch.watching:
+                        self._setpoint_watch.check(device)
 
         # First resolve the initial `state` event future and then per-device futures.
         self._resolve_futures("state", None, None)
@@ -1691,15 +1465,6 @@ class SensiClient:
                     self._devices[icd_id].update_capabilities(data)
 
                 self._resolve_futures("capabilities", icd_id, data)
-
-
-def _reported_setpoint(state: State, mode: OperatingMode) -> int | None:
-    """Return the setpoint a State holds for a setpoint mode, if it has one."""
-    if mode == OperatingMode.HEAT:
-        return state.current_heat_temp
-    if mode == OperatingMode.COOL:
-        return state.current_cool_temp
-    return None
 
 
 def _ack_mode(ack: dict) -> OperatingMode | None:

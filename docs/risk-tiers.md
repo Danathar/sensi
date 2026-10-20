@@ -34,8 +34,8 @@ the release notes, not buried in a commit subject.
 
 ### `tier/runtime` — runs against the live service
 
-`client.py`, `coordinator.py`, `__init__.py`, `data.py`, `capabilities.py`,
-`event.py`, `utils.py`.
+`client.py`, `setpoint_watch.py`, `coordinator.py`, `__init__.py`, `data.py`,
+`capabilities.py`, `event.py`, `utils.py`.
 
 The connection, the reconnect and token-refresh path, the event queue, and the
 parsing of whatever Sensi actually sends. CI cannot fully verify any of it: the
