@@ -22,6 +22,7 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import (
+    SETTER_NOT_WANTED,
     UNKNOWN_SETTER_ERROR,
     ActionResponse,
     EventInfo,
@@ -745,7 +746,7 @@ class TestSetterAcks:
     async def _invoke(self, client: SensiClient, ack: tuple | None):
         """Run a setter, replying with `ack` (or not replying at all)."""
 
-        async def fake_send(name, data, callback=None, future=None):
+        async def fake_send(name, data, callback=None, future=None, still_wanted=None):
             if ack is not None and callback is not None:
                 callback(*ack)
 
@@ -822,7 +823,7 @@ class TestSetterAcks:
         """A late ack must not touch a future that was already cancelled."""
         captured: list = []
 
-        async def capture(name, data, callback=None, future=None):
+        async def capture(name, data, callback=None, future=None, still_wanted=None):
             captured.append(callback)
 
         with (
@@ -947,6 +948,53 @@ class TestEmitLoop:
         waiting = asyncio.get_running_loop().create_future()
         client._event_queue.put_nowait(
             EventInfo("set_temperature", {"value": 72}, None, waiting)
+        )
+
+        await self._run_once(client)
+
+        sio.emit.assert_awaited_once_with("set_temperature", {"value": 72}, None, None)
+
+        waiting.cancel()
+
+    async def test_a_setter_no_longer_wanted_is_discarded_and_answered(
+        self, client: SensiClient
+    ) -> None:
+        """A withdrawn setter is not emitted, and its caller hears so at once.
+
+        The dropped-setpoint re-send withdraws itself this way when a newer
+        value replaces its record while it waits for the wire (#638).
+        """
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        async def setter() -> ActionResponse:
+            return await client._async_emit_setter(
+                "set_temperature", {"value": 72}, still_wanted=lambda: False
+            )
+
+        task = asyncio.get_running_loop().create_task(setter())
+        await asyncio.sleep(0)
+        await self._run_once(client)
+        response = await asyncio.wait_for(task, 1)
+
+        sio.emit.assert_not_awaited()
+        assert client._event_queue.qsize() == 0
+        assert response.error == SETTER_NOT_WANTED
+        assert response.sent is False
+        assert client._setter_acks_in_flight == 0
+
+    async def test_a_setter_still_wanted_is_emitted(self, client: SensiClient) -> None:
+        """A predicate that still says yes leaves the setter alone."""
+        sio = MagicMock()
+        sio.connected = True
+        sio.emit = AsyncMock()
+        client._sio = sio
+
+        waiting = asyncio.get_running_loop().create_future()
+        client._event_queue.put_nowait(
+            EventInfo("set_temperature", {"value": 72}, None, waiting, lambda: True)
         )
 
         await self._run_once(client)

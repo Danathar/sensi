@@ -3,11 +3,12 @@
 An ack is the backend's answer, not the thermostat's. A write can be accepted,
 applied locally, and then reported back at its old value by a later `state`
 event with nothing having touched the thermostat (#634). SetpointWatch keeps
-each accepted write for SETPOINT_CONFIRM_WINDOW and re-sends it once when a
-`state` event reports the value from before it.
+each accepted write for SETPOINT_CONFIRM_WINDOW and re-sends it once when the
+value from before it is reported by two refreshes (#638).
 
 SensiClient owns one SetpointWatch. It calls `track` after an accepted
-set_temperature, `check` from its `state` handler, and `stop` when it stops.
+set_temperature, `on_connect` each time a socket connects, `check` from its
+`state` handler, and `stop` when it stops.
 Everything else the watch needs - the setter, the device it applies to and
 what to refresh afterwards - is handed to it by the client.
 """
@@ -42,6 +43,22 @@ SETPOINT_CONFIRM_WINDOW = 600
 # is putting the old value back.
 MAX_SETPOINT_RESENDS = 1
 
+# How far apart two reports of the pre-write setpoint must be before they are
+# read as a dropped write. Right after a write the backend can report the
+# previous value for one refresh and then the new one (#638: one stale read
+# lasted 31 s, until the next refresh). One stale read must not spend the
+# only re-send, so a revert counts only once a second report confirms it.
+#
+# A proposed starting point, not a measured value. The two reports must also
+# come from different connections (see SetpointWatch.on_connect): one
+# connection delivers several `state` packets - two right behind the
+# handshake, then whatever the backend pushes while the socket is up, which
+# can be 20 s or more after the first - so spacing alone would count one
+# refresh twice. And two connections can be seconds apart, when a refused
+# setter's recovery reconnects just before the coordinator's 30 s refresh,
+# so a connection count alone would too. Both are required.
+SETPOINT_REVERT_CONFIRM = 20
+
 
 def _monotonic() -> float:
     """Return the clock pending setpoints are timed against.
@@ -71,6 +88,13 @@ class PendingSetpoint:
     """When the write (or its latest re-send) was accepted, by _monotonic."""
     attempts: int = 1
     """How many times this value has been sent and accepted."""
+    revert_seen_at: float | None = None
+    """When a `state` event first reported `previous` since the last send."""
+    revert_seen_on: int | None = None
+    """The connection that first report came on. See SetpointWatch.on_connect."""
+    ended: str | None = None
+    """Why the record stopped being watched, once it has. Logged by a re-send
+    that was withdrawn before it reached the wire."""
 
 
 class SetpointWatch:
@@ -86,15 +110,17 @@ class SetpointWatch:
         self,
         hass: HomeAssistant,
         devices: Mapping[str, SensiDevice],
-        resend: Callable[[str, dict], Awaitable[ActionResponse]],
+        resend: Callable[..., Awaitable[ActionResponse]],
         apply: Callable[[SensiDevice, OperatingMode, float], None],
         on_applied: Callable[[], None],
     ) -> None:
         """Initialize the watch.
 
         `devices` is the client's own icd_id-to-device map, read when a
-        re-send is accepted. `resend` emits a setter event and returns its
-        ActionResponse. `apply` records an accepted setpoint on a device, and
+        re-send is accepted. `resend(event, data, still_wanted=...)` emits a
+        setter event and returns its ActionResponse; it asks `still_wanted`
+        before the event goes on the wire, and does not send it once that
+        is false. `apply` records an accepted setpoint on a device, and
         `on_applied` runs after a re-send has been applied.
         """
 
@@ -113,10 +139,24 @@ class SetpointWatch:
         self._pending: dict[tuple[str, OperatingMode], PendingSetpoint] = {}
         self._resend_tasks: dict[tuple[str, OperatingMode], asyncio.Task] = {}
 
+        # Counts socket connections, so two reports of a reverted setpoint
+        # can be told to come from two refreshes. See on_connect.
+        self._connection = 0
+
     @property
     def watching(self) -> bool:
         """Return whether any accepted setpoint is still being watched."""
         return bool(self._pending)
+
+    def on_connect(self) -> None:
+        """Note that a new socket connection is up.
+
+        Every refresh is a new connection - the coordinator's 30 s refresh
+        disconnects and reconnects, and so does a refused setter's recovery -
+        so a revert reported on two connections was read twice, not echoed
+        twice by one read. Called from the client's `connect` handler.
+        """
+        self._connection += 1
 
     async def stop(self) -> None:
         """Forget every pending setpoint and cancel any re-send in flight.
@@ -152,13 +192,15 @@ class SetpointWatch:
         asked for the same thing, and is not tracked otherwise.
 
         A re-send still in flight for a replaced record is left to finish
-        rather than cancelled mid-recovery. It finds its record gone and
-        applies nothing.
+        rather than cancelled mid-recovery. It is not sent if it has not
+        reached the wire yet, and it finds its record gone and applies
+        nothing either way.
         """
 
         key = (icd_id, get_setpoint_mode(mode))
         existing = self._pending.pop(key, None)
         if existing is not None:
+            existing.ended = "superseded"
             if previous == requested and existing.requested == requested:
                 previous = existing.previous
             else:
@@ -187,7 +229,14 @@ class SetpointWatch:
 
         A setpoint equal to the requested value is not taken as confirmation:
         whether the backend echoes a requested value before the thermostat
-        has applied it is not known, so the record stays for the window.
+        has applied it is not known, so the record stays for the window. It
+        does clear a first report of the pre-write value: that report was a
+        stale read, not a drop.
+
+        The pre-write value is acted on only once confirmed: reported again
+        at least SETPOINT_REVERT_CONFIRM later, on another connection, with
+        no report of the requested value in between. A first report too
+        late in the window to be confirmed in it is dropped with the window.
         """
 
         if self._stopped:
@@ -198,7 +247,8 @@ class SetpointWatch:
             if key[0] != device.identifier:
                 continue
 
-            elapsed = _monotonic() - record.sent_at
+            now = _monotonic()
+            elapsed = now - record.sent_at
             if elapsed > SETPOINT_CONFIRM_WINDOW:
                 self._drop(key, "window passed")
                 continue
@@ -216,7 +266,11 @@ class SetpointWatch:
                 continue
 
             reported = reported_setpoint(state, key[1])
-            if reported is None or reported == record.requested:
+            if reported is None:
+                continue
+            if reported == record.requested:
+                record.revert_seen_at = None
+                record.revert_seen_on = None
                 continue
             if reported != record.previous:
                 # The wall or the app moved it. Never write over that.
@@ -224,6 +278,9 @@ class SetpointWatch:
                 continue
 
             if key in self._resend_tasks:
+                continue
+
+            if not self._revert_confirmed(key, record, now, reported):
                 continue
 
             if record.attempts >= MAX_SETPOINT_RESENDS + 1:
@@ -239,6 +296,7 @@ class SetpointWatch:
                     state.wifi_connection_quality,
                 )
                 del self._pending[key]
+                record.ended = "gave up"
                 continue
 
             LOGGER.warning(
@@ -267,6 +325,37 @@ class SetpointWatch:
 
             task.add_done_callback(_done)
 
+    def _revert_confirmed(
+        self,
+        key: tuple[str, OperatingMode],
+        record: PendingSetpoint,
+        now: float,
+        reported: int,
+    ) -> bool:
+        """Return whether this report of the pre-write value confirms an earlier one.
+
+        The first report is only recorded. See SETPOINT_REVERT_CONFIRM.
+        """
+
+        if record.revert_seen_at is None:
+            record.revert_seen_at = now
+            record.revert_seen_on = self._connection
+            LOGGER.debug(
+                "First report of the pre-write %s setpoint %s from %s %ds after "
+                "accepting %s; waiting for a second before resending",
+                key[1].value,
+                reported,
+                redact_identifier(key[0]),
+                now - record.sent_at,
+                record.requested,
+            )
+            return False
+
+        return (
+            record.revert_seen_on != self._connection
+            and now - record.revert_seen_at >= SETPOINT_REVERT_CONFIRM
+        )
+
     async def _async_resend(
         self, key: tuple[str, OperatingMode], record: PendingSetpoint
     ) -> None:
@@ -274,17 +363,46 @@ class SetpointWatch:
 
         Through the client's _async_invoke_setter, so the Forbidden retry
         covers it as it covers the first send.
+
+        The setter is told to send only while this record is still the one
+        being watched: a newer write, a value set by hand, or anything else
+        that drops the record withdraws a re-send still waiting for the wire
+        or for its Forbidden retry. The task itself is never cancelled for
+        that - see _async_invoke_setter on the token exchange.
+
+        A value changed by hand after the re-send went on the wire cannot be
+        helped: the emit cannot be taken back. The re-sent value is then not
+        applied locally, and the next `state` event shows what the
+        thermostat really has.
         """
 
+        def still_wanted() -> bool:
+            """Return whether this record is still the one being watched."""
+            return self._pending.get(key) is record
+
         try:
-            response = await self._resend("set_temperature", record.request)
+            response = await self._resend(
+                "set_temperature", record.request, still_wanted=still_wanted
+            )
         except HomeAssistantError as err:
             error = str(err)
+            sent = True
         else:
             error = response.error
+            sent = response.sent
 
-        # Replaced by a newer write, or dropped, while this was on the wire.
+        # Replaced by a newer write, or dropped, while this was queued or on
+        # the wire.
         if self._pending.get(key) is not record:
+            if not sent:
+                LOGGER.debug(
+                    "Discarding queued resend of %s setpoint %s to %s: no longer "
+                    "wanted (%s)",
+                    key[1].value,
+                    record.requested,
+                    redact_identifier(key[0]),
+                    record.ended or "no longer watched",
+                )
             return
 
         if error:
@@ -301,6 +419,8 @@ class SetpointWatch:
 
         record.attempts += 1
         record.sent_at = _monotonic()
+        record.revert_seen_at = None
+        record.revert_seen_on = None
 
         device = self._devices.get(key[0])
         if device is not None:
@@ -310,7 +430,7 @@ class SetpointWatch:
 
     def _drop(self, key: tuple[str, OperatingMode], reason: str) -> None:
         """Forget a pending setpoint without re-sending it."""
-        del self._pending[key]
+        self._pending.pop(key).ended = reason
         self._log_dropped(key, reason)
 
     @staticmethod

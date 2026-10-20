@@ -9,6 +9,7 @@ import pytest
 
 from custom_components.sensi.auth import AuthenticationError, SensiConnectionError
 from custom_components.sensi.client import (
+    SETTER_NOT_WANTED,
     UNREADABLE_SETTER_ACK,
     ActionResponse,
     round_humidity,
@@ -546,7 +547,9 @@ class TestSetTemperature:
         client = mock_coordinator.client
         previous_heat_temp = mock_device.state.current_heat_temp
 
-        async def fake_send_event(name, data, callback=None, future=None):
+        async def fake_send_event(
+            name, data, callback=None, future=None, still_wanted=None
+        ):
             callback(*ack_args)
 
         with (
@@ -1303,7 +1306,7 @@ class TestEverySetterReadsAnAckTheSameWay:
 
     @staticmethod
     async def _set(client, device, setter: str, ack: tuple):
-        async def reply(name, data, callback=None, future=None):
+        async def reply(name, data, callback=None, future=None, still_wanted=None):
             callback(*ack)
 
         with patch.object(client, "_send_event", reply):
@@ -1370,7 +1373,7 @@ class TestEverySetterReadsAnAckTheSameWay:
         acks = iter([refusal, ()])
         sent = []
 
-        async def reply(name, data, callback=None, future=None):
+        async def reply(name, data, callback=None, future=None, still_wanted=None):
             sent.append(name)
             callback(*next(acks))
 
@@ -1573,6 +1576,75 @@ class TestSetterRetryOnForbidden:
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
         assert "was refused with 'Forbidden'" in warnings[0].message
+
+    async def test_a_retry_no_longer_wanted_is_not_sent(
+        self, mock_coordinator, caplog
+    ) -> None:
+        """The recovery runs to the end, then the retry is dropped (#638).
+
+        A dropped-setpoint re-send whose record went while it was being
+        refused: the token exchange is not cut short, but nothing goes out
+        a second time.
+        """
+
+        client = mock_coordinator.client
+        refresh, disconnect, connect = self._patches(client)
+        wanted = [True]
+
+        async def refused(*_args, **_kwargs):
+            # The record goes while the refusal is on its way back.
+            wanted[0] = False
+            return ActionResponse("Forbidden", None)
+
+        with (
+            refresh as mock_refresh,
+            disconnect as mock_disconnect,
+            connect as mock_connect,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.side_effect = refused
+
+            response = await client._async_invoke_setter(
+                "set_temperature", {"a": 1}, still_wanted=lambda: wanted[0]
+            )
+
+        assert response.error == SETTER_NOT_WANTED
+        assert response.sent is False
+        mock_refresh.assert_awaited_once()
+        mock_disconnect.assert_awaited_once()
+        mock_connect.assert_awaited_once()
+        mock_emit.assert_awaited_once()
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    async def test_a_retry_still_wanted_is_sent(self, mock_coordinator) -> None:
+        """The predicate is handed to both attempts and does not stop a retry."""
+
+        client = mock_coordinator.client
+        refresh, disconnect, connect = self._patches(client)
+
+        def still_wanted() -> bool:
+            return True
+
+        with (
+            refresh,
+            disconnect,
+            connect,
+            patch.object(client, "_async_emit_setter") as mock_emit,
+        ):
+            mock_emit.side_effect = [
+                ActionResponse("Forbidden", None),
+                ActionResponse(None, {"target_temp": 75}),
+            ]
+
+            response = await client._async_invoke_setter(
+                "set_temperature", {"a": 1}, still_wanted=still_wanted
+            )
+
+        assert response.error is None
+        assert [call.kwargs for call in mock_emit.await_args_list] == [
+            {"still_wanted": still_wanted},
+            {"still_wanted": still_wanted},
+        ]
 
     @pytest.mark.parametrize(
         "error",
