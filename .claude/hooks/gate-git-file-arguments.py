@@ -169,6 +169,15 @@ row and prompts anyway. Strings nested deeper than `_MAX_STRING_DEPTH`, or
 more than `_MAX_STRING_CHECKS` of them in one call, are refused unread,
 because Claude Code runs a command whose hook times out.
 
+A program in front that is neither a wrapper nor a gated command reaches the
+same way without a string at all: `setarch x86_64 gh pr view 1 --json number
+--jq env` and `strace -o /dev/null gh ... -q '$ENV'` run gh with the words
+after them, and printed `GH_TOKEN` (#645). git was already read there, since
+`_runs_git` counts a `git` anywhere in a segment; the other gated rows are
+now read from every later word of such a command too (see `_gated_prefix`),
+so `setarch x86_64 gh pr view 1 --json number --jq .number` still passes and
+the same command with `--jq env` does not.
+
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
 Each rests on a documented property of the permission matcher, not on a guess:
@@ -1269,11 +1278,20 @@ def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
 
     Behind a wrapper the name may stand after the wrapper's own options
     (`command -p gh pr list >out`), so every later word is tried as the
-    start; without one, only the first word names the command.
+    start. So it is behind a program this hook neither checks nor steps over:
+    `setarch x86_64 gh pr view 1 --json number --jq env` and `strace -o
+    /dev/null gh ...` run gh with the words after it, and bypass and auto
+    modes prompt for neither, so every later word is tried there too - the
+    reach `_runs_git` gives git, which counts a `git` anywhere in the
+    segment (#645). Only when the first word is itself git, gh, python3 or
+    ruff does that word alone name the command.
     """
 
     words, wrappers, _assigned = _command_words(segment)
-    starts = range(len(words)) if wrappers else range(min(len(words), 1))
+    if wrappers or not words or not _GUARDED_NAME.fullmatch(words[0]):
+        starts = range(len(words))
+    else:
+        starts = range(1)
     return _gated_row(words, starts)
 
 

@@ -932,10 +932,49 @@ def test_a_gh_filter_that_reads_the_environment_is_refused(command: str) -> None
         "gh pr view 1 --json body --jq .body | grep env",
         "gh pr list -R Danathar/sensi",
         "gh run view 123 --log-failed",
+        "setarch x86_64 gh pr view 1 --json number --jq .number",
     ],
 )
 def test_a_gh_filter_that_names_fields_is_left_alone(command: str) -> None:
     """Refusing every filter would cost the jq reads AGENTS.md relies on."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A program that is neither a wrapper nor a gated command runs gh with
+        # the words after it, and bypass and auto modes prompt for neither
+        # (#645). `$ENV` is refused as a substitution, `env` as the filter.
+        "setarch x86_64 gh pr view 1 --json number --jq env",
+        "strace -o /dev/null gh pr view 1 --json number -q '$ENV'",
+        "strace -o /dev/null gh pr view 1 --json number --jq env",
+        "prlimit gh issue list --json title -qenv",
+        "setarch x86_64 gh pr list >out",
+    ],
+)
+def test_a_gated_gh_command_behind_another_program_is_read(command: str) -> None:
+    """gh is read behind any program, as git already was."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "setarch x86_64 gh pr view 1 --json number --jq .number",
+        "setarch x86_64 git diff HEAD",
+        "strace -o /dev/null gh pr list",
+        "echo gh pr view 1 --json title --jq .title",
+    ],
+)
+def test_a_gated_command_behind_another_program_that_passes_alone_passes(
+    command: str,
+) -> None:
+    """Only what would be refused standing alone is refused behind a program."""
 
     completed = _run(_payload(command))
     assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr!r}"
