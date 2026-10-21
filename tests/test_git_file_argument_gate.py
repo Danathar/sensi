@@ -932,10 +932,49 @@ def test_a_gh_filter_that_reads_the_environment_is_refused(command: str) -> None
         "gh pr view 1 --json body --jq .body | grep env",
         "gh pr list -R Danathar/sensi",
         "gh run view 123 --log-failed",
+        "setarch x86_64 gh pr view 1 --json number --jq .number",
     ],
 )
 def test_a_gh_filter_that_names_fields_is_left_alone(command: str) -> None:
     """Refusing every filter would cost the jq reads AGENTS.md relies on."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A program that is neither a wrapper nor a gated command runs gh with
+        # the words after it, and bypass and auto modes prompt for neither
+        # (#645). `$ENV` is refused as a substitution, `env` as the filter.
+        "setarch x86_64 gh pr view 1 --json number --jq env",
+        "strace -o /dev/null gh pr view 1 --json number -q '$ENV'",
+        "strace -o /dev/null gh pr view 1 --json number --jq env",
+        "prlimit gh issue list --json title -qenv",
+        "setarch x86_64 gh pr list >out",
+    ],
+)
+def test_a_gated_gh_command_behind_another_program_is_read(command: str) -> None:
+    """The gh command is read behind any program, as git already was."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "setarch x86_64 gh pr view 1 --json number --jq .number",
+        "setarch x86_64 git diff HEAD",
+        "strace -o /dev/null gh pr list",
+        "echo gh pr view 1 --json title --jq .title",
+    ],
+)
+def test_a_gated_command_behind_another_program_that_passes_alone_passes(
+    command: str,
+) -> None:
+    """Only what would be refused standing alone is refused behind a program."""
 
     completed = _run(_payload(command))
     assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr!r}"
@@ -2253,6 +2292,13 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "command name",
+        "/usr/bin\\timeout 5 ruff check .",
+        _REFUSED,
+        "the same spelling with nothing written: only the ending test finds "
+        "that bash runs /usr/bintimeout in front of the exact row",
+    ),
+    _Row(
+        "command name",
         "/usr/bin/timeout 60 git diff HEAD",
         _ALLOWED,
         "the system's copy of a wrapper is stepped over, and git never "
@@ -2271,6 +2317,28 @@ _CORPUS: tuple[_Row, ...] = (
         _REFUSED,
         "the gated prefixes are allow rows too, and xargs in front of one "
         "hides its arguments the same way it hides git's",
+    ),
+    _Row(
+        "command name",
+        "noglob xargs gh pr view <list.txt",
+        _REFUSED,
+        "the matcher steps over noglob as it does nice, so xargs is still in "
+        "the wrapper chain and hides the arguments gh pr view receives",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/timeout 5 xargs gh pr view <list.txt",
+        _REFUSED,
+        "timeout by path is timeout to the matcher, so the xargs behind its "
+        "operand is in the wrapper chain as it is behind the bare name",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 gh pr view 1 --json number --jq env",
+        _REFUSED,
+        "setarch is no wrapper and no gated command, and it runs gh with the "
+        "words after it, so the --jq env that prints GH_TOKEN is read there "
+        "as it is with gh in front (#645)",
     ),
     _Row(
         "command name",
@@ -2561,7 +2629,7 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "the wrappers the permission matcher steps over",
         '        "timeout",\n',
         "",
-        "timeout 5 python3 scripts/run_tests.py >out",
+        "timeout 5 xargs git diff <list.txt",
     ),
     (
         "the substitution refusal on the ungated allow-listed subcommands",
@@ -2693,13 +2761,13 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "noglob, which the matcher steps over",
         '        "noglob",\n',
         "",
-        "noglob python3 scripts/run_tests.py >out",
+        "noglob xargs gh pr view <list.txt",
     ),
     (
         "a path to a wrapper, read by its last component",
         'return _PATH_HEAD.sub("", word)',
         "return word",
-        "/usr/bin/timeout 5 python3 scripts/run_tests.py >out",
+        "/usr/bin/timeout 5 xargs gh pr view <list.txt",
     ),
     (
         "a path to xargs among the words after a wrapper's options",
@@ -2717,7 +2785,13 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "a wrapper's spelling tested on its ending, as bash leaves it",
         "word.endswith(name)",
         "_wrapper_name(word) == name",
-        "/usr/bin\\timeout 5 ruff check . >out",
+        "/usr/bin\\timeout 5 ruff check .",
+    ),
+    (
+        "every later word tried behind a program the gate does not step over",
+        "if wrappers or not words or not _GUARDED_NAME.fullmatch(words[0]):",
+        "if wrappers or not words:",
+        "setarch x86_64 gh pr view 1 --json number --jq env",
     ),
     (
         "the system's copy of a wrapper is not a git operand",
