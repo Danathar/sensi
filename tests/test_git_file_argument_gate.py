@@ -37,8 +37,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import subprocess
+import sys
+import time
 from typing import NamedTuple
 
 import pytest
@@ -3160,3 +3163,108 @@ def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) ->
     assert completed.returncode == 2, (
         "the command just shown to overwrite was not blocked"
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A command line handed to a shell as one quoted word: no word of it
+        # is `git` to the scans, so the gated options inside went unread.
+        "bash -c 'git diff --no-index /dev/null .env'",
+        'sh -c "true; git diff --output=.claude/settings.json HEAD"',
+        "su -c 'git diff --no-index /dev/null .env'",
+        "flock /tmp/l -c 'git diff --no-index /dev/null .env'",
+        "script -qc 'git diff --no-index /dev/null .env' /dev/null",
+        # The value glued to a short-option cluster or a long option.
+        "script -qc'git diff --no-index /dev/null .env' /dev/null",
+        "script --command='git diff --no-index /dev/null .env' /dev/null",
+        "script -cGIT_EXTERNAL_DIFF=/tmp/prog\\ git\\ diff /dev/null",
+        # Nested, and the other rules inside a string.
+        "bash -c \"sh -c 'git diff --no-index /dev/null .env'\"",
+        "bash -c 'GIT_EXTERNAL_DIFF=/tmp/prog git diff HEAD~1 HEAD'",
+        "bash -c 'git diff HEAD >.claude/settings.json'",
+        "bash -c 'gh pr view 1 --json number --jq env'",
+    ],
+)
+def test_a_gated_command_inside_a_command_string_is_refused(command: str) -> None:
+    """Bypass and auto modes prompt for neither the shell nor `script`."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "command line handed to a shell" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'git status'",
+        "sh -c 'echo hi'",
+        "git log --grep='fix git diff' -1",
+        "git commit -m 'git diff output tweak'",
+        "gh pr view 1 --json title --jq '.title'",
+        "python3 scripts/run_tests.py -k 'git and diff'",
+    ],
+)
+def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:
+    """Only a string that would be refused on its own refuses the command."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_command_strings_nested_past_the_limit_are_refused_unread() -> None:
+    """The work is bounded, since Claude Code runs a command whose hook times out."""
+
+    command = "git status"
+    for _ in range(6):
+        command = f"bash -c {shlex.quote(command)}"
+    completed = _run(_payload(command))
+    assert completed.returncode == 2
+    assert "than this hook reads" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "padding",
+    [
+        # One quoted word long enough that the extglob search used to retry
+        # from every character of it.
+        "'" + "x" * 150_000 + "'",
+        # Many `git` words, each of which used to rescan everything after it.
+        "true " + "git " * 40_000,
+    ],
+    ids=["long-quoted-word", "many-git-words"],
+)
+def test_a_long_command_is_decided_well_inside_the_hook_timeout(padding: str) -> None:
+    """Claude Code runs the command when the hook times out: it must not."""
+
+    command = f"git diff --no-index /dev/null .env; {padding}"
+    started = time.monotonic()
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, completed.stderr
+    assert time.monotonic() - started < 20
+
+
+def test_a_decision_past_the_budget_is_a_refusal() -> None:
+    """The alarm refuses rather than leaving the call to the hook timeout."""
+
+    script = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('gate', {str(_HOOK)!r})\n"
+        "gate = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(gate)\n"
+        "gate._BUDGET_SECONDS = 0.01\n"
+        "def slow(*args):\n"
+        "    while True:\n"
+        "        pass\n"
+        "gate._decide = slow\n"
+        "sys.exit(gate.main())\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        input=_payload("git status"),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert "could not finish checking the command" in completed.stderr
