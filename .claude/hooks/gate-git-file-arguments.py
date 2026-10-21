@@ -152,6 +152,23 @@ three of their arguments do file I/O that has nothing to do with the repository:
   repository (`git log --stdin <revs.txt`) are left alone; see
   `_reading_redirection`.
 
+A command can also arrive as one quoted word that a program hands to a shell:
+`bash -c 'git diff --no-index /dev/null .env'`, `sh -c`, `su -c`,
+`script -qc '...'`, `flock FILE -c '...'`, or the value glued to an option
+(`script -qc'git diff ...'`, `script --command='git diff ...'`). No word of
+the string is `git` to the scans below, so the gated options inside it were
+never read. In bypass and auto permission modes nothing prompts for the
+program in front, and the owner's ruling on atomic-image-builder#772 is that
+every gate refuses the protected action behind any wrapper whether or not
+Claude Code would prompt. So each word that carries more than one word of its
+own, or an option value, and names git, gh, python3 or ruff, is checked here
+as a command line of its own, and a refusal there refuses the whole string;
+see `_command_strings`. That over-refuses a commit message which quotes a
+refused option (`git commit -m "drop git diff --output"`), which is an `ask`
+row and prompts anyway. Strings nested deeper than `_MAX_STRING_DEPTH`, or
+more than `_MAX_STRING_CHECKS` of them in one call, are refused unread,
+because Claude Code runs a command whose hook times out.
+
 Two shapes of the corpus in issue #250 are decided here as *not reachable*
 rather than refused, so that a later pass does not have to work them out again.
 Each rests on a documented property of the permission matcher, not on a guess:
@@ -192,13 +209,20 @@ argument list, so a rule can only ever name one spelling of one position.
 
 Exit 2 blocks the call and returns the message on stderr to the agent. Every
 other path exits 0: a gate that fails closed on its own bugs would make an
-unparseable payload look like an attack.
+unparseable payload look like an attack. The one exception is time: Claude
+Code runs the command when a hook outlives its timeout, so a decision still
+being worked out after `_BUDGET_SECONDS` is a refusal, not a pass. A
+`git diff --no-index /dev/null .env; true git git ...` padded to 200 KB used
+to take minutes here and then run.
 """
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import re
 import shlex
+import signal
 import sys
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -285,8 +309,12 @@ _PUNCTUATION = frozenset("();<>|&")
 # characters ending in an unquoted `@ + ! ? *` that touches a `(`. Group 1 is
 # the word typed before the `(`, so the refusal can name it. Read off the
 # masked string, not the lexed words, so `! (git diff HEAD)` - a negated
-# subshell, with a space the lexer drops - is not one.
-_EXTGLOB_START = re.compile(r"([^\s;&|()<>]*[@+!?*])\(")
+# subshell, with a space the lexer drops - is not one. The lookbehind starts
+# the match only where a run begins: without it the search retried from every
+# character of a long run and scanned to its end each time, and a 150 KB
+# quoted word took longer than Claude Code's hook timeout, after which the
+# command runs unchecked.
+_EXTGLOB_START = re.compile(r"(?<![^\s;&|()<>])([^\s;&|()<>]*[@+!?*])\(")
 
 # The allow rows of `.claude/settings.json` that carry a trailing `:*`, other
 # than git's, which `_runs_git` covers: each is a command prefix the
@@ -462,6 +490,38 @@ _ENV_SPLIT_STRING = re.compile(r"^-S|^--split-string")
 # The command names this hook gates, for the two tests that have to ask "would
 # this string reach one of them" without being able to see the words.
 _GUARDED_NAME = re.compile(r"\b(git|gh|python3|ruff)\b")
+
+# A word that holds a command line of its own: the quoted string `bash -c`,
+# `su -c`, `script -c` or `flock FILE -c` hands a shell. Whitespace, the
+# shell's own punctuation and quotes all count; reading more words than the
+# shell would can only over-refuse.
+_COMMAND_STRING = re.compile(r"[\s;&|()<>`'\"]")
+
+# A short-option cluster, whose letters may end in one that takes the rest of
+# the word as its value (`script -qc'git diff ...'`). Which letter does is not
+# modelled. The guarded name has to end at a word boundary, so inside a run of
+# letters it can only end where the cluster does, and only a few cuts are read.
+_SHORT_CLUSTER = re.compile(r"-[A-Za-z0-9]+")
+_GUARDED_START = re.compile(r"(?:git|gh|python3|ruff)\b")
+
+# How deep a string may sit inside another (`bash -c "sh -c '...'"`), and how
+# many strings one call may hold, before the command is refused unread.
+# Claude Code runs a command whose hook times out, so the work is bounded.
+_MAX_STRING_DEPTH = 4
+_MAX_STRING_CHECKS = 16
+
+# How long one decision may take. Claude Code runs the command when the hook
+# times out, so a command still being read when this runs out is refused.
+_BUDGET_SECONDS = 10
+
+
+class _OverBudget(Exception):
+    """Raised by the alarm once a decision has run past `_BUDGET_SECONDS`."""
+
+
+def _over_budget(signum: int, frame: object) -> None:
+    raise _OverBudget
+
 
 # Ruff's own file-writing flag, `--output-file PATH` / `--output-file=PATH`,
 # and its short `-o`, which clap also takes attached (`-oPATH`) or at the end
@@ -1041,6 +1101,9 @@ def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
     the string, and seven git rows carry a `:*`. The row's whole prefix has
     to be there, word for word: `git checkout $(...)` does not begin
     `git checkout -b `, so no rule approved it and it prompts on its own.
+    Every word after a later `git` is after the first one too, so only the
+    first is read from: reading on from each `git` in turn took minutes on
+    `git git git ...`.
     """
 
     for index, word in enumerate(words):
@@ -1050,6 +1113,7 @@ def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
             for prefix in _ALLOWED_GIT_PREFIXES:
                 if tuple(words[start : start + len(prefix)]) == prefix:
                     return prefix
+        return None
     return None
 
 
@@ -1294,6 +1358,30 @@ def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
     return None
 
 
+def _command_strings(word: str) -> list[str]:
+    """Return the command lines `word` may hand a shell.
+
+    The word itself when it holds more than one word of its own; the value of
+    a long option glued on with `=`; and, for a short-option cluster, the rest
+    of the word after its first letter (`-cGIT_EXTERNAL_DIFF=x git diff`) and
+    after any letter where a guarded name starts (`-qcgit diff ...`).
+    """
+
+    texts = []
+    if _COMMAND_STRING.search(word):
+        texts.append(word)
+    if word.startswith("--"):
+        if "=" in word:
+            texts.append(word.split("=", 1)[1])
+    else:
+        cluster = _SHORT_CLUSTER.match(word)
+        if cluster is not None:
+            for cut in range(2, cluster.end() + 1):
+                if cut == 2 or _GUARDED_START.match(word, cut):
+                    texts.append(word[cut:])
+    return [text for text in texts if _GUARDED_NAME.search(text)]
+
+
 def _runs_git(words: list[str]) -> bool:
     """Whether `words` name git at all, whichever subcommand follows."""
 
@@ -1307,15 +1395,22 @@ def _runs_gated_git(words: list[str]) -> bool:
     look like an option: `git -c key=value diff` would otherwise be read as
     running `key=value` and skip the gate. The cost of the wider test is that
     `git commit -m "diff"` is gated too, which changes nothing - the refusals
-    below still only fire on an option `git commit` does not take.
+    below still only fire on an option `git commit` does not take. A gated
+    subcommand after any `git` is one after the first, so the words are read
+    once: asking it of every `git` in turn took minutes on `git git git ...`.
     """
 
-    for index, word in enumerate(words):
-        if word != "git" and not word.endswith("/git"):
-            continue
-        if any(later in _GATED_SUBCOMMANDS for later in words[index + 1 :]):
-            return True
-    return False
+    first = next(
+        (
+            index
+            for index, word in enumerate(words)
+            if word == "git" or word.endswith("/git")
+        ),
+        None,
+    )
+    if first is None:
+        return False
+    return any(later in _GATED_SUBCOMMANDS for later in words[first + 1 :])
 
 
 def main() -> int:
@@ -1332,6 +1427,32 @@ def main() -> int:
     command = (payload.get("tool_input") or {}).get("command") or ""
     if not isinstance(command, str):
         return 0
+
+    if not hasattr(signal, "setitimer"):
+        return _decide(command, 0, [0])
+    signal.signal(signal.SIGALRM, _over_budget)
+    signal.setitimer(signal.ITIMER_REAL, _BUDGET_SECONDS)
+    try:
+        return _decide(command, 0, [0])
+    except _OverBudget:
+        print(
+            f"Blocked: this hook could not finish checking the command within "
+            f"{_BUDGET_SECONDS} seconds, and Claude Code runs a command whose "
+            "hook times out, so it is refused rather than left half-read. "
+            "Split it into shorter commands.",
+            file=sys.stderr,
+        )
+        return 2
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+def _decide(command: str, depth: int, checks: list[int]) -> int:
+    """Return 2 with the reason on stderr when `command` is refused, else 0.
+
+    `depth` is how many command strings `command` sits inside, and `checks`
+    counts the strings read so far in this call, shared by every level.
+    """
 
     try:
         command = _newlines_to_separators(_strip_comments(_join_continuations(command)))
@@ -1383,6 +1504,34 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # A quoted string handed to a shell (`bash -c '...'`, `script -qc '...'`)
+    # is one word here, so it is read as a command of its own; see the header.
+    for word in words:
+        for text in _command_strings(word):
+            checks[0] += 1
+            if depth >= _MAX_STRING_DEPTH or checks[0] > _MAX_STRING_CHECKS:
+                print(
+                    "Blocked: this command nests or repeats more command strings "
+                    "naming git, gh, python3 or ruff than this hook reads "
+                    f"({_MAX_STRING_DEPTH} deep, {_MAX_STRING_CHECKS} in all). "
+                    "Run the commands on their own.",
+                    file=sys.stderr,
+                )
+                return 2
+            inner = io.StringIO()
+            with contextlib.redirect_stderr(inner):
+                refused = _decide(text, depth + 1, checks)
+            if refused:
+                print(
+                    f"Blocked: {text!r} is a command line handed to a shell as one "
+                    "word (`bash -c`, `sh -c`, `su -c`, `script -c`, `flock -c`, ...), "
+                    "and it is refused on its own. Bypass and auto modes prompt for "
+                    "neither, so it is checked as though it stood alone:\n"
+                    + inner.getvalue().rstrip("\n"),
+                    file=sys.stderr,
+                )
+                return 2
 
     # The redirection is the shell's write, not git's, so it is refused on
     # every git segment: `git status >.claude/settings.json` is allow-listed
