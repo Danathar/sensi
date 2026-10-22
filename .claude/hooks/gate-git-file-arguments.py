@@ -499,6 +499,8 @@ _ENV_SPLIT_STRING = re.compile(r"^-S|^--split-string")
 # The command names this hook gates, for the two tests that have to ask "would
 # this string reach one of them" without being able to see the words.
 _GUARDED_NAME = re.compile(r"\b(git|gh|python3|ruff)\b")
+# What bash drops from a word before it looks the name up; see `_names_guarded`.
+_UNQUOTE = re.compile(r"""[$"'\\]""")
 
 # A word that holds a command line of its own: the quoted string `bash -c`,
 # `su -c`, `script -c` or `flock FILE -c` hands a shell. Whitespace, the
@@ -743,6 +745,36 @@ def _newlines_to_separators(command: str) -> str:
     return "".join(
         ";" if masked[index] == "\n" else char for index, char in enumerate(command)
     )
+
+
+def _drop_quote_dollars(command: str) -> str:
+    """Return the command without the `$` of each unquoted `$'...'` and `$"..."`.
+
+    bash reads `$'git'` as the word `git`, and `$"git"` as `"git"`. shlex keeps
+    the `$` and hands back `$git`, so the command was never seen to run git:
+    `$'git' diff --no-index /dev/null .env` passed. The `$` is removed only
+    where bash would honour it, outside quotes and not after a backslash.
+    """
+
+    kept: list[str] = []
+    quote = ""
+    escaped = False
+    for index, char in enumerate(command):
+        if escaped:
+            escaped = False
+        elif quote:
+            if char == quote:
+                quote = ""
+            elif quote == '"' and char == "\\":
+                escaped = True
+        elif char == "\\":
+            escaped = True
+        elif char in "'\"":
+            quote = char
+        elif char == "$" and command[index + 1 : index + 2] in ("'", '"'):
+            continue
+        kept.append(char)
+    return "".join(kept)
 
 
 def _lex(command: str) -> list[str]:
@@ -1376,6 +1408,21 @@ def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
     return None
 
 
+def _names_guarded(text: str) -> bool:
+    r"""Whether `text` names a guarded command, as written or once unquoted.
+
+    The shell the string is handed to drops quotes and backslashes before it
+    looks a name up, so `g""it`, `gi\t` and `$'git'` inside it all run git
+    while `\bgit\b` finds nothing. The text with `$`, quotes and backslashes
+    removed is tried too. Removing more can only refuse more, and a string
+    that passes as written keeps passing unless that text names a command.
+    """
+
+    return bool(
+        _GUARDED_NAME.search(text) or _GUARDED_NAME.search(_UNQUOTE.sub("", text))
+    )
+
+
 def _command_strings(word: str) -> list[str]:
     """Return the command lines `word` may hand a shell.
 
@@ -1397,7 +1444,7 @@ def _command_strings(word: str) -> list[str]:
             for cut in range(2, cluster.end() + 1):
                 if cut == 2 or _GUARDED_START.match(word, cut):
                     texts.append(word[cut:])
-    return [text for text in texts if _GUARDED_NAME.search(text)]
+    return [text for text in texts if _names_guarded(text)]
 
 
 def _runs_git(words: list[str]) -> bool:
@@ -1473,7 +1520,9 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     """
 
     try:
-        command = _newlines_to_separators(_strip_comments(_join_continuations(command)))
+        command = _drop_quote_dollars(
+            _newlines_to_separators(_strip_comments(_join_continuations(command)))
+        )
         words = _lex(command)
         masked = _lex(_mask_quotes(command))
     except ValueError:

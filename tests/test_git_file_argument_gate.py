@@ -3249,6 +3249,11 @@ def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) ->
         "su -c 'git diff --no-index /dev/null .env'",
         "flock /tmp/l -c 'git diff --no-index /dev/null .env'",
         "script -qc 'git diff --no-index /dev/null .env' /dev/null",
+        # The shell joins a name split by quotes, a backslash or `$'...'` back
+        # together, so the string is read as the command it runs.
+        "script -qc 'g\"\"it diff --no-index /dev/null .env' /dev/null",
+        "script -qc 'gi\\t diff --no-index /dev/null .env' /dev/null",
+        "script -qc \"$'git' diff --no-index /dev/null .env\" /dev/null",
         # The value glued to a short-option cluster or a long option.
         "script -qc'git diff --no-index /dev/null .env' /dev/null",
         "script --command='git diff --no-index /dev/null .env' /dev/null",
@@ -3277,6 +3282,8 @@ def test_a_gated_command_inside_a_command_string_is_refused(command: str) -> Non
         "git commit -m 'git diff output tweak'",
         "gh pr view 1 --json title --jq '.title'",
         "python3 scripts/run_tests.py -k 'git and diff'",
+        "script -qc 'g\"\"it status' /dev/null",
+        "script -qc \"$'git' status\" /dev/null",
     ],
 )
 def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:

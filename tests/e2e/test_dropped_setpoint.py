@@ -54,11 +54,19 @@ FORBIDDEN = ({"error": {"description": "Forbidden"}},)
 
 
 class _Clock:
-    """The watch's clock, moved only when a test moves it."""
+    """The watch's clock, moved only when a test moves it.
+
+    It starts on a whole second. The watch compares differences against
+    SETPOINT_REVERT_CONFIRM with >=, and from a fractional start such as
+    497.4454882892299 the sum t + 20 rounds so that (t + 20) - t is
+    19.999999999999943: the revert is never confirmed and the test fails
+    depending on the runner's uptime. Whole seconds plus the whole and half
+    seconds the tests advance by stay exact.
+    """
 
     def __init__(self) -> None:
-        """Start at the real monotonic time."""
-        self.now = time.monotonic()
+        """Start at the real monotonic time, rounded down to a whole second."""
+        self.now = float(int(time.monotonic()))
 
     def __call__(self) -> float:
         """Return the current time."""
