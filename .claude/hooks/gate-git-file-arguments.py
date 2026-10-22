@@ -196,8 +196,23 @@ Each rests on a documented property of the permission matcher, not on a guess:
   `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
   the rule matches only a string that *begins* `git diff `. A global option
   stands before the subcommand, so `git -c ... diff` begins `git -c` and
-  matches nothing. The same answer covers a brace-built command name
-  (`{,git} diff`), which begins `{,git}`.
+  matches nothing.
+
+A brace-built command name (`{,git} diff`) begins `{,git}` and matches no
+allow row either, and was once decided here as not reachable with them. It is
+refused now (#650), with the other spellings of a name bash reads differently
+from the way it is typed, because bypass and auto modes prompt for nothing and
+the ruling on atomic-image-builder#772 is that a gate refuses the protected
+action however it is reached. bash expands a brace group (`{git,}` is `git`,
+`{git,diff}` is `git diff`), matches a wildcard path against the disk
+(`/usr/bin/g?t` is /usr/bin/git) and decodes the escapes of `$'...'` (a hex
+escape `x67` is `g`) before it looks a name up. `$'...'` is decoded before the
+command is split (`_drop_quote_dollars`), so every check reads the word bash
+passes on. A word holding a `/` and a wildcard is read as each guarded command
+it can match (`_glob_names`), so `/usr/bin/g?t diff ...` meets the git rules
+and `ls /usr/bin/g*` still passes. A word whose unquoted braces can make a
+guarded name is refused wherever it stands (`_brace_built_name`), since the
+words a brace adds are not modelled; `cat {a,b}.txt` makes none and passes.
 
 The three rows with no `:*` were an open question in #250 and were decided in
 #256: they are gated like the `:*` rows. A rule with no wildcard matches one
@@ -226,6 +241,7 @@ to take minutes here and then run.
 """
 
 import contextlib
+import fnmatch
 import io
 import json
 from pathlib import Path
@@ -501,6 +517,56 @@ _ENV_SPLIT_STRING = re.compile(r"^-S|^--split-string")
 _GUARDED_NAME = re.compile(r"\b(git|gh|python3|ruff)\b")
 # What bash drops from a word before it looks the name up; see `_names_guarded`.
 _UNQUOTE = re.compile(r"""[$"'\\]""")
+# The same names, for the tests that read one word rather than search a string.
+_GUARDED_NAMES = ("git", "gh", "python3", "ruff")
+# What splits a command string into the words `_names_guarded` reads one at a
+# time. Reading more words than the shell would can only over-refuse.
+_STRING_WORD = re.compile(r"[\s;&|()<>`=]+")
+
+# A command name the shell builds before it looks the name up (#650). bash
+# expands a brace group in any unquoted word, so `{git,}` is `git`, `g{i,x}t`
+# is `git gxt` and `{f..h}it` is `fit git hit`, and each of them runs git.
+# `_BRACE_GROUP` finds an innermost group, one with no brace inside it; a group
+# with no comma and no `..` sequence is literal to bash (`{x}`, `HEAD@{1}`),
+# and its braces are swapped for the two stand-ins below so that the group
+# around it can still be read. A word that would make more than
+# `_MAX_BRACE_FORMS` words is not listed out; see `_brace_names`.
+_BRACE_GROUP = re.compile(r"\{([^{}]*)\}")
+_BRACE_SEQUENCE = re.compile(
+    r"(-?[0-9]+|[A-Za-z])\.\.(-?[0-9]+|[A-Za-z])(?:\.\.-?[0-9]+)?"
+)
+_LITERAL_OPEN = "\ue000"
+_LITERAL_CLOSE = "\ue001"
+_MAX_BRACE_FORMS = 32
+
+# A bracket expression of a wildcard: `[abc]`, `[!a]`, `[^a]`, `[[:alpha:]]`.
+# Each matches one character, so `_glob_names` reads it as `?`, which matches
+# every character bash's would and more.
+_GLOB_BRACKET = re.compile(r"\[[!^]?\]?(?:\[:[a-z]+:\]|[^\]])*\]")
+
+# The backslash escapes bash decodes inside `$'...'`: octal `\NNN`, `\xHH`,
+# `\uHHHH`, `\UHHHHHHHH`, a control character `\cX`, and the one-letter forms
+# below. Any other backslash is kept as typed, as bash keeps it.
+_ANSI_C_ESCAPE = re.compile(
+    r"\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})"
+    r"|U([0-9A-Fa-f]{1,8})|c(.)|(.))",
+    re.DOTALL,
+)
+_ANSI_C_LETTERS = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
 
 # A word that holds a command line of its own: the quoted string `bash -c`,
 # `su -c`, `script -c` or `flock FILE -c` hands a shell. Whitespace, the
@@ -748,18 +814,28 @@ def _newlines_to_separators(command: str) -> str:
 
 
 def _drop_quote_dollars(command: str) -> str:
-    """Return the command without the `$` of each unquoted `$'...'` and `$"..."`.
+    r"""Return the command with each unquoted `$'...'` and `$"..."` read as bash does.
 
     bash reads `$'git'` as the word `git`, and `$"git"` as `"git"`. shlex keeps
     the `$` and hands back `$git`, so the command was never seen to run git:
     `$'git' diff --no-index /dev/null .env` passed. The `$` is removed only
     where bash would honour it, outside quotes and not after a backslash.
+
+    Inside `$'...'` bash also decodes backslash escapes, so `$'\x67it'`,
+    `$'\147it'` and `$'\u0067it'` are all `git`, and shlex read them as the
+    word `\x67it` (#650). The body is decoded here and put back in plain
+    single quotes, which shlex reads as typed, so every check after this one
+    sees the word bash passes on. An unterminated `$'` loses its `$` as before
+    and is refused as an unbalanced quote.
     """
 
     kept: list[str] = []
     quote = ""
     escaped = False
-    for index, char in enumerate(command):
+    index = 0
+    while index < len(command):
+        char = command[index]
+        index += 1
         if escaped:
             escaped = False
         elif quote:
@@ -771,10 +847,55 @@ def _drop_quote_dollars(command: str) -> str:
             escaped = True
         elif char in "'\"":
             quote = char
-        elif char == "$" and command[index + 1 : index + 2] in ("'", '"'):
+        elif char == "$" and command[index : index + 1] == "'":
+            end = _ansi_c_end(command, index + 1)
+            if end is not None:
+                body = _decode_ansi_c(command[index + 1 : end])
+                kept.append("'" + body.replace("'", "'\\''") + "'")
+                index = end + 1
+            continue
+        elif char == "$" and command[index : index + 1] == '"':
             continue
         kept.append(char)
     return "".join(kept)
+
+
+def _ansi_c_end(command: str, start: int) -> int | None:
+    r"""Return the index of the `'` that closes a `$'...'` body begun at `start`.
+
+    A backslash takes the character after it, so `\'` does not close it.
+    """
+
+    index = start
+    while index < len(command):
+        if command[index] == "\\":
+            index += 2
+            continue
+        if command[index] == "'":
+            return index
+        index += 1
+    return None
+
+
+def _decode_ansi_c(body: str) -> str:
+    r"""Return the body of a `$'...'` with its backslash escapes decoded.
+
+    bash's result is a C string, so it ends at the first NUL: `$'git\0x'` is
+    `git`.
+    """
+
+    def one(match: re.Match[str]) -> str:
+        octal, hexa, short, long, control, other = match.groups()
+        if octal:
+            return chr(int(octal, 8) & 0xFF)
+        if hexa or short or long:
+            code = int(hexa or short or long, 16)
+            return chr(code) if code <= 0x10FFFF else match.group(0)
+        if control:
+            return chr(ord(control) & 0x1F)
+        return _ANSI_C_LETTERS.get(other, match.group(0))
+
+    return _ANSI_C_ESCAPE.sub(one, body).split("\0", 1)[0]
 
 
 def _lex(command: str) -> list[str]:
@@ -1148,7 +1269,7 @@ def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
     """
 
     for index, word in enumerate(words):
-        if word != "git" and not word.endswith("/git"):
+        if not _is_named(word, "git"):
             continue
         for start in range(index + 1, len(words)):
             for prefix in _ALLOWED_GIT_PREFIXES:
@@ -1167,7 +1288,7 @@ def _after_git(words: list[str], subcommand: tuple[str, ...]) -> list[str] | Non
     """
 
     for index, word in enumerate(words):
-        if word != "git" and not word.endswith("/git"):
+        if not _is_named(word, "git"):
             continue
         after = index + 1 + len(subcommand)
         if tuple(words[index + 1 : after]) == subcommand:
@@ -1328,11 +1449,19 @@ def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
 
 
 def _gated_row(words: list[str], starts: range) -> tuple[str, ...] | None:
-    """Return the first gated allow row that begins at one of `starts`."""
+    """Return the first gated allow row that begins at one of `starts`.
+
+    The row's command name may be written as a wildcard path that can expand
+    to it (`/usr/bin/g? pr view ...`, #650); the rest of the row is matched
+    word for word.
+    """
 
     for start in starts:
+        name = words[start] if start < len(words) else ""
+        globbed = _glob_names(name)
         for prefix in _GATED_PREFIXES + _EXACT_ROWS:
-            if tuple(words[start : start + len(prefix)]) == prefix:
+            head = name == prefix[0] or prefix[0] in globbed
+            if head and tuple(words[start + 1 : start + len(prefix)]) == prefix[1:]:
                 return prefix
     return None
 
@@ -1395,7 +1524,7 @@ def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
     chain = wrappers + words
     found = None
     for index, word in enumerate(chain):
-        if word == "git" or word.endswith("/git"):
+        if _is_named(word, "git"):
             return found
         if _gated_row(chain, range(index, index + 1)):
             return found
@@ -1409,18 +1538,193 @@ def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
 
 
 def _names_guarded(text: str) -> bool:
-    r"""Whether `text` names a guarded command, as written or once unquoted.
+    r"""Whether `text` names a guarded command, as written or as bash reads it.
 
     The shell the string is handed to drops quotes and backslashes before it
     looks a name up, so `g""it`, `gi\t` and `$'git'` inside it all run git
     while `\bgit\b` finds nothing. The text with `$`, quotes and backslashes
-    removed is tried too. Removing more can only refuse more, and a string
-    that passes as written keeps passing unless that text names a command.
+    removed is tried too, and so is the text with its `$'...'` escapes decoded
+    first (`$'\x67it'`). So is each word of it that a brace group or a
+    wildcard path can make a guarded name of (`g{i,x}t`, `/usr/bin/g?t`,
+    #650). Removing more can only refuse more, and a string that passes as
+    written keeps passing unless that text names a command.
     """
 
+    decoded = _UNQUOTE.sub("", _drop_quote_dollars(text))
     return bool(
-        _GUARDED_NAME.search(text) or _GUARDED_NAME.search(_UNQUOTE.sub("", text))
+        _GUARDED_NAME.search(text)
+        or _GUARDED_NAME.search(_UNQUOTE.sub("", text))
+        or _GUARDED_NAME.search(decoded)
+        or any(
+            _brace_names(word) or _glob_names(word)
+            for word in _STRING_WORD.split(decoded)
+        )
     )
+
+
+def _brace_names(word: str) -> frozenset[str]:
+    """Return the guarded names bash's brace expansion of `word` can make.
+
+    Empty when `word` holds no group bash would expand. A name counts as a
+    word of its own, as the end of a path (`{/usr/bin/,}git`), or as a
+    wildcard path `_glob_names` reads. Past `_MAX_BRACE_FORMS` words the
+    expansion is not listed: a name counts when its letters stand in that
+    order in the word with the brace punctuation taken out and each `..`
+    sequence written out as its whole range. Every word the expansion makes
+    is spelled by such a subsequence, so a long group never hides a name; it
+    can only be read as naming one it does not make.
+    """
+
+    if "{" not in word or not _EXPANDING_BRACE.search(word):
+        return frozenset()
+    forms = _brace_forms(word)
+    if forms is None:
+        flat = _BRACE_GROUP.sub(_sequence_range, word)
+        flat = re.sub(r"[{},]", "", flat)
+        return frozenset(name for name in _GUARDED_NAMES if _in_order(name, flat))
+    if forms == [word]:
+        return frozenset()
+    names: set[str] = set()
+    for form in forms:
+        names.update(_glob_names(form))
+        names.update(
+            name for name in _GUARDED_NAMES if form == name or form.endswith("/" + name)
+        )
+    return frozenset(names)
+
+
+def _brace_forms(word: str) -> list[str] | None:
+    """Return the words bash's brace expansion makes of `word`, or None past the cap.
+
+    Innermost groups first. A literal group's braces are swapped for stand-ins
+    while the groups around it are read, and put back at the end.
+    """
+
+    pending, forms = [word], []
+    while pending:
+        form = pending.pop()
+        group = _expanding_group(form)
+        if group is None:
+            forms.append(form.replace(_LITERAL_OPEN, "{").replace(_LITERAL_CLOSE, "}"))
+            continue
+        form, start, end, alternatives = group
+        pending.extend(form[:start] + choice + form[end:] for choice in alternatives)
+        if len(pending) + len(forms) > _MAX_BRACE_FORMS:
+            return None
+    return forms
+
+
+def _expanding_group(form: str) -> tuple[str, int, int, list[str]] | None:
+    """Return the first innermost brace group of `form` that bash would expand.
+
+    Returned with `form` as rewritten to set the literal groups before it
+    aside, the group's span in it, and what the group expands to.
+    """
+
+    while True:
+        group = _BRACE_GROUP.search(form)
+        if group is None:
+            return None
+        alternatives = _brace_alternatives(group.group(1))
+        if alternatives is not None:
+            return form, group.start(), group.end(), alternatives
+        literal = _LITERAL_OPEN + group.group(1) + _LITERAL_CLOSE
+        form = form[: group.start()] + literal + form[group.end() :]
+
+
+def _brace_alternatives(body: str) -> list[str] | None:
+    """Return what a brace group with `body` inside expands to; None if literal.
+
+    A comma list, or a `..` sequence of two letters or two integers. A
+    sequence's step is ignored, which lists more words than bash makes and
+    never fewer, and an integer range longer than the cap is cut just past
+    it, which is enough to stop `_brace_forms` listing.
+    """
+
+    if "," in body:
+        return body.split(",")
+    sequence = _BRACE_SEQUENCE.fullmatch(body)
+    if sequence is None:
+        return None
+    first, last = sequence.group(1), sequence.group(2)
+    if first.isalpha() != last.isalpha():
+        return None
+    if first.isalpha():
+        low, high = sorted((ord(first), ord(last)))
+        return [chr(code) for code in range(low, high + 1)]
+    low, high = sorted((int(first), int(last)))
+    return [str(number) for number in range(low, min(high, low + _MAX_BRACE_FORMS) + 1)]
+
+
+def _sequence_range(group: re.Match[str]) -> str:
+    """Return a `..` sequence group as every character it can put in a word."""
+
+    sequence = _BRACE_SEQUENCE.fullmatch(group.group(1))
+    if sequence is None:
+        return group.group(0)
+    first, last = sequence.group(1), sequence.group(2)
+    if first.isalpha() and last.isalpha():
+        low, high = sorted((ord(first), ord(last)))
+        return "".join(chr(code) for code in range(low, high + 1))
+    return "-0123456789"
+
+
+def _in_order(name: str, text: str) -> bool:
+    """Whether the letters of `name` stand in `text` in that order."""
+
+    rest = iter(text)
+    return all(letter in rest for letter in name)
+
+
+def _glob_names(word: str) -> frozenset[str]:
+    """Return the guarded names a wildcard path in `word` can expand to.
+
+    bash matches a word holding `*`, `?` or `[` against the files on disk, so
+    `/usr/bin/g?t` runs /usr/bin/git (#650). Only a word with a `/` counts,
+    as in the fleet's other gates: a bare `g?t` matches a file in the working
+    directory, and a file named git there is already a program of its own.
+    Only the last component is read, since an earlier one only picks the
+    directory. A last component of nothing but `*` and `?` names no program
+    in particular - bash runs the first file it matches in sorted order - and
+    is left alone, so `ls src/*` is not read as running git. A bracket
+    expression is read as `?`.
+    """
+
+    if "/" not in word:
+        return frozenset()
+    pattern = word.rsplit("/", 1)[1]
+    if _GLOB.isdisjoint(pattern) or not pattern.strip("*?"):
+        return frozenset()
+    pattern = _GLOB_BRACKET.sub("?", pattern)
+    return frozenset(
+        name for name in _GUARDED_NAMES if fnmatch.fnmatchcase(name, pattern)
+    )
+
+
+def _is_named(word: str, name: str) -> bool:
+    """Whether bash can run `name` from the word `word`.
+
+    Spelled out, as the end of a path, or as a wildcard path that can expand
+    to it (#650). A brace group that makes the name is refused outright
+    before this is asked; see `_brace_built_name`.
+    """
+
+    return word == name or word.endswith("/" + name) or name in _glob_names(word)
+
+
+def _brace_built_name(segment: list[str], twins: list[str]) -> tuple[str, str] | None:
+    """Return a word of `segment` whose braces make a guarded name, and the name.
+
+    Only a word whose twin holds an unquoted `{` is read, since bash expands no
+    quoted brace: `git commit -m '{git,}'` is left alone.
+    """
+
+    for word, twin in zip(segment, twins, strict=True):
+        if "{" in twin:
+            names = _brace_names(word)
+            if names:
+                return word, min(names)
+    return None
 
 
 def _command_strings(word: str) -> list[str]:
@@ -1428,8 +1732,9 @@ def _command_strings(word: str) -> list[str]:
 
     The word itself when it holds more than one word of its own; the value of
     a long option glued on with `=`; and, for a short-option cluster, the rest
-    of the word after its first letter (`-cGIT_EXTERNAL_DIFF=x git diff`) and
-    after any letter where a guarded name starts (`-qcgit diff ...`).
+    of the word after its first letter (`-cGIT_EXTERNAL_DIFF=x git diff`),
+    after any letter where a guarded name starts (`-qcgit diff ...`), and
+    after any letter where a brace group builds one (`-qcg{,}it diff ...`).
     """
 
     texts = []
@@ -1442,7 +1747,11 @@ def _command_strings(word: str) -> list[str]:
         cluster = _SHORT_CLUSTER.match(word)
         if cluster is not None:
             for cut in range(2, cluster.end() + 1):
-                if cut == 2 or _GUARDED_START.match(word, cut):
+                if (
+                    cut == 2
+                    or _GUARDED_START.match(word, cut)
+                    or _brace_names((word[cut:].split(None, 1) or [""])[0])
+                ):
                     texts.append(word[cut:])
     return [text for text in texts if _names_guarded(text)]
 
@@ -1450,7 +1759,7 @@ def _command_strings(word: str) -> list[str]:
 def _runs_git(words: list[str]) -> bool:
     """Whether `words` name git at all, whichever subcommand follows."""
 
-    return any(word == "git" or word.endswith("/git") for word in words)
+    return any(_is_named(word, "git") for word in words)
 
 
 def _runs_gated_git(words: list[str]) -> bool:
@@ -1466,11 +1775,7 @@ def _runs_gated_git(words: list[str]) -> bool:
     """
 
     first = next(
-        (
-            index
-            for index, word in enumerate(words)
-            if word == "git" or word.endswith("/git")
-        ),
+        (index for index, word in enumerate(words) if _is_named(word, "git")),
         None,
     )
     if first is None:
@@ -1615,6 +1920,21 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     # not read them as paths outside the repository.
     stepped_over: list[str] = []
     for segment, twins in _segments(words, masked):
+        built = _brace_built_name(segment, twins)
+        if built is not None:
+            word, name = built
+            print(
+                f"Blocked: `{word}` is a brace group the shell expands before "
+                f"it looks the command up, and one word it makes is `{name}`: "
+                "`{git,} diff --no-index /dev/null .env` runs git and prints "
+                ".env, and `{git,diff}` is `git diff`, two words where one was "
+                "written. This hook reads a command name as bash reads it, and "
+                "the words a brace adds are not modelled, so the word is "
+                "refused wherever it stands (#650). Spell the name out: "
+                "`git status` passes as written.",
+                file=sys.stderr,
+            )
+            return 2
         if _splits_a_string(segment) and _GUARDED_NAME.search(" ".join(segment)):
             print(
                 "Blocked: `env -S` (--split-string) splits a quoted string into a "
@@ -1892,6 +2212,17 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
         # judged by `_reading_redirection` above and still passes through here.
         if word == "/dev/null" and index and masked[index - 1] == "<":
             continue
+        globbed = _glob_names(word)
+        if globbed:
+            print(
+                f"Blocked: {word!r} is a wildcard path the shell matches against "
+                "the files on disk before anything runs, and it can match "
+                f"{' or '.join(sorted(globbed))}, so it is read as that command: "
+                "`/usr/bin/g?t diff --no-index /dev/null .env` runs "
+                "/usr/bin/git and prints .env (#650). Spell the path out.",
+                file=sys.stderr,
+            )
+            return 2
         if (
             any(char in word for char in _UNEXPANDED)
             or _brace_would_expand(word)
