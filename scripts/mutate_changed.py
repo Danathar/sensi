@@ -530,10 +530,9 @@ def _judge(work: list[tuple], copies: queue.Queue, jobs: int) -> list[Mutant]:
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
     try:
         futures = {executor.submit(_survives, item, copies): item[0] for item in work}
-        done = 0
-        for future in concurrent.futures.as_completed(futures):
+        completed = concurrent.futures.as_completed(futures)
+        for done, future in enumerate(completed, 1):
             mutant = futures[future]
-            done += 1
             survived = future.result()
             verdict = "SURVIVED" if survived else "caught"
             where = f"[{done}/{len(work)}] {mutant.path}:{mutant.line}: {verdict}"
