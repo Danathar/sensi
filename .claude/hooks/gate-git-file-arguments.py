@@ -1409,11 +1409,11 @@ def _spelled_wrapper(segment: list[str]) -> tuple[str, str] | None:
 
 
 def _names_guarded(text: str) -> bool:
-    """Whether `text` names a guarded command, as written or once unquoted.
+    r"""Whether `text` names a guarded command, as written or once unquoted.
 
     The shell the string is handed to drops quotes and backslashes before it
-    looks a name up, so `g""it`, `gi\\t` and `$'git'` inside it all run git
-    while `\\bgit\\b` finds nothing. The text with `$`, quotes and backslashes
+    looks a name up, so `g""it`, `gi\t` and `$'git'` inside it all run git
+    while `\bgit\b` finds nothing. The text with `$`, quotes and backslashes
     removed is tried too. Removing more can only refuse more, and a string
     that passes as written keeps passing unless that text names a command.
     """
