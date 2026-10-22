@@ -208,11 +208,18 @@ action however it is reached. bash expands a brace group (`{git,}` is `git`,
 (`/usr/bin/g?t` is /usr/bin/git) and decodes the escapes of `$'...'` (a hex
 escape `x67` is `g`) before it looks a name up. `$'...'` is decoded before the
 command is split (`_drop_quote_dollars`), so every check reads the word bash
-passes on. A word holding a `/` and a wildcard is read as each guarded command
-it can match (`_glob_names`), so `/usr/bin/g?t diff ...` meets the git rules
-and `ls /usr/bin/g*` still passes. A word whose unquoted braces can make a
-guarded name is refused wherever it stands (`_brace_built_name`), since the
-words a brace adds are not modelled; `cat {a,b}.txt` makes none and passes.
+passes on. A word holding a wildcard is read as each guarded command it can
+match (`_glob_names`), so `/usr/bin/g?t diff ...` meets the git rules and
+`ls /usr/bin/g*` still passes. That holds for a word with no `/` too
+(#653): with a file named `git` in the working directory, `g?t` expands to
+the word `git`, and bash looks that word up on PATH and runs /usr/bin/git,
+not the file. A command word made of nothing but wildcards (`*`, `???`) runs
+whichever file sorts first, so it is refused (`_wildcard_command`). A path
+to gh, python3 or ruff (`/usr/bin/gh`) starts their rows as the bare name
+does (`_gated_row`), as a path to git already did. A word whose unquoted
+braces can make a guarded name is refused wherever it stands
+(`_brace_built_name`), since the words a brace adds are not modelled;
+`cat {a,b}.txt` makes none and passes.
 
 The three rows with no `:*` were an open question in #250 and were decided in
 #256: they are gated like the `:*` rows. A rule with no wildcard matches one
@@ -535,6 +542,10 @@ _BRACE_GROUP = re.compile(r"\{([^{}]*)\}")
 _BRACE_SEQUENCE = re.compile(
     r"(-?[0-9]+|[A-Za-z])\.\.(-?[0-9]+|[A-Za-z])(?:\.\.-?[0-9]+)?"
 )
+# A number a wrapper takes before the command it runs: `timeout 5`,
+# `timeout 1.5m`, `nice -n 5`; see `_wildcard_command`.
+_WRAPPER_NUMBER = re.compile(r"[+-]?[0-9.]+[smhd]?")
+
 _LITERAL_OPEN = "\ue000"
 _LITERAL_CLOSE = "\ue001"
 _MAX_BRACE_FORMS = 32
@@ -1451,8 +1462,9 @@ def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
 def _gated_row(words: list[str], starts: range) -> tuple[str, ...] | None:
     """Return the first gated allow row that begins at one of `starts`.
 
-    The row's command name may be written as a wildcard path that can expand
-    to it (`/usr/bin/g? pr view ...`, #650); the rest of the row is matched
+    The row's command name may be written as a path to it (`/usr/bin/gh pr
+    view ...`, #653) or as a wildcard that can expand to it (`/usr/bin/g? pr
+    view ...`, #650; `g? pr view ...`, #653); the rest of the row is matched
     word for word.
     """
 
@@ -1460,7 +1472,11 @@ def _gated_row(words: list[str], starts: range) -> tuple[str, ...] | None:
         name = words[start] if start < len(words) else ""
         globbed = _glob_names(name)
         for prefix in _GATED_PREFIXES + _EXACT_ROWS:
-            head = name == prefix[0] or prefix[0] in globbed
+            head = (
+                name == prefix[0]
+                or name.endswith("/" + prefix[0])
+                or prefix[0] in globbed
+            )
             if head and tuple(words[start + 1 : start + len(prefix)]) == prefix[1:]:
                 return prefix
     return None
@@ -1677,22 +1693,21 @@ def _in_order(name: str, text: str) -> bool:
 
 
 def _glob_names(word: str) -> frozenset[str]:
-    """Return the guarded names a wildcard path in `word` can expand to.
+    """Return the guarded names a wildcard in `word` can expand to.
 
     bash matches a word holding `*`, `?` or `[` against the files on disk, so
-    `/usr/bin/g?t` runs /usr/bin/git (#650). Only a word with a `/` counts,
-    as in the fleet's other gates: a bare `g?t` matches a file in the working
-    directory, and a file named git there is already a program of its own.
-    Only the last component is read, since an earlier one only picks the
-    directory. A last component of nothing but `*` and `?` names no program
-    in particular - bash runs the first file it matches in sorted order - and
-    is left alone, so `ls src/*` is not read as running git. A bracket
-    expression is read as `?`.
+    `/usr/bin/g?t` runs /usr/bin/git (#650). A word with no `/` counts too
+    (#653): with any file named git in the working directory, `g?t` expands
+    to the word `git`, which has no `/`, so bash looks it up on PATH and runs
+    /usr/bin/git - the file only has to exist. Only the last component is
+    read, since an earlier one only picks the directory. A last component of
+    nothing but `*` and `?` names no program in particular - bash runs the
+    first file it matches in sorted order - and is left alone here, so `ls
+    src/*` is not read as running git; as a command word it is refused by
+    `_wildcard_command`. A bracket expression is read as `?`.
     """
 
-    if "/" not in word:
-        return frozenset()
-    pattern = word.rsplit("/", 1)[1]
+    pattern = word.rsplit("/", 1)[-1]
     if _GLOB.isdisjoint(pattern) or not pattern.strip("*?"):
         return frozenset()
     pattern = _GLOB_BRACKET.sub("?", pattern)
@@ -1710,6 +1725,29 @@ def _is_named(word: str, name: str) -> bool:
     """
 
     return word == name or word.endswith("/" + name) or name in _glob_names(word)
+
+
+def _wildcard_command(segment: list[str]) -> str | None:
+    """Return the command word of `segment` if it is made only of wildcards.
+
+    bash expands `*`, `???` or `./*` to the files it matches and runs the
+    first in sorted order, by its name, so a working directory whose first
+    entry is a file named git makes `* diff --no-index /dev/null .env` run
+    /usr/bin/git (#653). The command word is the first word, or behind a
+    wrapper the first word after the wrapper's options and numbers
+    (`timeout 5 *`, `nice -n 5 *`). An option's value that is not a number
+    (`stdbuf -o L *`) is read as the command word, which can only miss.
+    """
+
+    words, wrappers, _assigned = _command_words(segment)
+    for word in words:
+        if wrappers and (word.startswith("-") or _WRAPPER_NUMBER.fullmatch(word)):
+            continue
+        pattern = word.rsplit("/", 1)[-1]
+        if pattern and not pattern.strip("*?"):
+            return word
+        return None
+    return None
 
 
 def _brace_built_name(segment: list[str], twins: list[str]) -> tuple[str, str] | None:
@@ -1932,6 +1970,18 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 "the words a brace adds are not modelled, so the word is "
                 "refused wherever it stands (#650). Spell the name out: "
                 "`git status` passes as written.",
+                file=sys.stderr,
+            )
+            return 2
+        wildcard = _wildcard_command(segment)
+        if wildcard is not None:
+            print(
+                f"Blocked: `{wildcard}` is a command name made only of "
+                "wildcards. bash expands it to the files it matches and runs "
+                "the first one in sorted order by its name, so a working "
+                "directory whose first entry is a file named git makes `* diff "
+                "--no-index /dev/null .env` run git and print .env (#653). "
+                "Spell the command name out.",
                 file=sys.stderr,
             )
             return 2
@@ -2215,11 +2265,13 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
         globbed = _glob_names(word)
         if globbed:
             print(
-                f"Blocked: {word!r} is a wildcard path the shell matches against "
+                f"Blocked: {word!r} is a wildcard the shell matches against "
                 "the files on disk before anything runs, and it can match "
                 f"{' or '.join(sorted(globbed))}, so it is read as that command: "
                 "`/usr/bin/g?t diff --no-index /dev/null .env` runs "
-                "/usr/bin/git and prints .env (#650). Spell the path out.",
+                "/usr/bin/git and prints .env (#650), and so does `g?t diff "
+                "...` once a file named git is in the working directory "
+                "(#653). Spell the name out.",
                 file=sys.stderr,
             )
             return 2
