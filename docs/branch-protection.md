@@ -42,7 +42,7 @@ actor as drift and fails on it.
 `HACS`, and `manifest requirements match requirements_component.txt`.
 
 All six run unconditionally on every pull request, which is the property that
-makes a check safe to require. Three that also appear on a pull request are
+makes a check safe to require. Four that also appear on a pull request are
 deliberately **not** required:
 
 - **`publish badge and trend`** runs only on a push to `master`
@@ -51,6 +51,10 @@ deliberately **not** required:
 - **`path labels`** and **`risk tier and size`** classify a change; they do not
   verify it. Making a labelling job a merge blocker means a labelling outage
   blocks every merge, and buys nothing a reviewer was relying on.
+- **`mutation (changed lines)`** is advisory while its first runs are
+  triaged: a surviving mutant needs a test or a
+  `tests/mutation-equivalents.txt` entry, and that call is still being
+  calibrated. Making it required is the owner's decision.
 
 Adding a required check means editing `master.json` *and* re-applying it. A
 check added to CI is not automatically required.

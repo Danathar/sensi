@@ -27,3 +27,9 @@ Then:
 Note that `hassfest` and HACS validation also run in CI and cannot be reproduced
 locally; if the change touches `manifest.json`, `strings.json`, `translations/`
 or the repository layout, say so explicitly.
+
+CI also runs `scripts/mutate_changed.py` on every pull request, in the advisory
+`mutation (changed lines)` job. It is not in the block above because it runs
+the tests once for every small edit of every changed line, which takes
+minutes. If that job reports a survivor, add a test that fails on the edit it
+prints, or list the edit in `tests/mutation-equivalents.txt` with a reason.

@@ -1,0 +1,41 @@
+# Surviving mutants a reviewer has judged harmless.
+#
+# scripts/mutate_changed.py makes small edits to the lines a pull request
+# changes - a comparison negated, `and` swapped with `or`, an integer moved by
+# one, `return x` turned into `return None` - and runs the tests that load the
+# file after each one. An edit every test still passes with is a survivor, and
+# the mutation job fails on any survivor that is not listed here.
+#
+# List a survivor only when no test should fail on it:
+#
+# - equivalent: the edit cannot change what the code does
+# - message-only: it changes only the wording of a refusal or a log line
+# - fail-closed: it makes the code refuse or raise more, never less
+#
+# A survivor that lets a refused command through, or drops a check, needs a
+# test instead.
+#
+# Each entry is a block of five lines, and blank lines separate entries. The
+# job prints every unlisted survivor in this form with `reason:` empty; copy
+# the block here and write the reason after it.
+#
+#   file: the path of the mutated file, from the repository root
+#   line: the line number the edit starts on, for the reader only
+#   original: the source line(s) the edit replaces, stripped, several lines
+#     joined by one space
+#   mutant: the source line after the edit, stripped
+#   reason: one line saying why no test should fail on it
+#
+# An entry matches on file, original and mutant together. The line number is
+# not part of the match, so an entry still matches after lines above it move,
+# and one entry covers every identical line in the file with the same edit.
+#
+# For example (the hash marks stay off a real entry):
+#
+#   file: scripts/example.py
+#   line: 12
+#   original: if count > 0:
+#   mutant: if count >= 0:
+#   reason: equivalent; count is never 0 here, the loop above starts it at 1
+#
+# A line starting with `#` is a comment.

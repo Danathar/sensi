@@ -813,17 +813,33 @@ def test_branch_protection_doc_names_the_required_checks_exactly() -> None:
     assert "The six required checks" in text
 
 
+# Rows of docs/quality.md's gate table for checks that run on every pull
+# request but are advisory, mapped to the workflow the row names. The ruleset
+# must not require them; every other row must be a required check.
+_ADVISORY_GATE_ROWS = {"mutation (changed lines)": "ci.yml"}
+
+
 def test_quality_doc_gate_table_covers_every_required_check() -> None:
     """docs/quality.md's gate table is a third copy of the same list.
 
-    Its last row abbreviates `manifest requirements match
+    Its sixth row abbreviates `manifest requirements match
     requirements_component.txt`, so a row matches by prefix - but every
     required check must still have exactly one row, and the table must not
-    claim a check the ruleset does not require.
+    claim a check the ruleset does not require. An advisory row is the one
+    exception, and it must stay out of the ruleset.
     """
-    rows = re.findall(
+    every_row = re.findall(
         r"^\| `([^`]+)` \| `([a-z-]+\.yml)` \|", _read(_QUALITY_DOC), re.M
     )
+    advisory = [row for row in every_row if row[0] in _ADVISORY_GATE_ROWS]
+    assert dict(advisory) == _ADVISORY_GATE_ROWS, (
+        f"docs/quality.md's advisory rows are {advisory}; expected "
+        f"{_ADVISORY_GATE_ROWS}"
+    )
+    assert not set(_ADVISORY_GATE_ROWS) & set(_required_contexts()), (
+        "an advisory row in docs/quality.md names a check the ruleset requires"
+    )
+    rows = [row for row in every_row if row[0] not in _ADVISORY_GATE_ROWS]
     assert len(rows) == 6, f"docs/quality.md's gate table has {len(rows)} rows"
 
     required = _required_contexts()

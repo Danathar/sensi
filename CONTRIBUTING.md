@@ -46,7 +46,7 @@ CI runs the same things:
 
 | Workflow | What it enforces |
 | --- | --- |
-| `.github/workflows/ci.yml` | the pytest suite |
+| `.github/workflows/ci.yml` | the pytest suite, plus an advisory mutation check of the Python lines a pull request changes |
 | `.github/workflows/coverage-gate.yml` | line coverage stays at or above the threshold |
 | `.github/workflows/validate.yml` | `ruff`, hassfest, HACS, and requirements sync |
 | `.github/workflows/labeler.yml` | applies path, risk-tier and size labels |

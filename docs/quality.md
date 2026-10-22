@@ -5,7 +5,8 @@ actually proves, and — more importantly — what it does not.
 
 ## The gates
 
-Every pull request runs six checks. All are required.
+Every pull request runs seven checks. Six are required; the last row is
+advisory and does not block a merge.
 
 | Check | Workflow | Proves | Does not prove |
 | --- | --- | --- | --- |
@@ -15,6 +16,17 @@ Every pull request runs six checks. All are required.
 | `hassfest` | `validate.yml` | the manifest, strings and translations satisfy Home Assistant core | runtime behaviour |
 | `HACS` | `validate.yml` | repository metadata is installable through HACS | anything about the code |
 | `manifest requirements match` | `validate.yml` | `manifest.json` and `requirements_component.txt` agree | that the pinned version works |
+| `mutation (changed lines)` | `ci.yml` | a test fails on each small edit of a changed Python line, or a reviewer has listed the edit as harmless | anything about the lines the pull request left alone |
+
+The coverage row cannot see a line that runs but is never asserted on, and
+that gap let small edits to the command gate hook pass every test (#655).
+`scripts/mutate_changed.py` closes it for the lines a pull request changes
+under `custom_components/sensi/`, `scripts/` and `.claude/hooks/`. It makes one
+small edit at a time to a changed line - a comparison negated, `and` swapped
+with `or`, an integer moved by one, `return x` turned into `return None` - and
+runs the tests that load the file. An edit every test still passes with fails
+the job unless `tests/mutation-equivalents.txt` lists it with a reviewer's
+reason. It is advisory until that list has been seeded from its first runs.
 
 ## Coverage
 
