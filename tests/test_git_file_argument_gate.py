@@ -2382,6 +2382,172 @@ _CORPUS: tuple[_Row, ...] = (
         "the word export as an argument of echo is text, not a command name; "
         "the export rule reads the command name, not the string",
     ),
+    # A command name bash builds before it looks the name up (#650): a brace
+    # group, a wildcard path, or the escapes of `$'...'`. Each runs git or gh,
+    # and each passed while the gate read the name only as typed.
+    _Row(
+        "command name",
+        "{git,} diff --no-index /dev/null .env",
+        _REFUSED,
+        "bash expands the brace group to git and drops the empty word, so git "
+        "prints .env beside /dev/null; a word whose braces make a guarded name "
+        "is refused wherever it stands",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 {git,} diff --no-index /dev/null .env",
+        _REFUSED,
+        "the same brace group behind a program the gate does not step over, "
+        "which runs git with the words after it",
+    ),
+    _Row(
+        "command name",
+        "{git,diff} --no-index /dev/null .env",
+        _REFUSED,
+        "one brace group makes two words, git and diff, so the string that "
+        "runs is git diff --no-index, which no word as typed shows",
+    ),
+    _Row(
+        "command name",
+        "{,git} diff HEAD --output=x",
+        _REFUSED,
+        "the string begins {,git} and matches no allow row, so it was once "
+        "recorded as unreachable; bypass and auto modes prompt for nothing, so "
+        "it is refused like the other brace spellings",
+    ),
+    _Row(
+        "command name",
+        "{f..h}it diff --no-index /dev/null .env",
+        _REFUSED,
+        "a .. sequence is a brace group too: bash makes fit, git and hit, and "
+        "the git among them prints .env",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/g?t diff --no-index /dev/null .env",
+        _REFUSED,
+        "bash matches the wildcard path against the disk and runs "
+        "/usr/bin/git, so the word is read as each guarded name it can match",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 /usr/bin/g?t diff --no-index /dev/null .env",
+        _REFUSED,
+        "the same wildcard path behind a program the gate does not step over, "
+        "where git is looked for in every word",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/g[i]t diff HEAD --output=x",
+        _REFUSED,
+        "a bracket expression is a wildcard too, and it is read as any one "
+        "character, which matches every name bash's own reading would",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/g? pr view 1 --json number --jq env",
+        _REFUSED,
+        "a wildcard path that can match gh starts the gated gh rows, so the "
+        "--jq env that prints GH_TOKEN is read as it is behind gh",
+    ),
+    _Row(
+        "command name",
+        "$'\\x67it' diff --no-index /dev/null .env",
+        _REFUSED,
+        "bash decodes the escapes inside $'...' before it looks the name up, "
+        "and \\x67 is g, so this runs git; shlex read the word as \\x67it",
+    ),
+    _Row(
+        "command name",
+        "$'\\147it' diff --no-index /dev/null .env",
+        _REFUSED,
+        "the octal spelling of the same escape: \\147 is g, and bash runs git "
+        "with the words after it",
+    ),
+    _Row(
+        "command name",
+        "$'\\u0067it' diff --no-index /dev/null .env",
+        _REFUSED,
+        "the unicode spelling of the same escape: \\u0067 is g, and bash runs "
+        "git with the words after it",
+    ),
+    _Row(
+        "command name",
+        '$"git" diff --no-index /dev/null .env',
+        _REFUSED,
+        "locale quoting is double quoting to bash outside a translated "
+        "catalogue, so the word is git and git prints .env",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 $'\\x67it' diff --no-index /dev/null .env",
+        _REFUSED,
+        "the escaped name behind a program the gate does not step over, "
+        "decoded before any word of the command is read",
+    ),
+    _Row(
+        "command name",
+        "git diff HEAD $'--outp\\x75t=x'",
+        _REFUSED,
+        "the decoding reaches every word, not only the name: \\x75 is u, so "
+        "git receives --output=x and truncates the file",
+    ),
+    _Row(
+        "command name",
+        "ls /usr/bin/g*",
+        _ALLOWED,
+        "the wildcard path can match git and gh, but ls runs and nothing in "
+        "the string reads a file, writes one or runs a gated subcommand",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/g?t status",
+        _ALLOWED,
+        "a wildcard path read as git meets the git rules and no more, and "
+        "git status passes them as it does spelled out",
+    ),
+    _Row(
+        "command name",
+        "cat {a,b}.txt",
+        _ALLOWED,
+        "the brace group makes a.txt and b.txt, neither of which names a "
+        "command this hook checks",
+    ),
+    _Row(
+        "command name",
+        "find . -name '*' -print",
+        _ALLOWED,
+        "the wildcard is quoted, and a word with no slash is never read as a "
+        "path to a guarded program",
+    ),
+    _Row(
+        "command name",
+        "awk -F: '$1 == \"root\" {print $7}' /etc/passwd",
+        _ALLOWED,
+        "the braces and dollars are quoted awk program text, which bash hands "
+        "to awk untouched",
+    ),
+    _Row(
+        "command name",
+        "git commit -m '{git,}'",
+        _ALLOWED,
+        "bash expands no quoted brace, so the message reaches git as typed and "
+        "only an unquoted group is read as building a name",
+    ),
+    _Row(
+        "command name",
+        "$'\\x67it' status",
+        _ALLOWED,
+        "the decoded name is git and git status passes, as a command that "
+        "passes spelled out keeps passing however it is spelled",
+    ),
+    _Row(
+        "command name",
+        "mkdir -p src/{lib,tests}",
+        _ALLOWED,
+        "the brace group makes src/lib and src/tests, and neither path ends in "
+        "a name this hook checks",
+    ),
     # --- 5. options that load or write ------------------------------------
     _Row(
         "options",
@@ -2576,13 +2742,6 @@ _UNREACHABLE: tuple[tuple[str, str, str], ...] = (
         "env -C / --chdir moves git before it runs, so the containment test "
         "would answer about a directory git has left - reachable only behind "
         "env, which matches no row",
-    ),
-    (
-        "command name",
-        "{,git} diff HEAD --output=x",
-        "a brace-built command name reaches git, but the string begins {,git} "
-        "and `Bash(git diff:*)` is `Bash(git diff *)` - the space is part of "
-        "the rule, so it matches only a string that begins `git diff `",
     ),
     (
         "options",
@@ -2798,6 +2957,30 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if word in stepped_over:",
         "if False:",
         "/usr/bin/timeout 60 git diff HEAD",
+    ),
+    (
+        "a word whose braces make a guarded name",
+        "built = _brace_built_name(segment, twins)",
+        "built = None",
+        "{git,} diff --no-index /dev/null .env",
+    ),
+    (
+        "a wildcard path read as the git it can match",
+        " or name in _glob_names(word)",
+        "",
+        "/usr/bin/g?t diff --no-index /dev/null .env",
+    ),
+    (
+        "a wildcard path read as the gated command it can match",
+        "head = name == prefix[0] or prefix[0] in globbed",
+        "head = name == prefix[0]",
+        "/usr/bin/g? pr view 1 --json number --jq env",
+    ),
+    (
+        "the escapes of $'...' decoded before the words are read",
+        "body = _decode_ansi_c(command[index + 1 : end])",
+        "body = command[index + 1 : end]",
+        "$'\\x67it' diff --no-index /dev/null .env",
     ),
 )
 
@@ -3254,6 +3437,12 @@ def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) ->
         "script -qc 'g\"\"it diff --no-index /dev/null .env' /dev/null",
         "script -qc 'gi\\t diff --no-index /dev/null .env' /dev/null",
         "script -qc \"$'git' diff --no-index /dev/null .env\" /dev/null",
+        # A name bash builds from a brace group, a wildcard path or the
+        # escapes of `$'...'` is read inside the string too (#650).
+        "script -qc \"$'\\x67it' diff --no-index /dev/null .env\" /dev/null",
+        "script -qc '{git,} diff --no-index /dev/null .env' /dev/null",
+        "script -qc '/usr/bin/g?t diff --no-index /dev/null .env' /dev/null",
+        "script -qcg{,}it\\ diff\\ --no-index\\ /dev/null\\ .env /dev/null",
         # The value glued to a short-option cluster or a long option.
         "script -qc'git diff --no-index /dev/null .env' /dev/null",
         "script --command='git diff --no-index /dev/null .env' /dev/null",
@@ -3284,6 +3473,8 @@ def test_a_gated_command_inside_a_command_string_is_refused(command: str) -> Non
         "python3 scripts/run_tests.py -k 'git and diff'",
         "script -qc 'g\"\"it status' /dev/null",
         "script -qc \"$'git' status\" /dev/null",
+        "script -qc 'ls /usr/bin/g?t' /dev/null",
+        "script -qc 'cat {a,b}.txt' /dev/null",
     ],
 )
 def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:
