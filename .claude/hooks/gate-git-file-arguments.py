@@ -1747,9 +1747,11 @@ def _command_strings(word: str) -> list[str]:
         cluster = _SHORT_CLUSTER.match(word)
         if cluster is not None:
             for cut in range(2, cluster.end() + 1):
-                if cut == 2 or _GUARDED_START.match(word, cut):
-                    texts.append(word[cut:])
-                elif _brace_names((word[cut:].split(None, 1) or [""])[0]):
+                if (
+                    cut == 2
+                    or _GUARDED_START.match(word, cut)
+                    or _brace_names((word[cut:].split(None, 1) or [""])[0])
+                ):
                     texts.append(word[cut:])
     return [text for text in texts if _names_guarded(text)]
 
@@ -1773,11 +1775,7 @@ def _runs_gated_git(words: list[str]) -> bool:
     """
 
     first = next(
-        (
-            index
-            for index, word in enumerate(words)
-            if _is_named(word, "git")
-        ),
+        (index for index, word in enumerate(words) if _is_named(word, "git")),
         None,
     )
     if first is None:
