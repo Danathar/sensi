@@ -10,7 +10,7 @@ under `tests/` is `test_release_workflow.py`, which commits a file by that
 name into a scratch git repository as a fixture for "only CI changed" - it
 does not run a line of this workflow.
 
-Three steps carry shell:
+Three steps of the `pytest` job carry shell:
 
 * `Install dependencies` upgrades pip through the interpreter and then
   installs `requirements_test.txt`, which is what pins Home Assistant and
@@ -24,6 +24,11 @@ Three steps carry shell:
 * `Run tests` is a bare `pytest`. Its argument list is a contract with
   `coverage-gate.yml`, which owns coverage measurement and enforcement; this
   job is deliberately the one that only reports pass or fail.
+
+The `mutation` job carries two more. Its `Install dependencies` installs the
+same pins as the `pytest` job's, and `Mutate the changed lines` hands
+`scripts/mutate_changed.py` the pull request's target branch as the base the
+changed lines are counted from.
 
 These tests close that the way `test_validate_workflow.py`,
 `test_nightly_workflow.py`, `test_coverage_gate_workflow.py` and
@@ -53,12 +58,20 @@ _COMPONENT_REQUIREMENTS = _ROOT / "requirements_component.txt"
 _INSTALL_STEP = ("pytest", "Install dependencies")
 _RECORD_STEP = ("pytest", "Record resolved versions")
 _RUN_STEP = ("pytest", "Run tests")
+_MUTATION_INSTALL_STEP = ("mutation", "Install dependencies")
+_MUTATION_STEP = ("mutation", "Mutate the changed lines")
 
 # Every step in ci.yml that carries shell. Kept here so that adding a `run:`
 # body to the workflow without a test for it fails
 # `test_every_run_body_in_the_workflow_is_executed_here` rather than passing
 # unnoticed.
-_SHELL_STEPS = (_INSTALL_STEP, _RECORD_STEP, _RUN_STEP)
+_SHELL_STEPS = (
+    _INSTALL_STEP,
+    _RECORD_STEP,
+    _RUN_STEP,
+    _MUTATION_INSTALL_STEP,
+    _MUTATION_STEP,
+)
 
 # Pins that only decide how the code is linted, not what it is executed
 # against. `validate.yml` installs the ruff pin and
@@ -186,7 +199,7 @@ def stubs_fixture(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
 
-    for tool in ("python", "pip", "pytest"):
+    for tool in ("python", "python3", "pip", "pytest"):
         stub = bin_dir / tool
         stub.write_text(
             f"#!{sys.executable}\n"
@@ -215,6 +228,7 @@ def _run(
     workspace: Path,
     fail: str = "",
     stdout: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> StepResult:
     """Run a step's `run:` body under bash in `workspace`.
 
@@ -233,6 +247,7 @@ def _run(
     }
     for tool, text in (stdout or {}).items():
         environment[f"STUB_STDOUT_{tool.upper()}"] = text
+    environment.update(env or {})
 
     completed = subprocess.run(  # noqa: S603
         ["bash", "-e", "-c", _step(job, name)["run"]],
@@ -492,6 +507,92 @@ def test_the_job_installs_and_records_before_it_runs_the_tests() -> None:
 
     assert names.index(_INSTALL_STEP[1]) < names.index(_RECORD_STEP[1])
     assert names.index(_RECORD_STEP[1]) < names.index(_RUN_STEP[1])
+
+
+def test_the_mutation_job_installs_what_the_pytest_job_installs(
+    tmp_path: Path, stubs: Path, workspace: Path
+) -> None:
+    """Mutants are judged by the same suite, on the same pins.
+
+    A mutant that survives only because the job resolved a different Home
+    Assistant would be a finding about the environment, not about the tests.
+    """
+    pytest_job = _run(
+        *_INSTALL_STEP, tmp_path=tmp_path, stubs=stubs, workspace=workspace
+    )
+    mutation_job = _run(
+        *_MUTATION_INSTALL_STEP, tmp_path=tmp_path, stubs=stubs, workspace=workspace
+    )
+
+    assert mutation_job.returncode == 0, mutation_job.stderr
+    assert mutation_job.calls == pytest_job.calls
+
+
+def test_the_mutation_step_counts_changed_lines_from_the_target_branch(
+    tmp_path: Path, stubs: Path, workspace: Path
+) -> None:
+    """The base is the pull request's target, as the remote-tracking ref.
+
+    The checkout fetches every branch, so `origin/<target>` is there, and the
+    script diffs the merge base with it against the checked-out merge commit.
+    The branch name reaches the shell through `env:` rather than being pasted
+    into the script.
+    """
+    step = _step(*_MUTATION_STEP)
+    assert step["env"] == {"BASE_REF": "${{ github.base_ref }}"}
+    assert "${{" not in step["run"]
+
+    result = _run(
+        *_MUTATION_STEP,
+        tmp_path=tmp_path,
+        stubs=stubs,
+        workspace=workspace,
+        env={"BASE_REF": "master"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.only_call_to("python3") == [
+        "python3",
+        "scripts/mutate_changed.py",
+        "--base",
+        "origin/master",
+    ]
+    assert (_ROOT / "scripts" / "mutate_changed.py").is_file()
+
+
+def test_an_unlisted_survivor_fails_the_mutation_job(
+    tmp_path: Path, stubs: Path, workspace: Path
+) -> None:
+    """The script's non-zero exit is the job's verdict."""
+    result = _run(
+        *_MUTATION_STEP,
+        tmp_path=tmp_path,
+        stubs=stubs,
+        workspace=workspace,
+        fail="python3",
+        env={"BASE_REF": "master"},
+    )
+
+    assert result.returncode != 0
+
+
+def test_the_mutation_job_runs_on_pull_requests_with_full_history() -> None:
+    """A shallow clone has no merge base, and a push to master has no target.
+
+    The `if:` also keeps the job out of the required checks: a conditional
+    job cannot be required (`test_required_checks_match_workflows.py`).
+    """
+    job = _workflow()["jobs"]["mutation"]
+    checkout = next(
+        step
+        for step in job["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+
+    assert job["if"] == "github.event_name == 'pull_request'"
+    assert checkout["with"]["fetch-depth"] == 0
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index(_MUTATION_INSTALL_STEP[1]) < names.index(_MUTATION_STEP[1])
 
 
 def test_every_run_body_in_the_workflow_is_executed_here() -> None:

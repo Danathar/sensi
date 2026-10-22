@@ -586,6 +586,16 @@ _NOT_A_GATE = {
     ),
 }
 
+# Gates CI runs that `check.md` deliberately leaves out of its block, and why.
+# Each must still be run by a gating workflow, and `check.md` must still name
+# its script, so an agent reading the command learns that CI runs it.
+_CI_ONLY_GATES = {
+    "python3 scripts/mutate_changed.py": (
+        "runs the tests once per small edit of every changed line, which takes "
+        "minutes, and its job is advisory rather than required"
+    ),
+}
+
 _GATE_WORKFLOWS = (_CI, _COVERAGE_GATE, _VALIDATE, _NIGHTLY)
 
 
@@ -614,7 +624,7 @@ def _gate_identity(line: str) -> str | None:
     for prefix, identity in _GATE_IDENTITIES:
         if command == prefix or command.startswith(f"{prefix} "):
             return identity
-    for prefix in _NOT_A_GATE:
+    for prefix in (*_NOT_A_GATE, *_CI_ONLY_GATES):
         if command == prefix or command.startswith(f"{prefix} "):
             return None
     # Something that looks like a gate and is in neither table.
@@ -675,7 +685,9 @@ def test_check_md_names_every_check_ci_runs() -> None:
     )
 
 
-@pytest.mark.parametrize(("command", "reason"), sorted(_NOT_A_GATE.items()))
+@pytest.mark.parametrize(
+    ("command", "reason"), sorted({**_NOT_A_GATE, **_CI_ONLY_GATES}.items())
+)
 def test_the_lines_excluded_from_the_gate_list_are_still_excluded(
     command: str, reason: str
 ) -> None:
@@ -688,6 +700,18 @@ def test_the_lines_excluded_from_the_gate_list_are_still_excluded(
     assert any(
         command in line for workflow in _GATE_WORKFLOWS for line in _run_lines(workflow)
     ), f"no gating workflow runs `{command}` any more; drop the exclusion"
+
+
+@pytest.mark.parametrize("command", sorted(_CI_ONLY_GATES))
+def test_check_md_names_each_gate_it_leaves_to_ci(command: str) -> None:
+    """An agent should learn from the command that CI runs one more check."""
+    script = command.split()[-1]
+    assert f"`{script}`" in _read(_CHECK), (
+        f"{_rel(_CHECK)} leaves `{command}` to CI but no longer names {script}"
+    )
+    assert not any(script in line for line in _shell_lines(_CHECK)), (
+        f"{_rel(_CHECK)} now runs {script}; drop it from _CI_ONLY_GATES"
+    )
 
 
 def _coverage_source() -> str:

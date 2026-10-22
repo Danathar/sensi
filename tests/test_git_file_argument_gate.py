@@ -2559,6 +2559,55 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "command name",
+        "{env," + ",".join(f"A={n}" for n in range(1, 41)) + ",git} diff "
+        "--no-index /dev/null .env",
+        _REFUSED,
+        "bash makes env A=1 ... A=40 git diff ..., which runs git; past "
+        "_MAX_BRACE_FORMS words the group is read as a subsequence, not listed",
+    ),
+    _Row(
+        "command name",
+        "script -qc '{g..g}it diff --no-index /dev/null .env' /dev/null",
+        _REFUSED,
+        "a one-letter sequence is that letter, so the string runs git; the "
+        "range's last letter is part of it",
+    ),
+    _Row(
+        "command name",
+        "$'\\U00000067it' diff --no-index /dev/null .env",
+        _REFUSED,
+        "the eight-digit unicode spelling: \\U00000067 is g, and bash runs git",
+    ),
+    _Row(
+        "command name",
+        "$'git\\0x' diff --no-index /dev/null .env",
+        _REFUSED,
+        "bash ends a $'...' string at its first NUL byte, so the name is git; "
+        "the text before the NUL is what runs, not the text after it",
+    ),
+    _Row(
+        "command name",
+        "script -qc '$'\"'\"'\\147it'\"'\"' diff --no-index /dev/null .env' /dev/null",
+        _REFUSED,
+        "a $'...' inside single quotes is not decoded where it stands, only "
+        "when the string is read as a command, which then runs git",
+    ),
+    _Row(
+        "command name",
+        "script -qc 'setarch x86_64 $'\"'\"'\\x67it'\"'\"' diff --no-index "
+        "/dev/null .env' /dev/null",
+        _REFUSED,
+        "the same quoted escape behind a program inside the string",
+    ),
+    _Row(
+        "environment",
+        "setarch x86_64 env --split-string='GIT_EXTERNAL_DIFF=/tmp/prog git log -1'",
+        _REFUSED,
+        "a long option's value is cut at its first =, so the string read is "
+        "GIT_EXTERNAL_DIFF=/tmp/prog git log -1, not GIT_EXTERNAL_DIFF",
+    ),
+    _Row(
+        "command name",
         "git diff HEAD $'--outp\\x75t=x'",
         _REFUSED,
         "the decoding reaches every word, not only the name: \\x75 is u, so "
