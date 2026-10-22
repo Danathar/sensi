@@ -2452,6 +2452,78 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "command name",
+        "g?t diff --no-index /dev/null .env",
+        _REFUSED,
+        "with a file named git in the working directory bash expands g?t to "
+        "the word git, which has no slash, so it looks git up on PATH and runs "
+        "/usr/bin/git; the file only has to exist",
+    ),
+    _Row(
+        "command name",
+        "g[i]t diff --no-index /dev/null .env",
+        _REFUSED,
+        "a bracket expression with no slash in the word is a wildcard bash "
+        "matches against the working directory, the same as g?t",
+    ),
+    _Row(
+        "command name",
+        "gi* diff HEAD --output=x",
+        _REFUSED,
+        "a trailing star with no slash matches a file named git as readily, "
+        "and git then truncates the --output target",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 g?t diff --no-index /dev/null .env",
+        _REFUSED,
+        "the bare wildcard behind a program the gate does not step over, "
+        "where git is looked for in every word",
+    ),
+    _Row(
+        "command name",
+        "g? pr view 1 --json number --jq env",
+        _REFUSED,
+        "with a file named gh in the working directory g? runs gh from PATH, "
+        "so the --jq env that prints GH_TOKEN is read as it is behind gh",
+    ),
+    _Row(
+        "command name",
+        "* diff --no-index /dev/null .env",
+        _REFUSED,
+        "a command word made only of wildcards runs the first file it matches "
+        "in sorted order, by its name, so a working directory whose first "
+        "entry is git runs git",
+    ),
+    _Row(
+        "command name",
+        "??? diff --no-index /dev/null .env",
+        _REFUSED,
+        "three question marks match a file named git and nothing tells which "
+        "file sorts first, so the word is refused as a command name",
+    ),
+    _Row(
+        "command name",
+        "timeout 5 * diff --no-index /dev/null .env",
+        _REFUSED,
+        "behind a wrapper the command word is the first one after its options "
+        "and numbers, and an all-wildcard word there is refused the same way",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json number --jq env",
+        _REFUSED,
+        "a path to gh starts the gated gh rows as the bare name does, so the "
+        "--jq env that prints GH_TOKEN is read as it is behind gh",
+    ),
+    _Row(
+        "command name",
+        "setarch x86_64 /usr/bin/gh pr view 1 --json number --jq env",
+        _REFUSED,
+        "the same path behind a program the gate does not step over, where "
+        "every later word is tried as the start of a gated row",
+    ),
+    _Row(
+        "command name",
         "$'\\x67it' diff --no-index /dev/null .env",
         _REFUSED,
         "bash decodes the escapes inside $'...' before it looks the name up, "
@@ -2508,6 +2580,40 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "command name",
+        "g?t status",
+        _ALLOWED,
+        "a bare wildcard read as git meets the git rules and no more, as the "
+        "wildcard path does",
+    ),
+    _Row(
+        "command name",
+        "ls g*",
+        _ALLOWED,
+        "the bare wildcard can match git and gh, but ls runs and nothing in "
+        "the string reads a file, writes one or runs a gated subcommand",
+    ),
+    _Row(
+        "command name",
+        "ls src/*",
+        _ALLOWED,
+        "an all-wildcard word is refused only as the command name; as an "
+        "argument it names no program",
+    ),
+    _Row(
+        "command name",
+        "timeout 5 ls *",
+        _ALLOWED,
+        "behind a wrapper the command word is ls, and the star after it is an argument",
+    ),
+    _Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json title --jq .title",
+        _ALLOWED,
+        "a path to gh meets the gh rules and no more, and a --jq filter that "
+        "names fields passes them as it does behind the bare name",
+    ),
+    _Row(
+        "command name",
         "cat {a,b}.txt",
         _ALLOWED,
         "the brace group makes a.txt and b.txt, neither of which names a "
@@ -2517,8 +2623,8 @@ _CORPUS: tuple[_Row, ...] = (
         "command name",
         "find . -name '*' -print",
         _ALLOWED,
-        "the wildcard is quoted, and a word with no slash is never read as a "
-        "path to a guarded program",
+        "the wildcard is an argument, not the command name, and a word of "
+        "nothing but wildcards can match no guarded name in particular",
     ),
     _Row(
         "command name",
@@ -2972,9 +3078,28 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "a wildcard path read as the gated command it can match",
-        "head = name == prefix[0] or prefix[0] in globbed",
-        "head = name == prefix[0]",
+        "                or prefix[0] in globbed\n",
+        "",
         "/usr/bin/g? pr view 1 --json number --jq env",
+    ),
+    (
+        "a path to a gated command read as that command",
+        '                or name.endswith("/" + prefix[0])\n',
+        "",
+        "/usr/bin/gh pr view 1 --json number --jq env",
+    ),
+    (
+        "a wildcard with no slash read as the command it can match",
+        '    """\n\n    pattern = word.rsplit("/", 1)[-1]\n    if _GLOB',
+        '    """\n\n    if "/" not in word:\n        return frozenset()\n'
+        '    pattern = word.rsplit("/", 1)[-1]\n    if _GLOB',
+        "g?t diff --no-index /dev/null .env",
+    ),
+    (
+        "a command word made only of wildcards",
+        'if pattern and not pattern.strip("*?"):',
+        "if False:",
+        "* diff --no-index /dev/null .env",
     ),
     (
         "the escapes of $'...' decoded before the words are read",
@@ -3442,6 +3567,7 @@ def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) ->
         "script -qc \"$'\\x67it' diff --no-index /dev/null .env\" /dev/null",
         "script -qc '{git,} diff --no-index /dev/null .env' /dev/null",
         "script -qc '/usr/bin/g?t diff --no-index /dev/null .env' /dev/null",
+        "script -qc 'g?t diff --no-index /dev/null .env' /dev/null",
         "script -qcg{,}it\\ diff\\ --no-index\\ /dev/null\\ .env /dev/null",
         # The value glued to a short-option cluster or a long option.
         "script -qc'git diff --no-index /dev/null .env' /dev/null",
@@ -3474,6 +3600,7 @@ def test_a_gated_command_inside_a_command_string_is_refused(command: str) -> Non
         "script -qc 'g\"\"it status' /dev/null",
         "script -qc \"$'git' status\" /dev/null",
         "script -qc 'ls /usr/bin/g?t' /dev/null",
+        "script -qc 'ls g?t' /dev/null",
         "script -qc 'cat {a,b}.txt' /dev/null",
     ],
 )
