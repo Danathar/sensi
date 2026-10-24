@@ -3671,6 +3671,29 @@ def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Names git only as typed: with the quote removed it is `gitx`.
+        'bash -c "git\'x diff"',
+        # Names git only with its `$`, quotes and backslashes removed: with
+        # `$'\t'` decoded it is `gi` and a tab.
+        "bash -c " + shlex.quote("gi$'\\t'$'"),
+    ],
+)
+def test_a_command_string_with_an_unbalanced_quote_is_refused(command: str) -> None:
+    """Every reading that finds a guarded name sends the string to be checked.
+
+    A string the gate cannot split is refused as an unbalanced quote, so a
+    reading dropped from `_names_guarded` lets it through unread.
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "command line handed to a shell" in completed.stderr
+    assert "unbalanced quote" in completed.stderr
+
+
 def test_command_strings_nested_past_the_limit_are_refused_unread() -> None:
     """The work is bounded, since Claude Code runs a command whose hook times out."""
 

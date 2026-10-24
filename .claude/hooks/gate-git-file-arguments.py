@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse the `git` arguments that read and write files the tool rules deny.
+r"""Refuse the `git` arguments that read and write files the tool rules deny.
 
 Wired to PreToolUse for `Bash` in `.claude/settings.json`. `git diff`, `git log`
 and `git show` are on the allow list, so they run with no permission prompt, and
@@ -1592,7 +1592,7 @@ def _names_guarded(text: str) -> bool:
 
 
 def _extglob_flattened(text: str) -> str:
-    """Return `text` with each extglob group written as the `*` it stands for.
+    r"""Return `text` with each extglob group written as the `*` it stands for.
 
     With `shopt -s extglob` on, `@(...)`, `?(...)`, `*(...)`, `+(...)` and
     `!(...)` are part of the word they touch and match files the way `*`
