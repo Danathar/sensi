@@ -1152,6 +1152,77 @@ def test_a_single_quoted_backslash_newline_is_two_literal_characters() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Single quotes keep the pair for the shell `bash -c` starts, and that
+        # shell joins it, so the string runs git.
+        "bash -c 'gi\\\nt diff /dev/null ./.env'",
+        "bash -c $'gi\\\\\\nt diff /dev/null ./.env'",
+        "script -qc'gi\\\nt diff /dev/null ./.env' /dev/null",
+        "bash -c 'git diff HEAD --outp\\\nut=cosign.pub'",
+        # The joined word is an extglob pattern, refused as it is at the top.
+        "bash -O extglob -c '/usr/bin/g@\\\n(i)t diff /dev/null ./.env'",
+        "bash -c $'shopt -s extglob\\n/usr/bin/g@\\\\\\n(i)t diff /dev/null ./.env'",
+    ],
+)
+def test_a_continuation_inside_a_command_string_is_joined_before_it_is_read(
+    command: str,
+) -> None:
+    """The shell a string is handed to joins backslash-newline as the top level does."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was let through"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'gi\\\nt diff HEAD'",
+        "bash -c 'git diff \\\nHEAD'",
+        # Inside the string's own single quotes the pair stays two characters.
+        "bash -c \"echo 'gi\\\\\nt diff /dev/null ./.env'\"",
+    ],
+)
+def test_a_joined_command_string_that_passes_the_gate_still_runs(
+    command: str,
+) -> None:
+    """Joining refuses only what the joined string refuses."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, f"{command!r} was blocked: {completed.stderr}"
+
+
+def test_a_continuation_inside_a_command_string_really_runs_git(
+    tmp_path: Path,
+) -> None:
+    """The reach of the string join, run for real: `gi` + backslash-newline + `t` is git."""
+
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "f").write_text("a\n", encoding="utf-8")
+    _git(tmp_path, "add", "f")
+    _git(tmp_path, "commit", "-qm", "x")
+    victim = tmp_path / "victim"
+    victim.write_text("ORIGINAL-CONTENT\n", encoding="utf-8")
+    command = "bash -c 'gi\\\nt diff HEAD --output=victim'"
+    subprocess.run(
+        ["bash", "--norc", "--noprofile", "-c", command],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "ORIGINAL-CONTENT" not in victim.read_text(encoding="utf-8"), (
+        "bash no longer joins a backslash-newline inside a command string; "
+        "re-derive why _command_strings joins the word"
+    )
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, (
+        "the command just shown to truncate was not blocked"
+    )
+
+
 def test_bash_really_joins_a_continuation_into_a_refused_option(tmp_path: Path) -> None:
     """The reach the join exists for, run for real: a split --output truncates."""
 
