@@ -1169,7 +1169,7 @@ def test_a_single_quoted_backslash_newline_is_two_literal_characters() -> None:
 def test_a_continuation_inside_a_command_string_is_joined_before_it_is_read(
     command: str,
 ) -> None:
-    """The shell a string is handed to joins `\\<newline>` as the top level does."""
+    """The shell a string is handed to joins backslash-newline as the top level does."""
 
     completed = _run(_payload(command))
     assert completed.returncode == 2, f"{command!r} was let through"
@@ -1196,7 +1196,7 @@ def test_a_joined_command_string_that_passes_the_gate_still_runs(
 def test_a_continuation_inside_a_command_string_really_runs_git(
     tmp_path: Path,
 ) -> None:
-    """The reach of the string join, run for real: `gi\\<newline>t` is git."""
+    """The reach of the string join, run for real: `gi` + backslash-newline + `t` is git."""
 
     _git(tmp_path, "init", "-q")
     (tmp_path / "f").write_text("a\n", encoding="utf-8")
