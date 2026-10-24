@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse the `git` arguments that read and write files the tool rules deny.
+r"""Refuse the `git` arguments that read and write files the tool rules deny.
 
 Wired to PreToolUse for `Bash` in `.claude/settings.json`. `git diff`, `git log`
 and `git show` are on the allow list, so they run with no permission prompt, and
@@ -163,7 +163,11 @@ every gate refuses the protected action behind any wrapper whether or not
 Claude Code would prompt. So each word that carries more than one word of its
 own, or an option value, and names git, gh, python3 or ruff, is checked here
 as a command line of its own, and a refusal there refuses the whole string;
-see `_command_strings`. That over-refuses a commit message which quotes a
+see `_command_strings`. A string can turn extglob on for its own next line
+(`bash -c $'shopt -s extglob\n/usr/bin/g@(i)t diff ...'`), so its extglob
+groups are read as the `*` they match no more than when deciding whether it
+names one (`_extglob_flattened`); the string is then refused for the pattern
+as a top-level command is. That over-refuses a commit message which quotes a
 refused option (`git commit -m "drop git diff --output"`), which is an `ask`
 row and prompts anyway. Strings nested deeper than `_MAX_STRING_DEPTH`, or
 more than `_MAX_STRING_CHECKS` of them in one call, are refused unread,
@@ -529,6 +533,9 @@ _GUARDED_NAMES = ("git", "gh", "python3", "ruff")
 # What splits a command string into the words `_names_guarded` reads one at a
 # time. Reading more words than the shell would can only over-refuse.
 _STRING_WORD = re.compile(r"[\s;&|()<>`=]+")
+# The characters that open an extglob group when a `(` touches them; see
+# `_extglob_flattened`.
+_EXTGLOB_OPENERS = frozenset("@?*+!")
 
 # A command name the shell builds before it looks the name up (#650). bash
 # expands a brace group in any unquoted word, so `{git,}` is `git`, `g{i,x}t`
@@ -1562,8 +1569,10 @@ def _names_guarded(text: str) -> bool:
     removed is tried too, and so is the text with its `$'...'` escapes decoded
     first (`$'\x67it'`). So is each word of it that a brace group or a
     wildcard path can make a guarded name of (`g{i,x}t`, `/usr/bin/g?t`,
-    #650). Removing more can only refuse more, and a string that passes as
-    written keeps passing unless that text names a command.
+    #650), and each word of it with every extglob group written as `*`
+    (`/usr/bin/g@(i)t` is `/usr/bin/g*t`; see `_extglob_flattened`).
+    Removing more can only refuse more, and a string that passes as written
+    keeps passing unless that text names a command.
     """
 
     decoded = _UNQUOTE.sub("", _drop_quote_dollars(text))
@@ -1575,7 +1584,46 @@ def _names_guarded(text: str) -> bool:
             _brace_names(word) or _glob_names(word)
             for word in _STRING_WORD.split(decoded)
         )
+        or any(
+            _glob_names(word)
+            for word in _STRING_WORD.split(_extglob_flattened(decoded))
+        )
     )
+
+
+def _extglob_flattened(text: str) -> str:
+    r"""Return `text` with each extglob group written as the `*` it stands for.
+
+    With `shopt -s extglob` on, `@(...)`, `?(...)`, `*(...)`, `+(...)` and
+    `!(...)` are part of the word they touch and match files the way `*`
+    does, and a command string can turn extglob on for its own next line.
+    `_STRING_WORD` splits at the `(`, so `/usr/bin/g@(i)t` was read as
+    `/usr/bin/g@`, `i` and `t`, none of them git, and `bash -c $'shopt -s
+    extglob\n/usr/bin/g@(i)t diff /dev/null ./.env'` was never read as a
+    command line. As `/usr/bin/g*t` it is the wildcard path `_glob_names`
+    reads as git. A group matches no more than `*` does, so the reading can
+    only read more strings. One pass, with each opened `(` on a stack: a
+    group ends at its matching `)`, the `*` it leaves opens the next group a
+    `(` touches (`g@(i)(t)` is `g*`, as bash reads `*(t)`), and a `(` with
+    no matching `)` is left as typed.
+    """
+
+    out: list[str] = []
+    opened: list[int | None] = []
+    for char in text:
+        if char == "(":
+            opened.append(len(out) if out and out[-1] in _EXTGLOB_OPENERS else None)
+            out.append(char)
+        elif char == ")" and opened:
+            start = opened.pop()
+            if start is None:
+                out.append(char)
+            else:
+                del out[start - 1 :]
+                out.append("*")
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def _brace_names(word: str) -> frozenset[str]:

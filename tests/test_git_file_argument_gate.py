@@ -3618,6 +3618,14 @@ def test_bash_really_runs_git_through_an_extglob_split_string(tmp_path: Path) ->
         "script -qc '/usr/bin/g?t diff --no-index /dev/null .env' /dev/null",
         "script -qc 'g?t diff --no-index /dev/null .env' /dev/null",
         "script -qcg{,}it\\ diff\\ --no-index\\ /dev/null\\ .env /dev/null",
+        # A string that turns extglob on for its own next line: the group is
+        # read as the `*` it matches no more than, so the string is read, and
+        # refused for the pattern.
+        "bash -c $'shopt -s extglob\\n/usr/bin/g@(i)t diff /dev/null ./.env'",
+        "script -qc 'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env' /dev/null",
+        "bash -c 'shopt -s extglob; g@(i)(t) diff --no-index /dev/null .env'",
+        "bash -c 'shopt -s extglob; /usr/bin/g@(@(i))t diff --no-index /dev/null .env'",
+        "bash -c 'shopt -s extglob; (/usr/bin/g@(i)t diff --no-index /dev/null .env)'",
         # The value glued to a short-option cluster or a long option.
         "script -qc'git diff --no-index /dev/null .env' /dev/null",
         "script --command='git diff --no-index /dev/null .env' /dev/null",
@@ -3651,6 +3659,9 @@ def test_a_gated_command_inside_a_command_string_is_refused(command: str) -> Non
         "script -qc 'ls /usr/bin/g?t' /dev/null",
         "script -qc 'ls g?t' /dev/null",
         "script -qc 'cat {a,b}.txt' /dev/null",
+        "bash -c 'ls @(README|AGENTS).md'",
+        "git commit -m 'match @(x) in names'",
+        "script -qc 'echo g@(i' /dev/null",
     ],
 )
 def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:
@@ -3658,6 +3669,29 @@ def test_a_command_string_that_passes_alone_is_left_alone(command: str) -> None:
 
     completed = _run(_payload(command))
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Names git only as typed: with the quote removed it is `gitx`.
+        'bash -c "git\'x diff"',
+        # Names git only with its `$`, quotes and backslashes removed: with
+        # `$'\t'` decoded it is `gi` and a tab.
+        "bash -c " + shlex.quote("gi$'\\t'$'"),
+    ],
+)
+def test_a_command_string_with_an_unbalanced_quote_is_refused(command: str) -> None:
+    """Every reading that finds a guarded name sends the string to be checked.
+
+    A string the gate cannot split is refused as an unbalanced quote, so a
+    reading dropped from `_names_guarded` lets it through unread.
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "command line handed to a shell" in completed.stderr
+    assert "unbalanced quote" in completed.stderr
 
 
 def test_command_strings_nested_past_the_limit_are_refused_unread() -> None:
