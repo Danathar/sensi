@@ -1814,14 +1814,29 @@ def _brace_built_name(segment: list[str], twins: list[str]) -> tuple[str, str] |
 
 
 def _command_strings(word: str) -> list[str]:
-    """Return the command lines `word` may hand a shell.
+    r"""Return the command lines `word` may hand a shell.
 
     The word itself when it holds more than one word of its own; the value of
     a long option glued on with `=`; and, for a short-option cluster, the rest
     of the word after its first letter (`-cGIT_EXTERNAL_DIFF=x git diff`),
     after any letter where a guarded name starts (`-qcgit diff ...`), and
     after any letter where a brace group builds one (`-qcg{,}it diff ...`).
+
+    The shell the string is handed to drops each `\<newline>` outside single
+    quotes before it reads a word, as `_join_continuations` does for the top
+    level, so `bash -c 'gi\<newline>t diff /dev/null ./.env'` runs git while
+    neither `gi` nor `t` names it. The word is read joined as well as written;
+    reading both can only refuse more.
     """
+
+    joined = _join_continuations(word)
+    if joined != word:
+        return list(dict.fromkeys(_command_strings(joined) + _spelled_strings(word)))
+    return _spelled_strings(word)
+
+
+def _spelled_strings(word: str) -> list[str]:
+    """Return `_command_strings` of `word` as written, continuations unjoined."""
 
     texts = []
     if _COMMAND_STRING.search(word):
