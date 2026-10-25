@@ -119,6 +119,44 @@ this code. Credit for the original work belongs in `README.md` and `LICENSE.MIT`
 which is where it is - `codeowners` is a "who is responsible" field, not a
 credit field. Do not point any of the three back at upstream.
 
+## Findings about the Bash guard hook: what is in scope
+
+The `PreToolUse` gate on Bash (`.claude/hooks/gate-git-file-arguments.py`)
+catches **mistakes by an agent that is following these rules**. It is aimed at
+the commands the allow list in `.claude/settings.json` runs without a prompt
+(`git`, `gh`, the test wrapper, `ruff`): it refuses the options, redirections,
+assignments and wrappers that make them read or write files the `Read` and
+`Edit` deny rules withhold. It does not decide whether a push or any other
+command is allowed; the permission rules do that. (The other hook,
+`.claude/hooks/format-edited-python.sh`, only formats edited files.) The gate
+is not a sandbox against an agent that is trying to get around it. A shell can
+spell a command in endless ways, and a reader in a hook cannot keep up with all
+of them. Do not file, and do not fix unprompted, findings of this kind:
+
+- **Disguised spellings.** A blocked command gets through only when its name
+  or arguments are written in a form nobody types in ordinary work: quote
+  marks inside a word (`g"i"t`), brace, wildcard or extended-glob names
+  (`{git,}`, `g?t`, `g@(i)t`), backslash-newline splits, `$'...'` escapes,
+  variables or command substitution that build the name, or the same tricks
+  inside a command string handed to another shell or wrapper program.
+
+These are still in scope. File them as usual:
+
+- **The hook fails open.** It crashes, times out, or is missing a tool, and
+  the command runs unchecked.
+- **An ordinary spelling gets through.** The command is written the way an
+  agent would type it doing normal work: the plain name, its full path
+  (`/usr/bin/git`), a documented short option or alias (`git diff -O FILE`
+  for `--orderfile`), or the plain command behind a wrapper program
+  (`timeout`, `xargs`, `flock`, `watch`). Wrapped commands stay in scope
+  under the ruling on Danathar/atomic-image-builder#772.
+- **A regression.** A case the hook's tests already cover stops being
+  refused.
+- **The hook blocks normal work it should allow.**
+
+This is a standing ruling, not a gap to report: an agent that has to disguise
+a command to run it is already breaking the rules in this file.
+
 ## Layout
 
 ```
