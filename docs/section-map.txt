@@ -111,9 +111,9 @@
 ### Adding the integration
   joined: tests/test_readme_credential_storage.py
 ## What you get
-  prose: unchecked: the 30-second refresh interval
+  joined: tests/test_readme_climate_entity.py
 ### Climate entity
-  prose: unchecked: operating modes, setpoints and fan modes the climate entity offers
+  joined: tests/test_readme_climate_entity.py
 ### Sensors and controls
   joined: tests/test_readme_entities.py
 ### Notes on specific entities
