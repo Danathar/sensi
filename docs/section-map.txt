@@ -1,0 +1,318 @@
+# Docs section map: every section of every tracked documentation page, and
+# whether a test reads it.
+#
+# A page is listed here as [path]. Under it, every `##` and `###` heading of
+# that page, written exactly as the page writes it, followed by one indented
+# line:
+#
+#   joined: tests/<file>   that test reads what this section states
+#   prose: unchecked: ...  the section states facts about the machine (a
+#                          workflow, the settings file, the code, a pinned
+#                          value) that no test reads; each is a candidate for
+#                          a join test, and writing one turns the row joined:
+#   prose: narrative: ...  the section states no such fact
+#
+# tests/test_docs_section_map.py fails when a tracked page has a heading with
+# no row here, when a row names a heading the page no longer has, or when a
+# joined: test does not exist or never opens the page. It does not prove any
+# sentence true. What it changes is that a section of claims nothing checks is
+# a visible `prose: unchecked:` line in the diff that adds it, instead of the
+# silent default.
+#
+# Tracked pages: every tracked Markdown file at the repository root and in
+# docs/ (not its subdirectories), plus docs/agent-tasks/README.md,
+# docs/metrics/README.md and .github/copilot-instructions.md. A new page in
+# one of those places has to be added here in the change that adds it.
+
+
+[.github/copilot-instructions.md]
+## Hard rules
+  joined: tests/test_instruction_docs.py
+## Style
+  joined: tests/test_instruction_docs.py
+## Tests
+  prose: unchecked: one test module per source module and the e2e fake backend, restated from AGENTS.md; only AGENTS.md's copy is read
+## Commit messages
+  joined: tests/test_instruction_docs.py
+
+[AGENTS.md]
+## What this repository is
+  prose: narrative: what the integration is and why the protocol makes it fragile
+## Commands
+  joined: tests/test_run_tests_descriptions.py
+## Rules
+  joined: tests/test_instruction_docs.py
+## Findings about the Bash guard hook: what is in scope
+  prose: narrative: which findings about the guard are in scope; a policy for reporters, not a fact about the guard
+## Layout
+  joined: tests/test_instruction_docs.py
+## Testing
+  joined: tests/test_instruction_docs.py
+## Commits and pull requests
+  joined: tests/test_instruction_docs.py
+### Writing issues, PRs and comments
+  prose: narrative: tone and shape for written output
+## Reference
+  joined: tests/test_instruction_docs.py
+## When you are unsure
+  prose: narrative: what to do when a fact cannot be checked
+
+[CLAUDE.md]
+## The short version
+  joined: tests/test_instruction_docs.py
+## Slash commands
+  joined: tests/test_instruction_docs.py
+## Project settings and the format hook
+  joined: tests/test_claude_md_settings.py
+## Session state
+  joined: tests/test_session_summary.py
+## Corrections and memory
+  joined: tests/test_correction_memory.py
+## Things worth knowing before you edit
+  joined: tests/test_instruction_docs.py
+
+[CONTRIBUTING.md]
+## Getting set up
+  joined: tests/test_instruction_docs.py
+## Running the checks
+  joined: tests/test_workflow_summaries.py
+## Layout
+  prose: unchecked: second copy of the component layout; only AGENTS.md's block is compared with the tree
+## Conventions
+  joined: tests/test_instruction_docs.py
+## Tests
+  prose: unchecked: test module per source module, the e2e tier and the coverage floor, restated from AGENTS.md; this copy is not read
+## Commits and pull requests
+  joined: tests/test_instruction_docs.py
+## Releases
+  joined: tests/test_instruction_docs.py
+### Syncing with upstream
+  prose: unchecked: the sync merge-commit title and how release notes treat it; nothing reads the title convention
+## Further reading
+  joined: tests/test_instruction_docs.py
+## Reporting a problem
+  prose: unchecked: the logger name in the debug-logging snippet
+
+[README.md]
+## Project status
+  prose: unchecked: the release count and the no-network claim; tests/test_ci_network_guard.py enforces the guard but does not open this page
+## Requirements
+  joined: tests/test_metadata.py
+## Installation
+  prose: narrative: heading only; the subsections below carry the content
+### HACS
+  prose: unchecked: the custom-repository steps and category
+### Manual
+  prose: narrative: copy the directory and restart
+## Setup
+  prose: narrative: heading only; the subsections below carry the content
+### Getting a refresh token
+  prose: narrative: points at upstream's walkthrough
+### Adding the integration
+  joined: tests/test_readme_credential_storage.py
+## What you get
+  prose: unchecked: the 30-second refresh interval
+### Climate entity
+  prose: unchecked: operating modes, setpoints and fan modes the climate entity offers
+### Sensors and controls
+  joined: tests/test_readme_entities.py
+### Notes on specific entities
+  prose: unchecked: per-entity notes: aux heat as a switch, the battery estimate
+### Attributes
+  joined: tests/e2e/test_readme_climate_attributes.py
+## Limitations
+  prose: narrative: backend behaviour seen in use; nothing in the tree decides it
+## About this fork
+  joined: tests/test_workflow_summaries.py
+## Coming from `iprak/sensi`
+  prose: narrative: introduces the subsections below
+### Why switch
+  prose: narrative: which fixes are worth switching for
+### How to switch
+  prose: unchecked: same domain, unique IDs and credential store as upstream
+### Going back
+  prose: narrative: reverse of the steps above
+### HACS default listing
+  prose: narrative: why the fork is not in the default list
+## Security
+  prose: narrative: advice for users of older builds that logged the token
+## Development
+  prose: narrative: points at CONTRIBUTING.md
+## Breaking changes
+  prose: narrative: heading only; the subsections below carry the content
+### This fork
+  prose: unchecked: the WiFi quality unit change and the other breaking changes in this fork
+### 2.0.0
+  prose: narrative: upstream release history
+### 1.3.0
+  prose: narrative: upstream release history
+### 1.2.0
+  prose: narrative: upstream release history
+### 1.1.1
+  prose: narrative: upstream release history
+### 1.1.0
+  prose: narrative: upstream release history
+## Thanks
+  joined: tests/test_licensing.py
+## Maintained with Hive (ACMM L6)
+  prose: unchecked: the ACMM level and which agent pull requests stay held
+### What that actually means
+  prose: narrative: what the agents do, in general terms
+### Why it matters for this integration in particular
+  prose: narrative: why continuous checking suits this fork
+### How it compounds
+  prose: narrative: why the gates ratchet
+## About this project
+  prose: narrative: AI-assistance and not-official notices
+## License
+  joined: tests/test_licensing.py
+
+[docs/SECURITY-AI.md]
+## What makes this repository sensitive
+  prose: narrative: why credentials and the boundary matter
+## Rules for agents
+  prose: narrative: heading only; the subsections below carry the content
+### Never
+  joined: tests/test_security_ai_doc.py
+### Only with an explicit human decision
+  prose: unchecked: the changes that need a human decision; nothing compares the list with the ask and deny rows
+### Always
+  joined: tests/test_run_tests_descriptions.py
+## Handling untrusted input
+  joined: tests/test_security_ai_doc.py
+## One autonomous path, and it is Hive
+  joined: tests/test_security_ai_doc.py
+## If a credential is exposed
+  prose: narrative: the rotation procedure
+## Related
+  joined: tests/test_instruction_docs.py
+
+[docs/agent-tasks/README.md]
+## The chain
+  joined: tests/test_agent_tasks_doc.py
+## Useful queries
+  prose: unchecked: the gh queries; they need the live repository
+## Where the gaps are
+  prose: narrative: historical record of early pull requests
+
+[docs/ai-ops-runbook.md]
+## What to watch
+  joined: tests/test_ai_ops_runbook_doc.py
+## Stopping the agents
+  prose: narrative: pausing the repository in Hive, which lives outside this tree
+## An agent pull request is wrong
+  prose: narrative: what to do with a bad pull request
+## An agent pull request touches the security boundary
+  joined: tests/test_ai_ops_runbook_doc.py
+## The nightly run fails
+  joined: tests/test_ai_ops_runbook_doc.py
+## No Dependabot pull request appears
+  joined: tests/test_ai_ops_runbook_doc.py
+## A release is refused
+  joined: tests/test_ai_ops_runbook_doc.py
+## `master` may no longer be protected
+  joined: tests/test_ai_ops_runbook_doc.py
+## A credential is exposed
+  prose: narrative: points at SECURITY-AI.md
+
+[docs/branch-protection.md]
+## What the ruleset does
+  joined: tests/test_branch_protection_doc.py
+### The six required checks
+  joined: tests/test_branch_protection_doc.py
+## The release workflow, and why it had to change first
+  joined: tests/test_branch_protection_doc.py
+## Review requirements, and why they are set where they are
+  joined: tests/test_branch_protection_doc.py
+## Checking it, and applying it elsewhere
+  joined: tests/test_branch_protection_doc.py
+## What this does not cover
+  joined: tests/test_branch_protection_doc.py
+
+[docs/metrics/README.md]
+## Why measure acceptance at all
+  prose: narrative: why acceptance is the question
+## How to get the numbers
+  joined: tests/test_metrics_doc.py
+## What each column means
+  joined: tests/test_metrics_doc.py
+## Reading it honestly
+  joined: tests/test_metrics_doc.py
+## Baseline
+  joined: tests/test_metrics_doc.py
+## Related
+  joined: tests/test_instruction_docs.py
+
+[docs/multi-agent.md]
+## Why the orchestrator is not in this repository
+  prose: narrative: points at SECURITY-AI.md for the reasoning
+## Recognising which agent did what
+  prose: unchecked: the App name and footer format; they are facts about GitHub history, not the tree
+## How parallel work is kept apart
+  prose: unchecked: one issue per pull request and the shared gates
+## Related
+  joined: tests/test_instruction_docs.py
+
+[docs/quality.md]
+## The gates
+  joined: tests/test_quality_doc.py
+## Coverage
+  joined: tests/test_quality_doc.py
+## What is deliberately not covered
+  joined: tests/test_quality_doc.py
+## Nightly
+  joined: tests/test_quality_doc.py
+## Trend
+  joined: tests/test_quality_doc.py
+## Reproducing all of it locally
+  joined: tests/test_quality_doc.py
+
+[docs/review-rubric.md]
+## Priority order
+  prose: narrative: how to read the levels
+### 1. Credential exposure — blocking, always
+  joined: tests/test_review_rubric_doc.py
+### 2. Breaking existing installs — blocking unless deliberate and stated
+  joined: tests/test_review_rubric_doc.py
+### 3. Payload handling — the most common real bug here
+  joined: tests/test_review_rubric_doc.py
+### 4. Async and lifecycle correctness
+  joined: tests/test_review_rubric_doc.py
+### 5. Capability gating
+  joined: tests/test_review_rubric_doc.py
+### 6. Tests
+  joined: tests/test_review_rubric_doc.py
+### 7. Fit with the codebase
+  joined: tests/test_review_rubric_doc.py
+## Verdicts
+  joined: tests/test_prompt_procedures.py
+## What not to do in review
+  joined: tests/test_review_rubric_doc.py
+
+[docs/risk-tiers.md]
+## The tiers
+  joined: tests/test_risk_tiers_doc.py
+### `tier/breaking` — can break an existing install on upgrade
+  joined: tests/test_risk_tiers_doc.py
+### `tier/runtime` — runs against the live service
+  joined: tests/test_risk_tiers_doc.py
+### `tier/behaviour` — changes what an entity reports or accepts
+  joined: tests/test_risk_tiers_doc.py
+### `tier/support` — cannot reach a user's installation
+  joined: tests/test_risk_tiers_doc.py
+## Size labels
+  joined: tests/test_risk_tiers_doc.py
+## Running the classifier yourself
+  joined: tests/test_risk_tiers_doc.py
+## Changing the rules
+  joined: tests/test_risk_tiers_doc.py
+
+[docs/strategy.md]
+## Goal: a stable integration
+  prose: narrative: points at the README's conditions for stable
+## What gets attention first
+  prose: narrative: how work is ranked
+## How it is maintained: ACMM L6, on purpose
+  joined: tests/test_strategy_doc.py
+## Where to look
+  joined: tests/test_instruction_docs.py
