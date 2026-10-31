@@ -117,7 +117,7 @@
 ### Sensors and controls
   joined: tests/test_readme_entities.py
 ### Notes on specific entities
-  prose: unchecked: per-entity notes: aux heat as a switch, the battery estimate
+  joined: tests/test_readme_entity_notes.py
 ### Attributes
   joined: tests/e2e/test_readme_climate_attributes.py
 ## Limitations
