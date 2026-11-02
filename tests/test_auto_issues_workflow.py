@@ -80,11 +80,13 @@ def _step() -> dict:
 
 
 def test_the_workflow_exists_and_is_named() -> None:
+    """The workflow file is committed and named `Auto issues`."""
     assert _WORKFLOW.is_file(), "no auto-issues workflow, so a failed release is silent"
     assert _load(_WORKFLOW)["name"] == "Auto issues"
 
 
 def test_it_runs_when_the_release_workflow_completes() -> None:
+    """It triggers only on a completed run of the workflow `release.yml` names."""
     release_name = _load(_WORKFLOWS / "release.yml")["name"]
 
     trigger = _triggers(_load(_WORKFLOW))
@@ -99,6 +101,7 @@ def test_it_runs_when_the_release_workflow_completes() -> None:
 
 
 def test_it_watches_every_scheduled_workflow_not_reporting_for_itself() -> None:
+    """Every scheduled workflow is watched here or reports its own failures."""
     scheduled = {}
     for path in workflow_paths():
         document = _load(path)
@@ -115,6 +118,7 @@ def test_it_watches_every_scheduled_workflow_not_reporting_for_itself() -> None:
 
 
 def test_only_the_job_that_files_issues_can_write_them() -> None:
+    """The token can write issues and nothing else, and only in the one job."""
     document = _load(_WORKFLOW)
 
     assert document["permissions"] == {}
@@ -170,17 +174,25 @@ def stubs_fixture(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _issue(number: int, title: str = _TITLE, author: str = "app/github-actions") -> dict:
+def _issue(
+    number: int, title: str = _TITLE, author: str = "app/github-actions"
+) -> dict:
     return {"number": number, "title": title, "author": {"login": author}}
 
 
 class Result:
-    def __init__(self, completed: subprocess.CompletedProcess, calls: list[dict]) -> None:
+    """One run of the step: its exit status, stderr and recorded `gh` calls."""
+
+    def __init__(
+        self, completed: subprocess.CompletedProcess, calls: list[dict]
+    ) -> None:
+        """Keep what the assertions read from the finished process."""
         self.returncode = completed.returncode
         self.stderr = completed.stderr
         self.calls = calls
 
     def starting(self, *prefix: str) -> list[dict]:
+        """Return the recorded `gh` calls whose arguments begin with `prefix`."""
         return [c for c in self.calls if c["args"][: len(prefix)] == list(prefix)]
 
 
@@ -241,12 +253,15 @@ def _run(
         check=False,
     )
     calls = [
-        json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line
+        json.loads(line)
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line
     ]
     return Result(completed, calls)
 
 
 def test_a_failed_scheduled_release_opens_an_issue(tmp_path: Path, stubs: Path) -> None:
+    """The first failure opens an issue linking the run and the commit."""
     result = _run(tmp_path, stubs)
 
     assert result.returncode == 0, result.stderr
@@ -263,6 +278,7 @@ def test_a_failed_scheduled_release_opens_an_issue(tmp_path: Path, stubs: Path) 
 def test_every_kind_of_failure_is_reported(
     tmp_path: Path, stubs: Path, conclusion: str
 ) -> None:
+    """A timeout or a startup failure is reported like a failure."""
     result = _run(tmp_path, stubs, conclusion=conclusion)
 
     assert result.returncode == 0, result.stderr
@@ -272,6 +288,7 @@ def test_every_kind_of_failure_is_reported(
 def test_a_further_failure_comments_on_the_open_issue(
     tmp_path: Path, stubs: Path
 ) -> None:
+    """A second failure comments on the oldest open tracking issue."""
     result = _run(tmp_path, stubs, issues=[_issue(9), _issue(7)])
 
     assert result.returncode == 0, result.stderr
@@ -284,6 +301,7 @@ def test_a_further_failure_comments_on_the_open_issue(
 def test_an_issue_with_the_title_from_someone_else_is_not_the_tracking_issue(
     tmp_path: Path, stubs: Path
 ) -> None:
+    """Only an issue the Actions bot opened counts as the tracking issue."""
     squatted = [_issue(3, author="someone"), _issue(4, title="Something else")]
 
     result = _run(tmp_path, stubs, issues=squatted)
@@ -296,6 +314,7 @@ def test_an_issue_with_the_title_from_someone_else_is_not_the_tracking_issue(
 def test_a_failed_listing_fails_the_step_instead_of_filing_a_duplicate(
     tmp_path: Path, stubs: Path
 ) -> None:
+    """A failed `gh issue list` fails the step rather than reading as none open."""
     result = _run(tmp_path, stubs, list_fails=True)
 
     assert result.returncode != 0
@@ -319,6 +338,7 @@ def test_a_failed_listing_fails_the_step_instead_of_filing_a_duplicate(
 def test_a_run_that_is_not_an_unattended_failure_touches_nothing(
     tmp_path: Path, stubs: Path, overrides: dict
 ) -> None:
+    """A pass, a cancel, a dispatch or another branch makes no `gh` call."""
     result = _run(tmp_path, stubs, issues=[_issue(7)], **overrides)
 
     assert result.returncode == 0, result.stderr
