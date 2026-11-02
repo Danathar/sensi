@@ -1,0 +1,128 @@
+name: Auto issues
+
+# Opens an issue when the scheduled monthly Release fails.
+#
+# The Release workflow refuses to tag a commit whose manifest version is
+# already released, and it keeps refusing every month until someone bumps the
+# version by hand. A red scheduled run notifies nobody but whoever last edited
+# the workflow's cron line, and no pull request carries its check, so the
+# failure was only ever seen by chance. This turns that red run into an issue.
+#
+# Only the scheduled run of `Release` is watched. A dispatched run is a person
+# watching it, and a run on another branch says nothing about `master`.
+# `Nightly compliance` is deliberately not watched: its own `report` job already
+# keeps an issue for it. Every other workflow runs on a pull request, a push or
+# a person's label, and someone is already looking at it.
+#
+# One open issue for the workflow, matched by exact title and by author. The
+# author check matters: the repository is public, anyone can open an issue with
+# the same title, and a failure must never be reported into an issue someone
+# else controls. Issues are listed rather than searched because the search
+# index lags. A further failure comments on the open issue instead of filing
+# another. Nothing here closes the issue: whoever fixes the cause closes it.
+# A passing run proves nothing about a failure nobody has looked at.
+#
+# It applies no label, because a failure report is not a request for an agent
+# to change anything.
+#
+# `workflow_run` always runs this file as it is on the default branch, so a pull
+# request cannot change what this does by editing it. There is no checkout, so
+# no code from the watched run executes. Every field of that run reaches the
+# shell through `env:`, never through `${{ }}` inside `run:`, because a branch
+# name is text someone else chose.
+on:
+  workflow_run:
+    # Matched by the workflow's `name:`, not its file name, so renaming it
+    # silently stops tracking it. tests/test_auto_issues_workflow.py fails when
+    # this list and the name in release.yml disagree.
+    workflows: [Release]
+    types: [completed]
+
+# Opens issues and comments on them. It checks nothing out.
+permissions: {}
+
+# Two completions must not both find no issue open and file two.
+concurrency:
+  group: auto-issues-${{ github.event.workflow_run.name }}
+  cancel-in-progress: false
+
+jobs:
+  track:
+    name: Open or update the tracking issue
+    runs-on: ubuntu-latest
+    # A couple of gh calls.
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Report the failed scheduled run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          # A run on another branch or from another repository says nothing
+          # about the default branch, so it reports nothing.
+          if [ "$HEAD_BRANCH" != "$DEFAULT_BRANCH" ] || [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "$WORKFLOW ran on $HEAD_REPO@$HEAD_BRANCH, not $REPO@$DEFAULT_BRANCH; nothing to report."
+            exit 0
+          fi
+          # Only the unattended run. A person who dispatches a release is
+          # watching it.
+          if [ "$EVENT" != "schedule" ]; then
+            echo "$WORKFLOW ran on a $EVENT event; only scheduled runs are reported."
+            exit 0
+          fi
+          # A cancelled or skipped run is not a failure, and a pass needs no
+          # issue.
+          case "$CONCLUSION" in
+            failure|timed_out|startup_failure) ;;
+            *)
+              echo "$WORKFLOW concluded $CONCLUSION; nothing to report."
+              exit 0
+              ;;
+          esac
+
+          title="Scheduled run failing: $WORKFLOW"
+
+          # Assigned before it is read, so a failed listing fails the step
+          # under `set -eo pipefail` instead of looking like "no issue open"
+          # and filing a duplicate. gh reports the Actions bot as
+          # `app/github-actions`; a person's login cannot contain a `/`.
+          number="$(gh issue list --repo "$REPO" --state open --limit 1000 \
+            --json number,title,author \
+            | jq -r --arg title "$title" \
+              '[.[] | select(.title == $title and .author.login == "app/github-actions")]
+               | sort_by(.number) | first | .number // empty')"
+
+          if [ -n "$number" ]; then
+            printf '%s\n' \
+              "Failed again (\`$CONCLUSION\`): $RUN_URL" \
+              "" \
+              "Commit: $HEAD_SHA" \
+              | gh issue comment "$number" --repo "$REPO" --body-file -
+            echo "$WORKFLOW failed again; commented on #$number."
+          else
+            printf '%s\n' \
+              "The scheduled **$WORKFLOW** workflow failed on \`$DEFAULT_BRANCH\`. Nobody watches these runs, so this issue is how the failure gets seen." \
+              "" \
+              "- Run: $RUN_URL" \
+              "- Conclusion: \`$CONCLUSION\`" \
+              "- Commit: $HEAD_SHA" \
+              "" \
+              "Open the run and read the failed step's log. The usual cause is a manifest version that is already released: the monthly run refuses to tag it until a pull request bumps \`custom_components/sensi/manifest.json\`." \
+              "" \
+              "\`.github/workflows/auto-issues.yml\` opened this issue. It comments here on each further scheduled failure and never closes it, so close it once the cause is fixed. A run you dispatch by hand neither opens nor updates it." \
+              | gh issue create --repo "$REPO" --title "$title" --body-file -
+            echo "$WORKFLOW failed; opened a tracking issue."
+          fi

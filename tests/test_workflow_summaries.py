@@ -221,7 +221,10 @@ _TABLE_ROW = re.compile(r"^\| `\.github/workflows/([\w-]+\.yml)` \| (.+?) \|$", 
 
 # Committed workflows the table leaves out, and why. Checked below, so an entry
 # cannot outlive the reason it gives.
-_NOT_IN_TABLE = {"release.yml": "publishes a release and enforces nothing"}
+_NOT_IN_TABLE = {
+    "release.yml": "publishes a release and enforces nothing",
+    "auto-issues.yml": "files an issue for a failed scheduled release; enforces nothing",
+}
 
 
 def _table() -> dict[str, str]:

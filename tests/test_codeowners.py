@@ -58,6 +58,7 @@ _MANIFEST = _ROOT / "custom_components" / "sensi" / "manifest.json"
 # is a decision that it is not - both belong in a diff, which is the point of
 # listing them rather than deriving them.
 _CONTROL_PLANE = (
+    ".github/workflows/auto-issues.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/coverage-gate.yml",
     ".github/workflows/labeler.yml",
