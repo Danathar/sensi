@@ -129,7 +129,7 @@
 ### Why switch
   prose: narrative: which fixes are worth switching for
 ### How to switch
-  prose: unchecked: same domain, unique IDs and credential store as upstream
+  joined: tests/test_readme_switching_from_upstream.py
 ### Going back
   prose: narrative: reverse of the steps above
 ### HACS default listing
@@ -141,7 +141,7 @@
 ## Breaking changes
   prose: narrative: heading only; the subsections below carry the content
 ### This fork
-  prose: unchecked: the WiFi quality unit change and the other breaking changes in this fork
+  joined: tests/test_readme_fork_breaking_changes.py
 ### 2.0.0
   prose: narrative: upstream release history
 ### 1.3.0
