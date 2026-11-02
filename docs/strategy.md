@@ -38,12 +38,12 @@ a person's.
 The ACMM evaluation opened eight L6 issues (#418 to #425). Their outcomes
 follow that boundary:
 
-- **Documented**, because the capability is real and only lacked a page:
-  multi-agent orchestration (#419), this strategy page (#420), the operations
-  runbook (#423) and task traceability (#424).
+- **Documented**, because the capability is real and only lacked a page or a
+  file: issue generation (#418, a workflow that opens an issue when the
+  scheduled release fails), multi-agent orchestration (#419), this strategy
+  page (#420), the operations runbook (#423) and task traceability (#424).
 - **Waived to Hive** in `.acmm.yml`, because Hive already provides the
-  capability outside this repository: issue generation (#418) and the audit
-  trail (#425).
+  capability outside this repository: the audit trail (#425).
 - **Waived to an existing file** in `.acmm.yml`: the risk-assessment config
   (#422). The rules already live at `.github/policies/risk-tiers.yml`, and a
   copy under the criterion's file names would drift.
