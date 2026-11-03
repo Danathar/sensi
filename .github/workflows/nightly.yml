@@ -138,8 +138,17 @@ jobs:
 
           TITLE="Nightly compliance failing"
 
-          existing=$(gh issue list --repo "$REPO" --state open \
-            --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          # Listed rather than searched, because the search index lags. Matched
+          # by exact title and by author, because the repository is public and
+          # anyone can open an issue with this title. gh reports the Actions
+          # bot as `app/github-actions`; a person's login cannot contain a `/`.
+          # Assigned before it is read, so a failed listing fails the step
+          # under `set -eo pipefail`.
+          existing="$(gh issue list --repo "$REPO" --state open --limit 1000 \
+            --json number,title,author \
+            | jq -r --arg title "$TITLE" \
+              '[.[] | select(.title == $title and .author.login == "app/github-actions")]
+               | sort_by(.number) | first | .number // empty')"
 
           if [ "$PINNED" = "success" ]; then
             if [ -n "$existing" ]; then

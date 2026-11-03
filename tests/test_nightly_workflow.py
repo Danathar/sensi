@@ -166,8 +166,8 @@ class StepResult:
 def stubs_fixture(tmp_path: Path) -> Path:
     """Build a PATH directory holding a recording `gh`.
 
-    The stub answers `gh issue list` with `$GH_EXISTING`, which is how a test
-    says "an issue is already open" or "none is", fails whichever
+    The stub answers `gh issue list` with the JSON array in `$GH_ISSUES`, which
+    is how a test says which issues are open (an empty array for none), fails whichever
     subcommands `$GH_FAIL` names, and appends every invocation to `$GH_LOG`
     as a JSON array so the assertions can look at arguments rather than at
     text the step printed.
@@ -188,7 +188,7 @@ def stubs_fixture(tmp_path: Path) -> Path:
         '    sys.stderr.write("gh: stubbed failure\\n")\n'
         "    sys.exit(1)\n"
         'if arguments[:2] == ["issue", "list"]:\n'
-        '    print(os.environ.get("GH_EXISTING", ""))\n'
+        '    print(os.environ.get("GH_ISSUES", "[]"))\n'
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -202,7 +202,7 @@ def _run(
     *,
     pinned: str,
     latest: str = "success",
-    existing: str = "",
+    issues: list[dict] | None = None,
     gh_fail: str = "",
 ) -> StepResult:
     """Run the reporting step with the leg results and issue state given."""
@@ -222,7 +222,7 @@ def _run(
         "HOME": str(workspace),
         "GITHUB_STEP_SUMMARY": str(summary_file),
         "GH_LOG": str(log_file),
-        "GH_EXISTING": existing,
+        "GH_ISSUES": json.dumps(issues or []),
         "GH_FAIL": gh_fail,
     }
     # Layered as Actions layers them, so the step reads REPO, RUN_URL, PINNED
@@ -263,6 +263,14 @@ def _run(
     )
 
 
+def _issue(
+    number: int, title: str = _TITLE, author: str = "app/github-actions"
+) -> dict:
+    """Return an open issue as `gh issue list --json number,title,author` does."""
+
+    return {"number": number, "title": title, "author": {"login": author}}
+
+
 def _leg_context(pinned: str, latest: str) -> dict[str, str]:
     """Return the `needs` expressions carrying the two legs' results."""
 
@@ -298,7 +306,7 @@ def test_a_green_nightly_closes_the_issue_it_finds(tmp_path: Path, stubs: Path) 
     an issue that is already shut.
     """
 
-    result = _run(tmp_path, stubs, pinned="success", existing="42")
+    result = _run(tmp_path, stubs, pinned="success", issues=[_issue(42)])
 
     assert result.returncode == 0, result.stderr
     comment = result.call("issue", "comment")
@@ -337,7 +345,7 @@ def test_a_failed_nightly_reuses_the_issue_it_finds(
 ) -> None:
     """A second failure comments rather than opening a duplicate."""
 
-    result = _run(tmp_path, stubs, pinned="failure", existing="7")
+    result = _run(tmp_path, stubs, pinned="failure", issues=[_issue(7)])
 
     assert result.returncode == 0, result.stderr
     comment = result.call("issue", "comment")
@@ -359,12 +367,58 @@ def test_the_issue_is_searched_for_under_the_title_it_is_opened_with(
     """
 
     lookup = _run(tmp_path, stubs, pinned="failure")
-    search = lookup.option(lookup.call("issue", "list"), "--search")
+    listing = lookup.call("issue", "list")
     created = lookup.option(lookup.call("issue", "create"), "--title")
 
-    assert search == f'"{created}" in:title'
+    assert lookup.option(listing, "--state") == "open"
+    assert lookup.option(listing, "--json") == "number,title,author"
+    assert "--search" not in listing, "the search index lags; list instead"
     assert created == _TITLE
-    assert lookup.option(lookup.call("issue", "list"), "--state") == "open"
+
+
+@pytest.mark.parametrize("pinned", ["failure", "success"])
+def test_an_issue_someone_else_opened_is_neither_reported_into_nor_closed(
+    tmp_path: Path, stubs: Path, pinned: str
+) -> None:
+    """Only an issue the Actions bot opened under the exact title is reused.
+
+    The repository is public, so anyone can open an issue with this title or
+    one that contains it. A red run must not post its report there, a green
+    run must not close it, and the red run still has to tell the maintainer.
+    """
+
+    others = [
+        _issue(3, author="someone"),
+        _issue(4, title=f"{_TITLE} on 2026-11-03"),
+        _issue(5, title="Something else"),
+    ]
+
+    result = _run(tmp_path, stubs, pinned=pinned, issues=others)
+
+    assert result.returncode == 0, result.stderr
+    assert not result.calls_starting("issue", "comment")
+    assert not result.calls_starting("issue", "close")
+    created = result.calls_starting("issue", "create")
+    if pinned == "failure":
+        assert [result.option(c, "--title") for c in created] == [_TITLE]
+    else:
+        assert not created
+
+
+def test_the_oldest_issue_the_bot_opened_is_the_one_reused(
+    tmp_path: Path, stubs: Path
+) -> None:
+    """With several bot-opened issues the lowest number wins, as in auto-issues."""
+
+    result = _run(
+        tmp_path,
+        stubs,
+        pinned="failure",
+        issues=[_issue(9), _issue(2, author="someone"), _issue(7)],
+    )
+
+    assert result.call("issue", "comment")[2] == "7"
+    assert not result.calls_starting("issue", "create")
 
 
 def test_a_latest_leg_that_never_ran_is_reported_as_such(
