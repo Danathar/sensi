@@ -10,7 +10,7 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Danathar/sensi/issues",
   "requirements": [
-    "python-socketio==5.16.4"
+    "python-socketio==5.18.1"
   ],
   "single_config_entry": true,
   "version": "2026.11.0"
