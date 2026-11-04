@@ -20,7 +20,7 @@ There is no public Sensi API. The integration talks to the same backend the mobi
 
 ## Project status
 
-**Beta.** The integration is in daily use and covers the features listed under [What you get](#what-you-get), but it has had one release so far (`2026.9.0`) and has not yet been run long enough, or on enough installs, to call stable.
+**Beta.** The integration is in daily use and covers the features listed under [What you get](#what-you-get), but it has had few releases so far and has not yet been run long enough, or on enough installs, to call stable.
 
 What beta means here:
 
