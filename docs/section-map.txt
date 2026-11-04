@@ -95,7 +95,7 @@
 
 [README.md]
 ## Project status
-  prose: unchecked: the release count and the no-network claim; tests/test_ci_network_guard.py enforces the guard but does not open this page
+  joined: tests/test_readme_project_status.py
 ## Requirements
   joined: tests/test_metadata.py
 ## Installation
