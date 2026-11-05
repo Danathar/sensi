@@ -413,6 +413,125 @@ class TestValidateRefreshToken:
             await validate_refresh_token(hass, "token")
 
 
+class TestIncompleteTokenReply:
+    """A 200 reply that is missing fields must not erase the stored sign-in."""
+
+    async def test_reply_without_access_token_is_a_transient_failure(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """No access token: raise, and leave the store untouched."""
+        aioclient_mock.post(OAUTH_URL2, json={"error": "temporarily_unavailable"})
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+            pytest.raises(SensiConnectionError),
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+        mock_save.assert_not_called()
+
+    async def test_validation_of_reply_without_access_token_is_cannot_connect(
+        self, hass: HomeAssistant, aioclient_mock
+    ) -> None:
+        """The config flow maps SensiConnectionError to cannot_connect."""
+        aioclient_mock.post(OAUTH_URL2, json={"error": "temporarily_unavailable"})
+
+        with pytest.raises(SensiConnectionError):
+            await validate_refresh_token(hass, "token")
+
+    async def test_reply_without_refresh_token_keeps_the_sent_one(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """No new refresh token: the one that was sent stays the credential."""
+        aioclient_mock.post(
+            OAUTH_URL2,
+            json={
+                KEY_ACCESS_TOKEN: "new_access",
+                "expires_in": 3600,
+                KEY_USER_ID: "user123",
+            },
+        )
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=mock_auth_data,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            config = await refresh_access_token(hass, "sent_refresh_token")
+
+        assert config.refresh_token == "sent_refresh_token"
+        assert mock_save.call_args.args[0][KEY_REFRESH_TOKEN] == "sent_refresh_token"
+        assert mock_save.call_args.args[0][KEY_ACCESS_TOKEN] == "new_access"
+
+    async def test_validation_of_reply_without_refresh_token_keeps_the_sent_one(
+        self, hass: HomeAssistant, aioclient_mock
+    ) -> None:
+        """Setup gets a usable credential, so no entry is made without one."""
+        aioclient_mock.post(
+            OAUTH_URL2,
+            json={KEY_ACCESS_TOKEN: "new_access", "expires_in": 3600},
+        )
+
+        config = await validate_refresh_token(hass, "pasted_token")
+
+        assert config.refresh_token == "pasted_token"
+
+    async def test_reply_without_user_id_keeps_the_stored_one(
+        self, hass: HomeAssistant, mock_auth_data, aioclient_mock
+    ) -> None:
+        """No user_id in the reply: the stored one is not blanked."""
+        aioclient_mock.post(
+            OAUTH_URL2,
+            json={
+                KEY_ACCESS_TOKEN: "new_access",
+                KEY_REFRESH_TOKEN: "new_refresh",
+                "expires_in": 3600,
+            },
+        )
+        stored = {**mock_auth_data, KEY_USER_ID: "user123"}
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value=stored,
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            await refresh_access_token(hass, "refresh_token_123")
+
+        saved = mock_save.call_args.args[0]
+        assert saved[KEY_USER_ID] == "user123"
+        assert saved[KEY_REFRESH_TOKEN] == "new_refresh"
+
+    async def test_save_does_not_overwrite_user_id_with_none(
+        self, hass: HomeAssistant
+    ) -> None:
+        """async_save_config keeps the stored user_id when given None."""
+        config = AuthenticationConfig(
+            user_id=None,
+            access_token="access",
+            expires_at=1.0,
+            refresh_token="refresh",
+        )
+
+        with (
+            patch(
+                "homeassistant.helpers.storage.Store.async_load",
+                return_value={KEY_USER_ID: "user123"},
+            ),
+            patch("homeassistant.helpers.storage.Store.async_save") as mock_save,
+        ):
+            await async_save_config(hass, config)
+
+        assert mock_save.call_args.args[0][KEY_USER_ID] == "user123"
+
+
 class TestAsyncSaveConfig:
     """Persisting an accepted credential."""
 
