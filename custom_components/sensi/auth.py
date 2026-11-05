@@ -120,8 +120,20 @@ async def _get_new_tokens(hass: HomeAssistant, refresh_token: str) -> any:
         )
 
     response_json = await response.json()
-    result[KEY_ACCESS_TOKEN] = response_json.get(KEY_ACCESS_TOKEN)
-    result[KEY_REFRESH_TOKEN] = response_json.get(KEY_REFRESH_TOKEN)
+
+    # A 200 is not proof the reply is complete. Without an access token there
+    # is nothing to use and nothing worth saving, and saving it would replace
+    # the stored credential with None although the exchange issued no
+    # replacement - so the old token may still be good. Treat it as a passing
+    # server fault: the store is untouched and Home Assistant retries.
+    if not response_json.get(KEY_ACCESS_TOKEN):
+        LOGGER.warning("Token endpoint reply had no access token")
+        raise SensiConnectionError("Token endpoint reply had no access token")
+
+    result[KEY_ACCESS_TOKEN] = response_json[KEY_ACCESS_TOKEN]
+    # Issuing a new refresh token is optional (RFC 6749 section 6). When the
+    # reply has none, the one that was sent is still the credential.
+    result[KEY_REFRESH_TOKEN] = response_json.get(KEY_REFRESH_TOKEN) or refresh_token
     result[KEY_USER_ID] = response_json.get(
         KEY_USER_ID
     )  # This is used as unique_id in config flow
@@ -176,7 +188,10 @@ async def async_save_config(hass: HomeAssistant, config: AuthenticationConfig) -
     persistent_data[KEY_ACCESS_TOKEN] = config.access_token
     persistent_data[KEY_REFRESH_TOKEN] = config.refresh_token
     persistent_data[KEY_EXPIRES_AT] = config.expires_at
-    persistent_data[KEY_USER_ID] = config.user_id
+    # A reply without a user_id must not blank the stored one: the account
+    # check in get_stored_config is skipped while the stored value is empty.
+    if config.user_id is not None:
+        persistent_data[KEY_USER_ID] = config.user_id
 
     # Only dict or simple values can be saved into store
     await store.async_save(persistent_data)
