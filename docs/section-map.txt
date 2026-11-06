@@ -175,7 +175,7 @@
 ### Never
   joined: tests/test_security_ai_doc.py
 ### Only with an explicit human decision
-  prose: unchecked: the changes that need a human decision; nothing compares the list with the ask and deny rows
+  joined: tests/test_security_ai_human_decisions.py
 ### Always
   joined: tests/test_run_tests_descriptions.py
 ## Handling untrusted input
