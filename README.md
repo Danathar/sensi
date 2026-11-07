@@ -5,7 +5,7 @@
 [![Unit coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fsensi%2Fcoverage-data%2Fcoverage-unit.json)](docs/quality.md#coverage)
 [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-1f6feb)](https://deepwiki.com/Danathar/sensi)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](#maintained-with-hive-acmm-l6)
+[![ACMM L6 Autonomous](https://img.shields.io/badge/ACMM-L6%20Autonomous-2da44e)](#maintained-with-hive-acmm-l6)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -293,11 +293,11 @@ If this integration is useful to you, please support the upstream author:
 
 ## Maintained with Hive (ACMM L6)
 
-Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 6 (Fully Autonomous)**. This section is here because a reader deserves to know that before they install something into their home, and because the arrangement is unusual enough to be worth explaining rather than hinting at with a badge.
+Maintenance here is assisted by [**Hive**](https://github.com/hivecommons/hive) — the agent-orchestration software from the [Hivecommons](https://github.com/hivecommons) project — which runs a fleet of AI agents against this repository at **ACMM level 6 (Autonomous)**. This section is here because a reader deserves to know that before they install something into their home, and because the arrangement is unusual enough to be worth explaining rather than hinting at with a badge.
 
 ### What that actually means
 
-Hive runs specialised agents — quality, security, CI, docs, review — continuously rather than when someone remembers to look. Each has a *policy mode* set by the ACMM level; the [ACMM levels table](https://github.com/hivecommons/hive#acmm-levels) in the Hive README describes every level. This repository's Hive runs at **L6, Fully Autonomous**, which lets agents open pull requests and merge them once checks pass; only outreach pull requests stay held for a person:
+Hive runs specialised agents — quality, security, CI, docs, review — continuously rather than when someone remembers to look. Each has a *policy mode* set by the ACMM level; the [ACMM levels table](https://github.com/hivecommons/hive#acmm-levels) in the Hive README describes every level. This repository's Hive runs at **L6, Autonomous**, which lets agents open pull requests and merge them once checks pass; only outreach pull requests stay held for a person:
 
 - All agents may **file issues** and **open pull requests**.
 - Agent pull requests that are not outreach carry no level hold and **auto-merge when the required checks pass**. Outreach pull requests get a **hold label** and do not merge until a person has reviewed them.
