@@ -1550,3 +1550,33 @@ def test_hvac_modes_reports_only_the_capable_mode(
     setattr(settings, attribute, True)
 
     assert mock_thermostat.hvac_modes == [expected]
+
+
+def test_no_deprecated_api_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Home Assistant 2026.11 requires native_* properties; none may be missing."""
+
+    class _SensiThermostat(SensiThermostat):
+        """Subclass to inspect logging from Home Assistant."""
+
+    assert "provides the deprecated" not in caplog.text
+
+
+def test_native_properties_match_the_plain_ones(mock_thermostat) -> None:
+    """The plain climate properties report the native_* values."""
+
+    assert (
+        mock_thermostat.current_temperature
+        == mock_thermostat.native_current_temperature
+    )
+    assert mock_thermostat.temperature_unit == mock_thermostat.native_temperature_unit
+    assert (
+        mock_thermostat.target_temperature == mock_thermostat.native_target_temperature
+    )
+    assert (
+        mock_thermostat.target_temperature_high
+        == mock_thermostat.native_target_temperature_high
+    )
+    assert (
+        mock_thermostat.target_temperature_low
+        == mock_thermostat.native_target_temperature_low
+    )
