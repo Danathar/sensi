@@ -49,6 +49,7 @@ from .conftest import FakeSensiBackend
 CLIMATE = "climate.sensi_living_room"
 DISPLAY_HUMIDITY = "switch.sensi_living_room_display_humidity"
 AUX_HEAT = "switch.sensi_living_room_aux_heat"
+HUMIDIFICATION = "switch.sensi_living_room_humidification"
 CIRCULATING_FAN = "switch.sensi_living_room_circulating_fan"
 CIRCULATING_DUTY_CYCLE = "number.sensi_living_room_circulating_duty_cycle"
 TEMPERATURE_OFFSET = "number.sensi_living_room_temperature_offset"
@@ -585,6 +586,117 @@ async def test_unsupported_capability_is_unavailable(
 ) -> None:
     """The sample thermostat reports no aux stage, so aux heat stays unavailable."""
     assert hass.states.get(AUX_HEAT).state == STATE_UNAVAILABLE
+
+
+async def test_aux_heat_switch_round_trip(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """Aux heat sends `aux`, and turning it off sends back the mode it replaced.
+
+    This sets up its own entry rather than using `sensi_entry`, because the
+    sample thermostat has no aux stage and the switch is unavailable there.
+    """
+    sensi_backend.devices[ICD_ID]["capabilities"]["operating_mode_settings"]["aux"] = (
+        "yes"
+    )
+    sensi_backend.devices[ICD_ID]["state"]["operating_mode"] = "heat"
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(AUX_HEAT).state == STATE_OFF
+
+    await hass.services.async_call(
+        "switch", SERVICE_TURN_ON, {ATTR_ENTITY_ID: AUX_HEAT}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_operating_mode") == {
+        "icd_id": ICD_ID,
+        "value": "aux",
+    }
+    assert hass.states.get(AUX_HEAT).state == STATE_ON
+
+    await hass.services.async_call(
+        "switch", SERVICE_TURN_OFF, {ATTR_ENTITY_ID: AUX_HEAT}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_operating_mode") == {
+        "icd_id": ICD_ID,
+        "value": "heat",
+    }
+    assert hass.states.get(AUX_HEAT).state == STATE_OFF
+
+    await sensi_backend.shutdown()
+
+
+async def test_humidification_switch_round_trip(
+    hass: HomeAssistant,
+    sensi_backend: FakeSensiBackend,
+    stored_credentials: None,
+    enable_custom_integrations: None,
+) -> None:
+    """The humidifier switch sends its on/off with the current target percent.
+
+    This sets up its own entry rather than using `sensi_entry`, because the
+    sample thermostat reports no humidification capability and the switch is
+    not created there. The capability block is the one in
+    `sample_with_humidification.json`.
+    """
+    sensi_backend.devices[ICD_ID]["capabilities"]["humidity_control"] = {
+        "deadband": 10,
+        "humidification": {"step": 5, "min": 5, "max": 50, "types": ["humidifier"]},
+    }
+    sensi_backend.devices[ICD_ID]["state"]["humidity_control"]["humidification"][
+        "target_percent"
+    ] = 35
+
+    entry = MockConfigEntry(
+        domain=SENSI_DOMAIN,
+        data={CONFIG_REFRESH_TOKEN: "e2e_refresh_token"},
+        unique_id="e2e_user",
+        title="Sensi Thermostat",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(HUMIDIFICATION).state == STATE_OFF
+
+    await hass.services.async_call(
+        "switch", SERVICE_TURN_ON, {ATTR_ENTITY_ID: HUMIDIFICATION}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_humidification") == {
+        "icd_id": ICD_ID,
+        "value": {"enabled": "on", "target_percent": 35},
+    }
+    assert hass.states.get(HUMIDIFICATION).state == STATE_ON
+
+    await hass.services.async_call(
+        "switch", SERVICE_TURN_OFF, {ATTR_ENTITY_ID: HUMIDIFICATION}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert sensi_backend.last_emitted("set_humidification") == {
+        "icd_id": ICD_ID,
+        "value": {"enabled": "off", "target_percent": 35},
+    }
+    assert hass.states.get(HUMIDIFICATION).state == STATE_OFF
+
+    await sensi_backend.shutdown()
 
 
 async def test_coordinator_refresh_reconnects_and_picks_up_new_state(
