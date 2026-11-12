@@ -32,8 +32,8 @@ findings that followed.
 - `labeler.yml` applies path, `tier/*` and `size/*` labels to every pull request.
 - `nightly.yml` runs `ruff`, requirements sync and the pytest suite daily (not
   hassfest, HACS or the coverage floor), plus a leg that runs the suite alone
-  against the *latest* Home Assistant as advance warning. A failure opens one
-  self-closing issue.
+  against the *latest* Home Assistant as advance warning. A failure of either
+  leg opens a self-closing issue of that leg's own.
 - `ai-fix.yml` is **gone**: issue #110, removed by PR #118. Autonomous
   maintenance runs through Hive at ACMM L6 and through nothing else; there is
   no repository-local agent workflow to enable. See `docs/SECURITY-AI.md`,

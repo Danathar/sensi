@@ -93,7 +93,9 @@ once a day, and separately runs the suite against the **latest** Home Assistant
 rather than the pinned one. Home Assistant ships monthly and deprecates
 aggressively; that second leg is how an upcoming break arrives as a nightly
 notice instead of as a user's broken installation. It is informational and
-never gates a pull request.
+never gates a pull request. Because it is allowed to fail, the run stays green
+when it does, so a failure opens an issue of its own, separate from the pinned
+leg's, and that issue closes itself when the leg passes again.
 
 It is not the whole gate. `hassfest` and `HACS` need a Home Assistant action
 and are not in it, and the nightly coverage run measures without enforcing the
