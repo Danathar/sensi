@@ -56,6 +56,8 @@
   joined: tests/test_instruction_docs.py
 ## When you are unsure
   prose: narrative: what to do when a fact cannot be checked
+## Owner's standing decisions
+  prose: narrative: a standing ruling on which owner questions agents decide themselves
 
 [CLAUDE.md]
 ## The short version
