@@ -80,9 +80,9 @@ three of their arguments do file I/O that has nothing to do with the repository:
   redirection in a segment that runs one of them is refused the way one on
   a git segment is. Descriptor forms, input redirections on these commands,
   pipes and a command no allow rule covers are left alone - that one prompts
-  on its own. The three rows with no `:*` (`ruff check .`, `ruff format --check .`,
-  `python3 scripts/check_requirements_sync.py`) are gated the same way; see
-  `_EXACT_ROWS`.
+  on its own. The rows with no `:*` (`ruff check .`, `ruff format --check .`,
+  `python3 scripts/check_requirements_sync.py` and the seven branch-listing
+  forms of `git branch`) are gated the same way; see `_EXACT_ROWS`.
 * gh's `--jq` (`-q`) filter reads the environment. gh evaluates it with
   gojq, whose `env` builtin is the whole process environment, so
   `gh pr view 1 --json number --jq env` printed `GH_TOKEN` and every other
@@ -383,13 +383,23 @@ _GATED_PREFIXES = (
 # documentation reads both ways, and refusing costs almost nothing, so the
 # hook refuses. Ruff's own ways to write a file are refused with it: its
 # `--output-file`/`-o` flag, and `RUFF_OUTPUT_FILE=` as a leading assignment,
-# which the assignment rule for these prefixes already refuses.
+# which the assignment rule for these prefixes already refuses. The
+# `git branch` rows are exact so that `-D`, `-f` and `-M` prompt (#687); a
+# redirection on them is refused by `_runs_git` as well, and listing them here
+# keeps this tuple equal to the settings file's exact rows.
 # `test_git_file_argument_gate.py` derives this list from the settings file
 # too.
 _EXACT_ROWS = (
     ("ruff", "check", "."),
     ("ruff", "format", "--check", "."),
     ("python3", "scripts/check_requirements_sync.py"),
+    ("git", "branch"),
+    ("git", "branch", "-a"),
+    ("git", "branch", "-r"),
+    ("git", "branch", "-v"),
+    ("git", "branch", "-vv"),
+    ("git", "branch", "--list"),
+    ("git", "branch", "--show-current"),
 )
 
 # Words that stand before the name of the command they run and are not part
@@ -500,7 +510,6 @@ _ALLOWED_GIT_PREFIXES = (
     ("diff",),
     ("log",),
     ("show",),
-    ("branch",),
     ("add",),
     ("checkout", "-b"),
 )
