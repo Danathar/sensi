@@ -12,7 +12,7 @@ this page does not restate them.
 |---|---|---|
 | Checks on `master` | the CI, Coverage gate and Validate workflows | all six required checks green ([docs/branch-protection.md](branch-protection.md)) |
 | Nightly compliance, 06:17 UTC | the Nightly compliance workflow | `pinned Home Assistant` green; no open `Nightly compliance failing` issue |
-| Home Assistant advance warning | the `latest Home Assistant (advance warning)` job in the same run | green, or a failure already understood |
+| Home Assistant advance warning | the `latest Home Assistant (advance warning)` job in the same run | no open `Nightly latest Home Assistant leg failing` issue, or one already understood |
 | Monthly release, 09:00 UTC on the 1st | the Release workflow | the run publishes, or skips because nothing user-visible changed; a red run is covered under [A release is refused](#a-release-is-refused) |
 | Agent pull requests waiting | `gh pr list -R Danathar/sensi --label hold` | only outreach pull requests are held; reviewed promptly, none left to go stale |
 
@@ -63,9 +63,11 @@ with the last green run. A changed transitive dependency is the usual cause.
 Fix it in a pull request. The issue closes itself when a later nightly is
 green again.
 
-A failure in `latest Home Assistant (advance warning)` alone opens no issue
-and gates nothing. Treat it as notice that the next Home Assistant upgrade
-needs work, and read the warnings summary in that job's log.
+A failure in `latest Home Assistant (advance warning)` gates nothing and
+leaves the run green, so it opens an issue of its own,
+`Nightly latest Home Assistant leg failing`, which closes itself when that leg
+passes again. Treat it as notice that the next Home Assistant upgrade needs
+work, and read the warnings summary in that job's log.
 
 ## No Dependabot pull request appears
 

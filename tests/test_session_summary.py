@@ -525,11 +525,11 @@ def test_the_labeller_can_only_label() -> None:
     )
 
 
-def test_the_nightly_run_can_only_open_its_issue() -> None:
-    """One self-closing issue means one issue, and it closes itself.
+def test_the_nightly_run_can_only_open_its_issues() -> None:
+    """One self-closing issue per nightly leg, and each closes itself.
 
     Both halves are checkable: the scope it gets, and the fact that the step
-    which opens the issue also closes it when the run goes green.
+    which opens each issue also closes it when its leg goes green.
     """
     granted = _write_scopes(_NIGHTLY)
     assert granted == {"issues"}, (
@@ -546,16 +546,16 @@ def test_the_nightly_run_can_only_open_its_issue() -> None:
     ]
     assert len(bodies) == 1, (
         f"{_rel(_NIGHTLY)} has {len(bodies)} steps that open an issue; the "
-        "record promises one"
+        "record promises one reporting step"
     )
     body = bodies[0]
-    assert body.count("gh issue create") == 1, (
-        f"{_rel(_NIGHTLY)} opens more than one issue in a single step, so "
-        '"one self-closing issue" understates what a failing night does'
+    assert body.count("gh issue create") == 2, (
+        f"{_rel(_NIGHTLY)} does not open exactly one issue per nightly leg, so "
+        '"one for each nightly leg" misstates what a failing night does'
     )
-    assert "gh issue close" in body, (
-        f"{_rel(_NIGHTLY)} opens an issue and never closes one, so the issue "
-        "the record calls self-closing has to be closed by hand"
+    assert body.count("gh issue close") == 2, (
+        f"{_rel(_NIGHTLY)} opens an issue it never closes, so an issue the "
+        "record calls self-closing has to be closed by hand"
     )
 
 

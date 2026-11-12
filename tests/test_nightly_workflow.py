@@ -40,6 +40,10 @@ _JOB = "report"
 # made in both places deliberately.
 _TITLE = "Nightly compliance failing"
 
+# The latest leg's own issue. The leg is `continue-on-error`, so the run stays
+# green when it fails and nothing else would tell anyone.
+_LATEST_TITLE = "Nightly latest Home Assistant leg failing"
+
 _REPO = "Danathar/sensi"
 _RUN_URL = f"https://github.com/{_REPO}/actions/runs/1234567890"
 
@@ -509,3 +513,107 @@ def test_the_advance_warning_leg_is_read_from_its_step_not_its_job(
     assert latest["outputs"]["result"] == "${{ steps.run.outcome }}"
     assert _step()["env"]["LATEST"] == "${{ needs.latest.outputs.result }}"
     assert "steps.run.outcome" not in _step()["env"]["PINNED"]
+
+
+def test_a_failed_latest_leg_opens_its_own_issue(tmp_path: Path, stubs: Path) -> None:
+    """A red advance-warning leg is reported even when the pinned leg is green.
+
+    The leg is `continue-on-error`, so the workflow run stays green and its
+    failure reached no one: from 2026-10-11 it failed every night for over a
+    month on an unreviewed pytest option, and before that for fourteen nights
+    on a missing ruff (#329).
+    """
+
+    result = _run(tmp_path, stubs, pinned="success", latest="failure")
+
+    assert result.returncode == 0, result.stderr
+    created = result.call("issue", "create")
+    assert result.option(created, "--title") == _LATEST_TITLE
+    assert result.option(created, "--label") == "ci"
+    assert result.option(created, "--repo") == _REPO
+    body = _body(result, created)
+    assert body.startswith("The nightly leg that runs the suite against")
+    assert "- Latest-Home-Assistant leg: `failure`" in body
+    assert f"- Run: {_RUN_URL}" in body
+    assert not [line for line in body.splitlines() if line[:1].isspace()]
+    assert not result.calls_starting("issue", "comment")
+    assert not result.calls_starting("issue", "close")
+
+
+def test_both_legs_failing_open_one_issue_each(tmp_path: Path, stubs: Path) -> None:
+    """The two issues close on different conditions, so they stay separate."""
+
+    result = _run(tmp_path, stubs, pinned="failure", latest="failure")
+
+    assert result.returncode == 0, result.stderr
+    titles = [
+        result.option(c, "--title") for c in result.calls_starting("issue", "create")
+    ]
+    assert sorted(titles) == sorted([_TITLE, _LATEST_TITLE])
+    assert len(result.calls_starting("issue", "list")) == 1, "list once, read twice"
+
+
+def test_a_failed_latest_leg_reuses_its_issue(tmp_path: Path, stubs: Path) -> None:
+    """A second red night comments on the latest-leg issue, not the pinned one."""
+
+    issues = [_issue(11, title=_LATEST_TITLE), _issue(12)]
+    result = _run(tmp_path, stubs, pinned="success", latest="failure", issues=issues)
+
+    assert result.returncode == 0, result.stderr
+    comments = result.calls_starting("issue", "comment")
+    assert [c[2] for c in comments][0] == "11"
+    assert "- Latest-Home-Assistant leg: `failure`" in _body(result, comments[0])
+    assert not result.calls_starting("issue", "create")
+    # The green pinned leg still closes its own issue, and only that one.
+    assert [c[2] for c in result.calls_starting("issue", "close")] == ["12"]
+
+
+def test_a_passing_latest_leg_closes_its_issue(tmp_path: Path, stubs: Path) -> None:
+    """Recovery comments on the latest-leg issue and then closes it."""
+
+    result = _run(
+        tmp_path,
+        stubs,
+        pinned="success",
+        latest="success",
+        issues=[_issue(11, title=_LATEST_TITLE)],
+    )
+
+    assert result.returncode == 0, result.stderr
+    comment = result.call("issue", "comment")
+    close = result.call("issue", "close")
+    assert comment[2] == close[2] == "11"
+    assert result.calls.index(comment) < result.calls.index(close)
+    assert _RUN_URL in _body(result, comment)
+    assert not result.calls_starting("issue", "create")
+
+
+@pytest.mark.parametrize("latest", ["", "skipped", "cancelled"])
+def test_a_latest_leg_that_did_not_finish_leaves_its_issue_alone(
+    tmp_path: Path, stubs: Path, latest: str
+) -> None:
+    """Only a leg that ran says anything about the latest Home Assistant."""
+
+    result = _run(
+        tmp_path,
+        stubs,
+        pinned="success",
+        latest=latest,
+        issues=[_issue(11, title=_LATEST_TITLE)],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert [c[:2] for c in result.calls] == [["issue", "list"]]
+
+
+def test_a_latest_leg_issue_someone_else_opened_is_not_reused(
+    tmp_path: Path, stubs: Path
+) -> None:
+    """The latest-leg title gets the same author check as the pinned one."""
+
+    issues = [_issue(3, title=_LATEST_TITLE, author="someone")]
+    result = _run(tmp_path, stubs, pinned="success", latest="failure", issues=issues)
+
+    assert not result.calls_starting("issue", "comment")
+    created = result.call("issue", "create")
+    assert result.option(created, "--title") == _LATEST_TITLE

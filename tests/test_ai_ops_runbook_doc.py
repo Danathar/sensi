@@ -217,19 +217,22 @@ def test_the_nightly_issue_title_is_the_one_the_report_job_files() -> None:
     assert f"`{title.group(1)}`" in _section("The nightly run fails")
 
 
-def test_only_the_pinned_leg_decides_whether_the_nightly_issue_opens() -> None:
-    """Claim: a failure in `latest ...` alone opens no issue and gates nothing."""
+def test_a_latest_leg_failure_gates_nothing_and_has_its_own_issue() -> None:
+    """Claim: a `latest ...` failure gates nothing and opens its own issue.
+
+    `tests/test_nightly_workflow.py` runs the report step and checks what it
+    opens; this checks the page names the title the step opens.
+    """
     nightly = _workflow("Nightly compliance")
     latest = _job(nightly, "latest Home Assistant (advance warning)")
     assert latest.get("continue-on-error") is True
 
     report = _job(nightly, "report")
     script = "\n".join(step.get("run", "") for step in report["steps"])
-    conditions = [
-        line.strip() for line in script.splitlines() if re.match(r"\s*(el)?if \[", line)
-    ]
-    assert any('"$PINNED" = "success"' in line for line in conditions), conditions
-    assert not any("LATEST" in line for line in conditions), conditions
+    title = re.search(r'^\s*LATEST_TITLE="([^"]+)"', script, flags=re.MULTILINE)
+    assert title, "the report job no longer sets LATEST_TITLE"
+    assert f"`{title.group(1)}`" in _section("What to watch")
+    assert f"`{title.group(1)}`" in _section("The nightly run fails")
 
 
 def test_the_resolved_versions_step_is_in_the_pinned_job() -> None:

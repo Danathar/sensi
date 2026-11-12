@@ -61,7 +61,8 @@ client must implement `shutdown()`; `except ValueError, TypeError:` is valid on
 ### Deliberately left inert
 
 The L4 issues asked for automation that acts on the repository. The labeller and
-the nightly run are live — they only add labels and open one self-closing issue.
+the nightly run are live — they only add labels and open self-closing issues,
+one for each nightly leg.
 `ai-fix.yml` is not: it needs an `ANTHROPIC_API_KEY` secret **and** an
 `AI_FIX_ENABLED` variable. Two switches, because `ai-fix-requested` is applied
 automatically by the issue-filing bot, so one switch would mean a key added for

@@ -137,6 +137,9 @@ jobs:
           set -euo pipefail
 
           TITLE="Nightly compliance failing"
+          # The advance-warning leg is `continue-on-error`, so the run stays green when
+          # it fails. Its own issue is the only place that failure reaches anyone.
+          LATEST_TITLE="Nightly latest Home Assistant leg failing"
 
           # Listed rather than searched, because the search index lags. Matched
           # by exact title and by author, because the repository is public and
@@ -144,11 +147,49 @@ jobs:
           # bot as `app/github-actions`; a person's login cannot contain a `/`.
           # Assigned before it is read, so a failed listing fails the step
           # under `set -eo pipefail`.
-          existing="$(gh issue list --repo "$REPO" --state open --limit 1000 \
-            --json number,title,author \
-            | jq -r --arg title "$TITLE" \
+          open_issues="$(gh issue list --repo "$REPO" --state open --limit 1000 \
+            --json number,title,author)"
+
+          bot_issue() {
+            jq -r --arg title "$1" \
               '[.[] | select(.title == $title and .author.login == "app/github-actions")]
-               | sort_by(.number) | first | .number // empty')"
+               | sort_by(.number) | first | .number // empty' <<<"$open_issues"
+          }
+
+          existing="$(bot_issue "$TITLE")"
+          latest_existing="$(bot_issue "$LATEST_TITLE")"
+
+          # Only a leg that ran and failed is reported, and only one that ran and
+          # passed closes the issue: an empty, skipped or cancelled leg says nothing
+          # about Home Assistant either way.
+          if [ "$LATEST" = "failure" ]; then
+            latest_body=$(cat <<BODY
+          The nightly leg that runs the suite against the **latest** Home Assistant
+          and test harness failed. It never gates a pull request and the workflow run
+          still shows as passed, so this issue is the only notice. Whatever failed
+          here is what the next upgrade of the pinned Home Assistant will hit.
+
+          - Latest-Home-Assistant leg: \`$LATEST\`
+          - Run: $RUN_URL
+
+          This issue is reused by later nightly runs and closes itself when that leg
+          passes again.
+          BODY
+            )
+            if [ -n "$latest_existing" ]; then
+              gh issue comment "$latest_existing" --repo "$REPO" --body "$latest_body"
+            else
+              gh label create ci --repo "$REPO" --color 1d76db \
+                --description "Continuous integration" >/dev/null 2>&1 || true
+              gh issue create --repo "$REPO" --title "$LATEST_TITLE" --label ci \
+                --body "$latest_body"
+            fi
+            echo "Latest-Home-Assistant leg failed; reported in its own issue." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$LATEST" = "success" ] && [ -n "$latest_existing" ]; then
+            gh issue comment "$latest_existing" --repo "$REPO" \
+              --body "The latest-Home-Assistant leg passed again as of [this run]($RUN_URL). Closing."
+            gh issue close "$latest_existing" --repo "$REPO"
+          fi
 
           if [ "$PINNED" = "success" ]; then
             if [ -n "$existing" ]; then
