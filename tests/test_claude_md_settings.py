@@ -122,6 +122,24 @@ def test_bare_pytest_asks() -> None:
     assert not any(_matches(rule, "pytest") for rule in _rows("allow", "Bash"))
 
 
+def test_git_branch_is_allowed_only_in_its_read_forms() -> None:
+    """`git branch` with a wildcard also runs `-D`, `-f` and `-M` unasked."""
+    allow = _rows("allow", "Bash")
+    assert not [r for r in allow if r.startswith("git branch") and r.endswith("*")]
+    forms = [
+        "git branch",
+        "git branch -a",
+        "git branch -r",
+        "git branch -v",
+        "git branch -vv",
+        "git branch --list",
+        "git branch --show-current",
+    ]
+    assert [r for r in allow if r.startswith("git branch")] == forms
+    for command in ("git branch -D topic", "git branch -f topic", "git branch -M new"):
+        assert not any(_matches(rule, command) for rule in allow), command
+
+
 def test_what_changes_shared_state_asks_first() -> None:
     """Claim: each command and edit the page lists as shared state asks first."""
     named = _ticked(_between("changes shared state —", "— asks first"))
