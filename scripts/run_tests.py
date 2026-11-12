@@ -254,13 +254,25 @@ FORWARDED = frozenset(
         "--allow-unix-socket",
         # syrupy: snapshot behaviour. The snapshot directory's name is refused
         # above; the rest only decide what is compared, written or reported
-        # inside the default `__snapshots__/` beside each test.
+        # inside the default `__snapshots__/` beside each test. The file lock
+        # and its timeout change only how those files are written (a lock and
+        # an atomic replace); neither names a path.
         *("--snapshot-update", "--snapshot-update-new-only"),
         *("--snapshot-warn-unused", "--snapshot-disable-unused"),
         *("--snapshot-no-cleanup", "--snapshot-details"),
         *("--snapshot-default-extension", "--snapshot-no-colors"),
         *("--snapshot-patch-pycharm-diff", "--snapshot-diff-mode"),
         *("--snapshot-ignore-file-extensions", "--snapshot-declaration-order"),
+        *("--snapshot-file-lock", "--snapshot-file-lock-timeout"),
+        # pytest-codspeed: benchmark runs. `--codspeed` writes its results
+        # under `.codspeed/` in the root directory, which is this repository
+        # once `--rootdir` is refused - the same argument as the cache above.
+        # The folder it would otherwise use comes from the environment, not
+        # from an argument. `--codspeed-mode` picks one of the plugin's own
+        # measurement instruments by name, and the rest are numbers. This
+        # repository has no benchmarks, so a benchmark run measures nothing.
+        *("--codspeed", "--codspeed-mode", "--codspeed-warmup-time"),
+        *("--codspeed-max-time", "--codspeed-max-rounds"),
     }
 )
 
