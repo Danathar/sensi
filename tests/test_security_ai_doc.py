@@ -69,7 +69,15 @@ _spec = importlib.util.spec_from_file_location(
 run_tests = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run_tests)
 
-_NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "ten": 10}
+_NUMBER_WORDS = {
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "ten": 10,
+}
 
 # The workflow the page says was removed. It is the one backticked path that
 # must NOT resolve, and it is asserted absent rather than skipped.
