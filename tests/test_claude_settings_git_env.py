@@ -28,6 +28,7 @@ import subprocess
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SETTINGS = _ROOT / ".claude" / "settings.json"
+_HOOK = _ROOT / ".claude" / "hooks" / "gate-git-file-arguments.py"
 _EXPECTED_ENV = {
     "GIT_CONFIG_COUNT": "1",
     "GIT_CONFIG_KEY_0": "safe.bareRepository",
@@ -161,3 +162,50 @@ def test_committed_bare_repository_cannot_run_a_program_during_history_commands(
     # The checkout's own repository (.git/, not bare) still works with the env.
     assert _git(victim, agent, "status", "--short").returncode == 0
     assert _ok(victim, agent, "log", "-1", "--format=%s") == "x"
+
+
+def _hook_exit(command: str) -> subprocess.CompletedProcess[str]:
+    """Run the Bash gate on `command` the way Claude Code does."""
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    return subprocess.run(
+        [str(_HOOK)],
+        input=payload,
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_options_that_get_past_the_env_still_run_the_program_so_the_hook_refuses(
+    tmp_path: Path,
+) -> None:
+    """`--git-dir`, `--bare` and `-c safe.*` undo the env; the hook stops them.
+
+    `safe.bareRepository=explicit` allows a repository named on the command
+    line, and `-c` / `--config-env` are read at the same level as the
+    `GIT_CONFIG_*` variables and win. So with only the env block each of
+    these still runs the planted program, and the Bash gate is what refuses
+    it (#699).
+    """
+    marker = tmp_path / "ran"
+    victim = _planted_clone(tmp_path, marker)
+    agent = {**_clean_env(tmp_path), **_settings_env(), "SBR": "all"}
+
+    for cwd, args in (
+        (victim, ("--git-dir=evil", "log", "-p", "-1")),
+        (victim, ("--git-dir", "evil", "show")),
+        (victim / "evil", ("--bare", "log", "-p", "-1")),
+        (victim, ("-c", "safe.bareRepository=all", "-C", "evil", "log", "-p", "-1")),
+        (victim, ("-c", "SAFE.BAREREPOSITORY=all", "-C", "evil", "show")),
+        (victim, ("--config-env=safe.bareRepository=SBR", "-C", "evil", "show")),
+    ):
+        command = f"git {' '.join(args)}"
+        marker.unlink(missing_ok=True)
+        _git(cwd, agent, *args)
+        assert marker.exists(), f"precondition: {command} runs the program"
+
+        done = _hook_exit(command)
+        assert done.returncode == 2, f"the hook should refuse {command}: {done.stderr}"
+        assert "safe.bareRepository" in done.stderr

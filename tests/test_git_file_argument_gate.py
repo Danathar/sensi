@@ -2947,6 +2947,133 @@ _CORPUS: tuple[_Row, ...] = (
         "without --force git leaves every gitignored file out, and the withheld "
         "shapes are all in .gitignore",
     ),
+    # --- the global options that undo safe.bareRepository=explicit (#699) ---
+    _Row(
+        "options",
+        "git --git-dir=evil log -p",
+        _REFUSED,
+        "a repository named with --git-dir is allowed by safe.bareRepository="
+        "explicit, so a planted bare folder runs its textconv program",
+    ),
+    _Row(
+        "options",
+        "git --git-dir evil log -p",
+        _REFUSED,
+        "the same --git-dir with its value as the next word, which git accepts "
+        "as readily as the = spelling",
+    ),
+    _Row(
+        "options",
+        "git --bare log -p",
+        _REFUSED,
+        "--bare inside the planted folder names it as the repository, which the "
+        "setting allows, so the textconv program runs",
+    ),
+    _Row(
+        "options",
+        "cd evil && git --bare log -p",
+        _REFUSED,
+        "the shape #699 reproduced: a cd into the planted folder, then --bare, "
+        "and the program runs with the env block set",
+    ),
+    _Row(
+        "options",
+        "git --work-tree=.. diff HEAD",
+        _REFUSED,
+        "--work-tree points git at files outside the checkout, the other half "
+        "of naming a repository outright",
+    ),
+    _Row(
+        "options",
+        "git -c safe.bareRepository=all -C evil log -p",
+        _REFUSED,
+        "-c sets config at the same level as the settings env and the later "
+        "value wins, so the setting is off for this command",
+    ),
+    _Row(
+        "options",
+        "git -c SAFE.BAREREPOSITORY=all log -p",
+        _REFUSED,
+        "git reads config section and key names in any case, so an upper-case "
+        "key is the same override",
+    ),
+    _Row(
+        "options",
+        "git --config-env=safe.bareRepository=V log -p",
+        _REFUSED,
+        "--config-env sets the same key from the variable V, so with V=all it "
+        "is the -c override again",
+    ),
+    _Row(
+        "options",
+        "git --config-env safe.bareRepository=V show",
+        _REFUSED,
+        "--config-env with its value as the next word, which git takes the "
+        "same way as the = spelling",
+    ),
+    _Row(
+        "options",
+        "GIT_DIR=evil git log -p",
+        _REFUSED,
+        "GIT_DIR in the environment names the repository the way --git-dir "
+        "does, and is refused as an assignment before git",
+    ),
+    _Row(
+        "options",
+        "git -c user.name=x --bare log -p",
+        _REFUSED,
+        "the value of -c is stepped over rather than read as the subcommand, "
+        "so the walk still reaches --bare",
+    ),
+    _Row(
+        "options",
+        "git --no-pager --bare log -p",
+        _REFUSED,
+        "an option that takes no value is stepped over alone, so the --bare "
+        "after it is still read",
+    ),
+    _Row(
+        "options",
+        "setarch x86_64 git --bare log -p",
+        _REFUSED,
+        "a program in front runs git with the words after it, so the global "
+        "options are read from the git word on",
+    ),
+    _Row(
+        "options",
+        "git log --oneline -- --bare",
+        _ALLOWED,
+        "a --bare after the subcommand is an operand to git log, not the "
+        "global option, so nothing is named",
+    ),
+    _Row(
+        "options",
+        "git --no-pager log -1",
+        _ALLOWED,
+        "--no-pager names no repository and sets no config, so it leaves "
+        "safe.bareRepository in force",
+    ),
+    _Row(
+        "options",
+        "git -c branch.unsafe.merge=x status",
+        _ALLOWED,
+        "only a key in the safe section is refused, not one whose name merely "
+        "contains safe. further along",
+    ),
+    _Row(
+        "options",
+        "git --namespace=safe.test log -1",
+        _ALLOWED,
+        "only -c and --config-env set config, so a value of another global "
+        "option that starts with safe. is not a key",
+    ),
+    _Row(
+        "options",
+        "git --version",
+        _ALLOWED,
+        "a git with only global options and no subcommand is read to its end "
+        "without running past the last word",
+    ),
 )
 
 
