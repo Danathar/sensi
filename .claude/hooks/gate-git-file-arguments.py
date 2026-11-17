@@ -200,7 +200,18 @@ Each rests on a documented property of the permission matcher, not on a guess:
   `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
   the rule matches only a string that *begins* `git diff `. A global option
   stands before the subcommand, so `git -c ... diff` begins `git -c` and
-  matches nothing.
+  matches nothing. That holds in the default permission mode only, and
+  the global options that undo `safe.bareRepository=explicit` are refused
+  anyway (#699): `--git-dir` (either spelling), `--work-tree` and `--bare`
+  name a repository outright, which the setting allows by design, and
+  `-c` / `--config-env` with a key in the `safe` section (any case) override
+  the settings env for one command. Each of those let a bare folder a branch
+  commits run its `diff.*.textconv` program from `git log -p` with the env
+  block set (git 2.47.3). Bypass and auto modes prompt for nothing, and the
+  ruling on atomic-image-builder#772 is that a gate refuses the protected
+  action however it is reached, as for the brace-built names below; see
+  `_names_another_repository`. `GIT_DIR=` in front of git is the assignment
+  refused above. The other `-c` keys stay decided as not reachable here.
 
 A brace-built command name (`{,git} diff`) begins `{,git}` and matches no
 allow row either, and was once decided here as not reachable with them. It is
@@ -526,6 +537,41 @@ _PATHSPEC_FILE = "pathspec-from-file"
 # the way `_PATHSPEC_FILE` is, so `--fo` is refused too; git add has no short
 # option that takes an argument, so an `f` anywhere in a short cluster is -f.
 _FORCE = "force"
+
+# `safe.bareRepository=explicit` in the `env` block of `.claude/settings.json`
+# stops git from using a bare repository it finds by itself, which is how a
+# branch that commits one gets its `diff.*.textconv` program run by `git log
+# -p`. A repository named on the command line is allowed by design, and these
+# global options name one: `git --git-dir=evil log -p` and `git --bare log -p`
+# inside the folder both ran the program with the env block set (git 2.47.3,
+# #699). `--work-tree` points git at files outside the checkout. git matches
+# global options exactly, not by prefix, so these are compared whole, with
+# any `=value` removed.
+_NAMED_REPOSITORY = frozenset({"--git-dir", "--work-tree", "--bare"})
+
+# `-c KEY=VALUE` and `--config-env KEY=ENVVAR` set config for one command, at
+# the same level as the `GIT_CONFIG_*` variables of the settings file, and the
+# later value wins: `git -c safe.bareRepository=all -C evil log -p` ran the
+# program too. git reads section names in any case, so a key in the `safe`
+# section is refused however it is capitalised.
+_CONFIG_OPTIONS = frozenset({"-c", "--config-env"})
+_SAFE_SECTION = "safe."
+
+# git's global options that take their value as the next word, so the walk in
+# `_global_override` steps over the value instead of reading it as the
+# subcommand and stopping there (`git -C evil --bare log`).
+_GIT_VALUE_OPTIONS = frozenset(
+    {
+        "-C",
+        "-c",
+        "--config-env",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--attr-source",
+        "--super-prefix",
+    }
+)
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
 # own. The words inside it are one word to any scan of the string, so a git
@@ -1378,6 +1424,48 @@ def _stages_a_withheld_file(words: list[str]) -> str | None:
             continue
         if _denied_read_shape(word):
             return word
+    return None
+
+
+def _names_another_repository(words: list[str]) -> str | None:
+    """Return the git global option that gets past `safe.bareRepository`.
+
+    Only the options between the first `git` and its subcommand are read, as
+    git reads them: a `--bare` after the subcommand (`git log -- --bare`) is
+    an operand, not this option.
+    """
+
+    for index, word in enumerate(words):
+        if _is_named(word, "git"):
+            return _global_override(words[index + 1 :])
+    return None
+
+
+def _global_override(options: list[str]) -> str | None:
+    """Return the first global option in `options` that names a repository.
+
+    That is `--git-dir`, `--work-tree` or `--bare`, or a `-c` /
+    `--config-env` that sets a key in the `safe` section. The walk stops at
+    the first word that is not an option, which is the subcommand.
+    """
+
+    index = 0
+    while index < len(options):
+        word = options[index]
+        if not word.startswith("-"):
+            return None
+        name, _, attached = word.partition("=")
+        if name in _NAMED_REPOSITORY:
+            return name
+        if word in _CONFIG_OPTIONS:
+            key = next(iter(options[index + 1 :]), "")
+        elif name == "--config-env":
+            key = attached
+        else:
+            key = ""
+        if key.lower().startswith(_SAFE_SECTION):
+            return f"{name} {key}"
+        index += 2 if word in _GIT_VALUE_OPTIONS else 1
     return None
 
 
@@ -2281,7 +2369,22 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 file=sys.stderr,
             )
             return 2
-        start_point = _checkout_moves_the_tree(_command_words(segment)[0])
+        override = _names_another_repository(_command_words(segment)[0])
+        if override is not None:
+            print(
+                f"Blocked: `git {override}` gets past the safe.bareRepository="
+                "explicit setting in .claude/settings.json. That setting stops "
+                "git from using a bare repository folder a branch commits, whose "
+                "config can name a program for git to run while it renders a "
+                "diff. --git-dir, --work-tree and --bare name a repository or "
+                "work tree outright, which the setting allows by design, and "
+                "-c / --config-env safe.* overrides the setting for one "
+                "command: `git --git-dir=evil log -p` runs the planted "
+                "program. Run git from the checkout without the option (#699).",
+                file=sys.stderr,
+            )
+            return 2
+        start_point =_checkout_moves_the_tree(_command_words(segment)[0])
         if start_point is not None:
             print(
                 f"Blocked: `{start_point}` after `git checkout -b NAME` is a "
