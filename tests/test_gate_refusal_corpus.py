@@ -294,7 +294,8 @@ def names(words: list[str], prefix: str) -> bool:
         start = after_git_options(words, i + 1) if first == "git" and rest else i + 1
         following = words[start : start + len(rest)]
         if len(following) == len(rest) and all(
-            fnmatchcase(name, pattern) for name, pattern in zip(rest, following, strict=True)
+            fnmatchcase(name, pattern)
+            for name, pattern in zip(rest, following, strict=True)
         ):
             return True
     return False
