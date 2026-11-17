@@ -2384,7 +2384,7 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 file=sys.stderr,
             )
             return 2
-        start_point =_checkout_moves_the_tree(_command_words(segment)[0])
+        start_point = _checkout_moves_the_tree(_command_words(segment)[0])
         if start_point is not None:
             print(
                 f"Blocked: `{start_point}` after `git checkout -b NAME` is a "
