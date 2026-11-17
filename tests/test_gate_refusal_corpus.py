@@ -662,7 +662,7 @@ class HarnessContractTests(unittest.TestCase):
                 )
 
     def test_a_row_names_what_it_requires_behind_git_global_options(self) -> None:
-        """git reads its own options before the subcommand, so each of these runs `git diff`."""
+        """Git reads its own options before the subcommand, so each of these runs `git diff`."""
         for command in (
             "git --git-dir=evil diff HEAD",
             "git --git-dir evil diff HEAD",
