@@ -3027,6 +3027,41 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "options",
+        "git -C evil --bare log -p",
+        _REFUSED,
+        "the directory after -C is stepped over rather than read as the "
+        "subcommand, so the walk still reaches --bare",
+    ),
+    _Row(
+        "options",
+        "git --config-env core.pager=V --bare log -p",
+        _REFUSED,
+        "the separate value of --config-env is stepped over when its key is "
+        "outside the safe section, so the walk still reaches --bare",
+    ),
+    _Row(
+        "options",
+        "git --namespace ns --bare log -p",
+        _REFUSED,
+        "the separate value of --namespace is stepped over, so the walk still "
+        "reaches --bare",
+    ),
+    _Row(
+        "options",
+        "git --attr-source HEAD --bare log -p",
+        _REFUSED,
+        "the separate value of --attr-source is stepped over, so the walk "
+        "still reaches --bare",
+    ),
+    _Row(
+        "options",
+        "git --super-prefix p/ --bare log -p",
+        _REFUSED,
+        "the separate value of --super-prefix is stepped over, so the walk "
+        "still reaches --bare",
+    ),
+    _Row(
+        "options",
         "git --no-pager --bare log -p",
         _REFUSED,
         "an option that takes no value is stepped over alone, so the --bare "

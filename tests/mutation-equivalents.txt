@@ -39,3 +39,15 @@
 #   reason: equivalent; count is never 0 here, the loop above starts it at 1
 #
 # A line starting with `#` is a comment.
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 568
+original: "--git-dir", "--work-tree",
+mutant: "--work-tree",
+reason: equivalent; _global_override returns --git-dir from _NAMED_REPOSITORY before the step-over list is read
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 569
+original: "--work-tree", "--namespace",
+mutant: "--namespace",
+reason: equivalent; _global_override returns --work-tree from _NAMED_REPOSITORY before the step-over list is read

@@ -226,6 +226,42 @@ def test_a_return_none_and_an_already_forced_test_are_left_alone() -> None:
     assert _mutated("if True:\n    pass\n", {1}) == {(1, "if False:")}
 
 
+def test_each_string_of_a_set_is_dropped_in_turn() -> None:
+    """A step-over list with an entry gone is how #700's gate failed open."""
+    assert _mutated('SKIP = {"-C", "-c", "--bare"}\n', {1}) == {
+        (1, 'SKIP = {"-c", "--bare"}'),
+        (1, 'SKIP = {"-C", "--bare"}'),
+        (1, 'SKIP = {"-C", "-c"}'),
+    }
+
+
+def test_only_the_changed_entries_of_a_multiline_list_are_dropped() -> None:
+    """One entry per line: each drop spans that line and the next entry's."""
+    source = 'SKIP = [\n    "-C",\n    "-c",\n    "--bare",\n]\n'
+    lines = source.splitlines(keepends=True)
+
+    found = mutate_changed.mutants("scripts/example.py", source, {2, 4})
+
+    assert [(m.line, m.end, m.original, m.mutated) for m in found] == [
+        (2, 3, '"-C", "-c",', '"-c",'),
+        (3, 4, '"-c", "--bare",', '"-c",'),
+    ]
+    assert found[0].apply(lines) == 'SKIP = [\n    "-c",\n    "--bare",\n]\n'
+    assert found[1].apply(lines) == 'SKIP = [\n    "-C",\n    "-c",\n]\n'
+
+
+def test_a_tuple_keeps_two_entries_and_a_mixed_one_is_left_alone() -> None:
+    """`("a")` is a string, and a tuple with a name in it is not a word list."""
+    assert _mutated('PAIR = ("a", "b")\n', {1}) == set()
+    assert _mutated('ONE = {"a"}\n', {1}) == set()
+    assert _mutated('MIXED = ["a", b]\n', {1}) == set()
+    assert _mutated('THREE = ("a", "b", "c")\n', {1}) == {
+        (1, 'THREE = ("b", "c")'),
+        (1, 'THREE = ("a", "c")'),
+        (1, 'THREE = ("a", "b")'),
+    }
+
+
 def test_two_edits_that_produce_the_same_line_are_one_mutant() -> None:
     """Either `not` of `not not a` dropped leaves `not a`."""
     found = mutate_changed.mutants("scripts/example.py", "ok = not not a\n", {1})
