@@ -25,6 +25,10 @@ The edits, each applied on its own:
   forced to `False`
 - `continue` or `break` replaced by `pass`
 - `return x` replaced by `return None`
+- one string dropped from a set, list or tuple of strings: the step-over
+  list of a command gate is a set of option names, and an entry no test
+  needs is an option the gate can stop reading without a test noticing
+  (#701)
 
 The run never edits the checkout it is started from. It copies the
 repository into a temporary directory, one copy per parallel job, writes each
@@ -326,6 +330,44 @@ def _touches(wanted: list[int], node: ast.AST) -> bool:
     return index < len(wanted) and wanted[index] <= node.end_lineno
 
 
+def _dropped_entries(
+    node: ast.AST, lines: list[str], wanted: list[int]
+) -> list[tuple[int, int, str]]:
+    """Return (first line, last line, replacement) for each string dropped.
+
+    Only a set, list or tuple whose entries are all strings is read, so a
+    tuple being unpacked or a call's arguments are left alone. An entry is
+    dropped with the comma that separates it from its neighbour, so the rest
+    of each line keeps its layout. A tuple keeps at least two entries:
+    `("a")` is a string, not a tuple of one.
+    """
+    if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        return []
+    entries = node.elts
+    least = 3 if isinstance(node, ast.Tuple) else 2
+    if len(entries) < least or not all(
+        isinstance(entry, ast.Constant) and isinstance(entry.value, str)
+        for entry in entries
+    ):
+        return []
+    drops: list[tuple[int, int, str]] = []
+    for index, entry in enumerate(entries):
+        if not _touches(wanted, entry):
+            continue
+        if index + 1 < len(entries):
+            after = entries[index + 1]
+            start = (entry.lineno, entry.col_offset)
+            stop = (after.lineno, after.col_offset)
+        else:
+            before = entries[index - 1]
+            start = (before.end_lineno, before.end_col_offset)
+            stop = (entry.end_lineno, entry.end_col_offset)
+        head = lines[start[0] - 1].encode("utf-8")[: start[1]]
+        tail = lines[stop[0] - 1].encode("utf-8")[stop[1] :]
+        drops.append((start[0], stop[0], (head + tail).decode("utf-8")))
+    return drops
+
+
 def mutants(path: str, source: str, changed: set[int]) -> list[Mutant]:
     """Return every mutant of the changed lines of one file.
 
@@ -341,12 +383,13 @@ def mutants(path: str, source: str, changed: set[int]) -> list[Mutant]:
     for node in ast.walk(tree):
         if not _touches(wanted, node):
             continue
-        for target, text in _edits(node, parents):
-            if not _touches(wanted, target):
-                continue
-            first, last = target.lineno, target.end_lineno
+        edits = [
+            (target.lineno, target.end_lineno, _splice(lines, target, text))
+            for target, text in _edits(node, parents)
+            if _touches(wanted, target)
+        ]
+        for first, last, replacement in edits + _dropped_entries(node, lines, wanted):
             original = " ".join(line.strip() for line in lines[first - 1 : last])
-            replacement = _splice(lines, target, text)
             mutant = Mutant(path, first, last, original, replacement)
             if mutant.mutated == original or not _parses(mutant.apply(lines)):
                 continue

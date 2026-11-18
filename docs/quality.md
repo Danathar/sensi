@@ -23,7 +23,8 @@ that gap let small edits to the command gate hook pass every test (#655).
 `scripts/mutate_changed.py` closes it for the lines a pull request changes
 under `custom_components/sensi/`, `scripts/` and `.claude/hooks/`. It makes one
 small edit at a time to a changed line - a comparison negated, `and` swapped
-with `or`, an integer moved by one, `return x` turned into `return None` - and
+with `or`, an integer moved by one, `return x` turned into `return None`, one
+string dropped from a set or list of them - and
 runs the tests that load the file. An edit every test still passes with fails
 the job unless `tests/mutation-equivalents.txt` lists it with a reviewer's
 reason. It is advisory until that list has been seeded from its first runs.
