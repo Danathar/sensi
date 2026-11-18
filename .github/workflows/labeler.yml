@@ -1,11 +1,32 @@
 name: Triage
 
 on:
-  # pull_request_target so the workflow has a write token and works for pull
-  # requests from forks. Nothing here checks out or executes code from the pull
-  # request - the checkout below is the base repository, and the change is only
-  # ever read as a list of paths through the API.
-  pull_request_target:
+  # pull_request, not pull_request_target (changed 2026-11-18). From 2026-12-02
+  # GitHub stops running pull_request_target workflows in public repositories
+  # unless a repository event policy allows them:
+  # https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2
+  # The hive's GitHub App cannot create that policy. Its owner refused it the
+  # Administration permission the policy needs, for security reasons, and the
+  # alternative is a policy made by hand in every repository.
+  #
+  # Neither job needs pull_request_target. `paths` reads the changed-file list
+  # through the API. `classify` runs scripts/classify_pr.py from the base commit,
+  # then creates and edits labels with gh. Under pull_request a pull request
+  # from this repository gets a write token as long as `permissions:` below
+  # grants pull-requests: write. That includes Dependabot's: its runs start
+  # read-only and the permissions key raises them (GitHub docs, "Dependabot on
+  # GitHub Actions", "Changing GITHUB_TOKEN permissions").
+  #
+  # A pull request from a fork gets a read-only token here, so labelling it
+  # would fail. Both jobs skip one with an `if:`, which shows a grey "skipped"
+  # run instead of a red one.
+  #
+  # The workflow file and .github/labeler.yml now come from the pull request's
+  # merge commit. The classify checkout stays pinned to the base commit, so the
+  # classifier that runs with the write token is master's copy, not the pull
+  # request's. A pull request from this repository can still edit this file;
+  # its author already has write access.
+  pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
@@ -19,6 +40,8 @@ concurrency:
 jobs:
   paths:
     name: path labels
+    # Fork pull requests get a read-only token; see the note under `on:`.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,13 +53,17 @@ jobs:
 
   classify:
     name: risk tier and size
+    # Fork pull requests get a read-only token; see the note under `on:`.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout the base repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
-          # Explicit: never the pull request's head.
+          # Explicit: never the pull request's head. Under pull_request the
+          # default is the merge commit, which would run the pull request's
+          # own classifier with the write token.
           ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Set up Python

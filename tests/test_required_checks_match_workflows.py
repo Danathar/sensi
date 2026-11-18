@@ -114,9 +114,10 @@ def _expand(template: str, matrix: dict) -> list[str]:
 def _pull_request_checks() -> dict[str, tuple[str, dict]]:
     """Every check name a pull request produces, mapped to (workflow, job).
 
-    `pull_request_target` is excluded deliberately: it is the labelling
-    workflow, it runs with a write token against the base repository, and it
-    is not a gate on the change.
+    Only `pull_request` counts. The labelling jobs in `labeler.yml` are read
+    here too since that workflow moved off `pull_request_target` (2026-11-18);
+    each carries an `if:` that skips fork pull requests, so they are
+    conditional and never gating, which the guard below pins.
     """
     checks: dict[str, tuple[str, dict]] = {}
     for filename, workflow in _workflows().items():
@@ -233,10 +234,14 @@ def test_the_check_names_are_read_from_the_files_not_assumed() -> None:
     assert {"ci.yml", "coverage-gate.yml", "validate.yml"} <= {
         filename for filename, _ in checks.values()
     }
-    assert "risk tier and size" not in checks, (
-        "labeler.yml is pull_request_target, not pull_request; counting it "
-        "would make the labelling job look like a gate"
-    )
+    for name in ("path labels", "risk tier and size"):
+        assert name in checks, f"{name!r} no longer read from labeler.yml"
+        filename, job = checks[name]
+        assert filename == "labeler.yml", f"{name!r} now comes from {filename}"
+        assert "if" in job, (
+            f"{name!r} lost its fork guard; without an `if:` the labelling job "
+            "would count as a gate that must be required"
+        )
 
 
 def test_the_reader_opens_both_workflow_extensions(tmp_path: Path) -> None:

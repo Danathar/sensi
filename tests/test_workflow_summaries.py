@@ -17,8 +17,9 @@ enforcing the floor.
 Everything here is derived from the workflow files. A step's gate is read from
 its `run:` body or its `uses:` action, a workflow's gates are the union over its
 jobs, and "every pull request" means the workflows triggered by
-`pull_request`. Each prose summary is then compared with that set in both
-directions: a gate the prose leaves out fails, and so does one it adds.
+`pull_request`, except the labeller, which checks nothing. Each prose summary
+is then compared with that set in both directions: a gate the prose leaves out
+fails, and so does one it adds.
 """
 
 from pathlib import Path
@@ -137,17 +138,31 @@ def _workflow_gates(workflow: str) -> set[str]:
     return set().union(*(_job_gates(workflow, job) for job in jobs))
 
 
-def _pull_request_workflows() -> list[str]:
-    """Return the workflows every pull request runs.
+# Runs on `pull_request` (since 2026-11-18, when it left `pull_request_target`)
+# but labels a change rather than checking it, and skips fork pull requests, so
+# it is not one of the workflows the prose credits with a gate.
+# `test_the_labelling_workflow_is_left_out_because_it_checks_nothing` keeps
+# that exclusion honest.
+_LABELLING = "labeler.yml"
 
-    `pull_request_target` is left out on purpose: `labeler.yml` uses it, runs
-    against the base commit, and checks nothing.
-    """
+
+def _pull_request_workflows() -> list[str]:
+    """Return the workflows that check every pull request."""
     return [
         name
         for name in _COMMITTED_WORKFLOWS
-        if "pull_request" in (_workflow(name)["on"] or {})
+        if name != _LABELLING and "pull_request" in (_workflow(name)["on"] or {})
     ]
+
+
+def test_the_labelling_workflow_is_left_out_because_it_checks_nothing() -> None:
+    """`labeler.yml` is excluded by name; it has to stay gate-free to deserve it."""
+    assert _LABELLING in _COMMITTED_WORKFLOWS
+    assert "pull_request" in (_workflow(_LABELLING)["on"] or {})
+    assert _workflow_gates(_LABELLING) == set(), (
+        f"{_LABELLING} now runs {sorted(_workflow_gates(_LABELLING))}; the "
+        "prose summaries have to credit it, so stop excluding it"
+    )
 
 
 def _pull_request_gates() -> set[str]:

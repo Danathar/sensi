@@ -708,10 +708,26 @@ def test_the_label_step_still_reports_its_own_failure() -> None:
             f"from an unrelated call: {line.strip()!r}"
         )
 
-    triggers = yaml.safe_load(body)[True]
-    assert "pull_request_target" in triggers, (
-        "labeler.yml is no longer a pull_request_target workflow, so the "
-        "correction's closing note about base-branch execution is wrong"
+    # The correction's closing note: since 2026-11-18 the labeller runs on
+    # pull_request, and only the classifier is still checked out from the base
+    # commit.
+    document = yaml.safe_load(body)
+    triggers = document[True]
+    assert "pull_request" in triggers and "pull_request_target" not in triggers, (
+        "labeler.yml is no longer a pull_request workflow, so the correction's "
+        "dated note about where the workflow file comes from is wrong"
+    )
+    checkouts = [
+        step
+        for step in document["jobs"]["classify"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert [step["with"]["ref"] for step in checkouts] == [
+        "${{ github.event.pull_request.base.sha }}"
+    ], (
+        "the classify job no longer checks out the base commit, so the "
+        "correction's note that a classifier fix cannot run on its own pull "
+        "request is wrong"
     )
 
 

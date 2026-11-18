@@ -343,11 +343,40 @@ def test_every_run_body_in_the_workflow_is_executed_here() -> None:
     assert carrying_shell == set(_SHELL_STEPS)
 
 
-def test_the_job_reads_the_base_repository_and_can_only_write_labels() -> None:
-    """`pull_request_target` runs with a write token; nothing runs fork code.
+def test_the_workflow_runs_on_pull_request_and_skips_forks() -> None:
+    """`pull_request`, not `pull_request_target`, and never on a fork.
 
-    The checkout is pinned to the base commit rather than defaulted, and the
-    only write the workflow's token permits is the one the job exists for.
+    GitHub stops running `pull_request_target` in public repositories from
+    2026-12-02 unless a repository event policy allows it, so the labeller moved
+    to `pull_request` on 2026-11-18. There a fork's pull request gets a
+    read-only token and labelling it would fail red, so every job skips one
+    instead. The event types and the job names are pinned too: the names are
+    the status checks a pull request shows.
+    """
+
+    document = _workflow()
+
+    assert document[True] == {
+        "pull_request": {
+            "types": ["opened", "reopened", "synchronize", "ready_for_review"]
+        }
+    }
+    assert {job: body["name"] for job, body in document["jobs"].items()} == {
+        "paths": "path labels",
+        "classify": "risk tier and size",
+    }
+    for job, body in document["jobs"].items():
+        assert body.get("if") == (
+            "github.event.pull_request.head.repo.full_name == github.repository"
+        ), f"{job} runs on fork pull requests, whose token cannot write labels"
+
+
+def test_the_job_reads_the_base_repository_and_can_only_write_labels() -> None:
+    """The write token never runs the pull request's own classifier.
+
+    Under `pull_request` the default checkout is the merge commit, so the pin
+    to the base commit is what keeps `scripts/classify_pr.py` master's copy.
+    The only write the workflow's token permits is the one the job exists for.
     """
 
     document = _workflow()

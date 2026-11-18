@@ -3,6 +3,8 @@
 Every pull request gets one `tier/*` label and one `size/*` label, applied
 automatically by `.github/workflows/labeler.yml` from the rules in
 [`.github/policies/risk-tiers.yml`](../.github/policies/risk-tiers.yml).
+A pull request from a fork is the exception: its token cannot write labels, so
+the workflow skips it and it arrives unlabelled.
 
 The tier answers one question: **what is the worst thing that happens if this
 change is wrong?** It is the highest tier whose paths the change touches — not a

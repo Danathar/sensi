@@ -2,13 +2,13 @@
 
 GitHub runs a file directly in `.github/workflows/` if it ends in `.yml` or
 `.yaml`. #439 moved fifteen scans onto one helper so that a `.yaml` workflow
-could not slip past rules such as "only the labeler uses
-`pull_request_target`". Two tests already check that the helper reads both
-suffixes. No `.yaml` workflow is committed, though, so nothing else exercised
-the second suffix: dropping `*.yaml` from either of the two `git ls-files`
-scans that list the directory themselves, a test going back to its own
-`.glob("*.yml")`, or the helper descending into subdirectories GitHub ignores,
-each left every test green. These tests close those three.
+could not slip past rules such as "no workflow uses `pull_request_target`"
+(until 2026-11-18, "only the labeler uses it"). Two tests already check that
+the helper reads both suffixes. No `.yaml` workflow is committed, though, so
+nothing else exercised the second suffix: dropping `*.yaml` from either of the
+two `git ls-files` scans that list the directory themselves, a test going back
+to its own `.glob("*.yml")`, or the helper descending into subdirectories
+GitHub ignores, each left every test green. These tests close those three.
 """
 
 import ast
