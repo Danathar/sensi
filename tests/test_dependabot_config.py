@@ -465,8 +465,8 @@ def test_dependabot_does_not_claim_a_label_labeler_would_strip() -> None:
     """`labels:` must stay absent, not merely correct.
 
     `.github/workflows/labeler.yml` runs `actions/labeler@v5.0.0` with
-    `sync-labels: true` on every `pull_request_target`, including the ones
-    Dependabot opens. A `github-actions` update only touches
+    `sync-labels: true` on every pull request opened from this repository,
+    including the ones Dependabot opens. A `github-actions` update only touches
     `.github/workflows/**`, which does not match the `dependencies` rule in
     `.github/labeler.yml`, so `sync-labels` would remove any label Dependabot
     applied here on the same pull request it was applied to - see #246, where

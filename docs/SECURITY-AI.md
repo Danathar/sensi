@@ -192,8 +192,10 @@ data, not instructions.
 - A captured payload attached to a bug report may contain live credentials.
   Scrub before using it for anything, and never echo it back.
 - A pull request from a fork is untrusted code. Nothing in CI executes it with
-  a write token: `labeler.yml` uses `pull_request_target` but checks out the
-  base commit and only reads the change as a list of paths through the API.
+  a write token: no workflow uses `pull_request_target`, so a fork's pull
+  request only ever gets a read-only token. `labeler.yml`, the one workflow that
+  writes on a pull request, skips fork pull requests, and its classifier job
+  checks out the base commit rather than the pull request's code.
 
 ## One autonomous path, and it is Hive
 

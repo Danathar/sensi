@@ -80,6 +80,10 @@ the next step depends on turns a clear error into a confusing one.
 A `pull_request_target` workflow also runs from the *base* branch, so a fix to
 one cannot go green on the pull request containing it. Verify against the real
 API by hand, merge, then confirm on the next pull request.
+*2026-11-18:* the labeller has since moved to `pull_request`, because GitHub
+stops running `pull_request_target` in public repositories from 2026-12-02. Its
+workflow file now runs from the pull request; `scripts/classify_pr.py` is still
+checked out from the base commit.
 
 ### Follow-up that closed the quality findings
 

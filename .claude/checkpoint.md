@@ -29,7 +29,9 @@ findings that followed.
 
 ## Automation that is now live
 
-- `labeler.yml` applies path, `tier/*` and `size/*` labels to every pull request.
+- `labeler.yml` applies path, `tier/*` and `size/*` labels to every pull request
+  opened from this repository. It has run on `pull_request` since 2026-11-18 and
+  skips fork pull requests, whose token cannot write labels.
 - `nightly.yml` runs `ruff`, requirements sync and the pytest suite daily (not
   hassfest, HACS or the coverage floor), plus a leg that runs the suite alone
   against the *latest* Home Assistant as advance warning. A failure of either

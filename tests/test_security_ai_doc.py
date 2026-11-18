@@ -529,21 +529,56 @@ def _triggers(workflow: dict) -> dict:
     return on if isinstance(on, dict) else {name: None for name in [on] if name}
 
 
-def test_labeler_is_the_only_pull_request_target_and_checks_out_the_base() -> None:
-    """Claim: "`labeler.yml` uses `pull_request_target` but checks out the base commit"."""
-    assert (
-        "`labeler.yml` uses `pull_request_target` but checks out the base commit"
-        in _flat()
-    )
+_FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
+
+
+def test_no_workflow_uses_pull_request_target() -> None:
+    """Claim: "no workflow uses `pull_request_target`".
+
+    The labeller used it until 2026-11-18. A fork's pull request gets a
+    read-only token under `pull_request`, which is what the bullet rests on.
+    """
+    assert "no workflow uses `pull_request_target`" in _flat()
+    paths = workflow_paths()
+    assert paths, "no workflows found"
     targets = [
         path.name
-        for path in workflow_paths()
+        for path in paths
         if "pull_request_target" in _triggers(_workflow(path))
     ]
-    assert targets == ["labeler.yml"], targets
+    assert targets == [], targets
+
+
+def test_the_labeler_is_the_one_writer_and_skips_forks() -> None:
+    """Claim: "`labeler.yml`, the one workflow that writes ..., skips fork pull requests".
+
+    The rest of the sentence: "and its classifier job checks out the base
+    commit rather than the pull request's code".
+    """
+    assert (
+        "`labeler.yml`, the one workflow that writes on a pull request, skips fork "
+        "pull requests, and its classifier job checks out the base commit"
+    ) in _flat()
+
+    writers = []
+    for path in workflow_paths():
+        workflow = _workflow(path)
+        if "pull_request" not in _triggers(workflow):
+            continue
+        granted = (workflow.get("permissions") or {}).values()
+        if "write" in granted:
+            writers.append(path.name)
+    assert writers == ["labeler.yml"], writers
+
+    labeler = _workflow(_WORKFLOWS / "labeler.yml")
+    jobs = labeler["jobs"]
+    assert jobs, "labeler.yml has no jobs"
+    for job_id, job in jobs.items():
+        assert job.get("if") == _FORK_GUARD, (job_id, job.get("if"))
+
     checkouts = [
         step
-        for job in _workflow(_WORKFLOWS / "labeler.yml")["jobs"].values()
+        for job in jobs.values()
         for step in job.get("steps", [])
         if str(step.get("uses", "")).startswith("actions/checkout@")
     ]
@@ -607,8 +642,8 @@ def _resolves(token: str) -> bool:
     if token in tracked:
         return True
     # A bare workflow name is the workflow: `labeler.yml` is also the name of
-    # the labeler's config, but the page names it as the thing that "uses
-    # `pull_request_target`".
+    # the labeler's config, but the page names it as "the one workflow that
+    # writes on a pull request".
     if (_WORKFLOWS / token).relative_to(_ROOT).as_posix() in tracked:
         return True
     # Any other bare name - `auth.py`, `manifest.json` - must name exactly one

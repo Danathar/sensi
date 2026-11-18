@@ -60,8 +60,9 @@ Deliberately NOT asserted, and why:
 - The `ruff==` pin (`tests/test_validate_workflow.py`), the `FakeSensiBackend`
   class and the coverage-gate percentage
   (`tests/test_instruction_docs.py`), the 100-character label cap and the
-  `pull_request_target` note (`tests/test_correction_memory.py`), and the
-  permission dicts of the jobs that exist today
+  note on where the labeller's code runs from
+  (`tests/test_correction_memory.py`), and the permission dicts of the jobs
+  that exist today
   (`tests/test_labeler_workflow.py`, `tests/test_nightly_workflow.py`). Each is
   already asserted where it belongs; a second copy here would be the weaker of
   the two.

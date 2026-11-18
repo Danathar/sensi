@@ -26,4 +26,11 @@ any checked-out scripts from the *base* branch. A fix to that workflow cannot go
 green on the pull request that contains it - verify it against the real API by
 hand, then merge, then confirm on the next pull request.
 
+*2026-11-18:* the labeller now runs on `pull_request` instead, because GitHub
+stops running `pull_request_target` in public repositories from 2026-12-02. The
+workflow file and `.github/labeler.yml` now come from the pull request's merge
+commit, so a fix to either does run on its own pull request. The classify job
+still checks out the base commit, so a fix to `scripts/classify_pr.py` still
+cannot run on the pull request that contains it.
+
 **Source** — `.github/workflows/labeler.yml`, first run on PR #46.

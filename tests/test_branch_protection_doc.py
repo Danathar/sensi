@@ -67,10 +67,10 @@ _NUMBER_WORDS = {
     "eight": 8,
 }
 
-# The triggers a pull request fires. `pull_request_target` is here because the
-# page's "appear on a pull request" is about what a reviewer sees in the checks
-# list, and the labelling jobs appear there even though they run against the
-# base repository.
+# The triggers a pull request fires. The page's "appear on a pull request" is
+# about what a reviewer sees in the checks list, and a `pull_request_target`
+# job appears there too, so it stays listed. No workflow uses it today: the
+# labelling jobs moved to `pull_request` on 2026-11-18.
 _PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
 
 
