@@ -209,3 +209,43 @@ def test_options_that_get_past_the_env_still_run_the_program_so_the_hook_refuses
         done = _hook_exit(command)
         assert done.returncode == 2, f"the hook should refuse {command}: {done.stderr}"
         assert "safe.bareRepository" in done.stderr
+
+
+def test_clearing_the_env_runs_the_program_so_the_hook_refuses(
+    tmp_path: Path,
+) -> None:
+    """Taking the `GIT_CONFIG_*` variables away undoes the env; the hook stops it.
+
+    `unset`, `export -n` and `declare +x` drop the count for every later
+    command of the string, `env -u` drops it for the one command, and
+    `env -i` / bash's `exec -c` run git with no environment at all. Each runs
+    the planted program inside the bare folder with the env block set, and
+    the Bash gate is what refuses it (#705).
+    """
+    marker = tmp_path / "ran"
+    victim = _planted_clone(tmp_path, marker)
+    agent = {**_clean_env(tmp_path), **_settings_env()}
+
+    for command in (
+        "unset GIT_CONFIG_COUNT; git log -p -1",
+        "export -n GIT_CONFIG_COUNT; git show",
+        "declare +x GIT_CONFIG_COUNT; git log -p -1",
+        "env -u GIT_CONFIG_COUNT git log -p -1",
+        "env --unset=GIT_CONFIG_COUNT git show",
+        "env -i git log -p -1",
+        "exec -c git show",
+    ):
+        marker.unlink(missing_ok=True)
+        subprocess.run(
+            ["bash", "--norc", "--noprofile", "-c", command],
+            cwd=victim / "evil",
+            env=agent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert marker.exists(), f"precondition: {command} runs the program"
+
+        done = _hook_exit(command)
+        assert done.returncode == 2, f"the hook should refuse {command}: {done.stderr}"
+        assert "safe.bareRepository" in done.stderr
