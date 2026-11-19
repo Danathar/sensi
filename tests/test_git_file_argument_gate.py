@@ -3074,6 +3074,95 @@ _CORPUS: tuple[_Row, ...] = (
         "a program in front runs git with the words after it, so the global "
         "options are read from the git word on",
     ),
+    # --- removing the settings env that sets safe.bareRepository (#705) ---
+    _Row(
+        "environment",
+        "unset GIT_CONFIG_COUNT; git log -p",
+        _REFUSED,
+        "with the count gone git reads none of the settings env, so a planted "
+        "bare folder is used and its textconv program runs",
+    ),
+    _Row(
+        "environment",
+        "cd evil && unset GIT_CONFIG_COUNT && git log -p",
+        _REFUSED,
+        "the shape #705 reproduced: a cd into the planted folder, the count "
+        "unset, then a history command",
+    ),
+    _Row(
+        "environment",
+        "export -n GIT_CONFIG_COUNT; git show",
+        _REFUSED,
+        "export -n keeps the shell variable but stops passing it to git, the "
+        "same loss as unset",
+    ),
+    _Row(
+        "environment",
+        "declare +x GIT_CONFIG_COUNT; git log -p",
+        _REFUSED,
+        "declare +x is export -n spelled with declare, and git loses "
+        "the count the same way",
+    ),
+    _Row(
+        "environment",
+        "env -u GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "env -u starts git without the count, which is unset for one command",
+    ),
+    _Row(
+        "environment",
+        "env --unset=GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "the long spelling of env -u, which GNU env reads the same "
+        "way and starts git without the count",
+    ),
+    _Row(
+        "environment",
+        "env -i git log -p",
+        _REFUSED,
+        "env -i starts git with an empty environment, the settings env included",
+    ),
+    _Row(
+        "environment",
+        "env - git log -p",
+        _REFUSED,
+        "a bare - is env's older spelling of -i, so git starts with "
+        "an empty environment again",
+    ),
+    _Row(
+        "environment",
+        "exec -c git log -p",
+        _REFUSED,
+        "bash's exec -c runs git with an empty environment, the settings env included",
+    ),
+    _Row(
+        "environment",
+        "git log -1; unset GIT_CONFIG_COUNT",
+        _ALLOWED,
+        "an unset after the git command cannot reach it, the order the export "
+        "rule keeps (#256)",
+    ),
+    _Row(
+        "environment",
+        "unset FOO; git log -1",
+        _ALLOWED,
+        "only a GIT_CONFIG_* name carries the settings env, so unsetting "
+        "another variable leaves safe.bareRepository in force",
+    ),
+    _Row(
+        "environment",
+        "env -u FOO git log -1",
+        _ALLOWED,
+        "env -u with a name outside GIT_CONFIG_* leaves the settings env in "
+        "git's environment",
+    ),
+    _Row(
+        "environment",
+        "git log -S env -i",
+        _ALLOWED,
+        "env here is an operand of git log's pickaxe, not a command, so its "
+        "-i is git's own option",
+    ),
     _Row(
         "options",
         "git log --oneline -- --bare",
@@ -3201,6 +3290,18 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '"n" not in flags if',
         "True if",
         "export -n GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=/tmp/prog; git diff HEAD",
+    ),
+    (
+        "an unset of a settings env name before git",
+        "if stripped and _runs_git(segment):",
+        "if False:",
+        "unset GIT_CONFIG_COUNT; git log -p",
+    ),
+    (
+        "env and exec options that run git without the settings env",
+        "        if cleared is not None:",
+        "        if False:",
+        "env -i git log -p",
     ),
     (
         "set -a, which exports every assignment after it",

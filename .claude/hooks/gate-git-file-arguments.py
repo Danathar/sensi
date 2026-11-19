@@ -194,7 +194,11 @@ Each rests on a documented property of the permission matcher, not on a guess:
   allow row and prompts. `_splits_a_string` still refuses the `env -S`
   spelling, because that one hides a whole invocation inside a single word
   and a gate that cannot see the words cannot be said to have decided
-  anything about them.
+  anything about them. `env -i`, `env -u GIT_CONFIG_*` and bash's `exec -c`
+  in front of git are refused too, as are `unset`, `export -n` and
+  `declare +x` of a `GIT_CONFIG_*` name before git (#705): each takes away
+  the `safe.bareRepository=explicit` the settings env sets, which is the
+  ruling on atomic-image-builder#772 that #699 applied to `-c safe.*`.
 * git's own global options - `git -c diff.external=prog diff`,
   `--config-env`, `--exec-path` - which do reach git and do load a program.
   `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
@@ -572,6 +576,23 @@ _GIT_VALUE_OPTIONS = frozenset(
         "--super-prefix",
     }
 )
+
+# The variables the `env` block of `.claude/settings.json` sets are
+# `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0`. Taking them
+# out of git's environment undoes `safe.bareRepository=explicit` as completely
+# as `-c safe.bareRepository=all` does: `unset GIT_CONFIG_COUNT; git log -p`,
+# `export -n GIT_CONFIG_COUNT; git log -p`, `env -u GIT_CONFIG_COUNT git log
+# -p`, `env -i git log -p` and `exec -c git log -p` each ran the planted
+# program inside the bare folder with the env block set (git 2.47.3, #705).
+# Removing only the key or the value makes git fail ("unable to parse
+# command-line config"), but every name with the prefix is refused: no
+# ordinary command clears one, so over-refusing here costs nothing.
+_SETTINGS_ENV_PREFIX = "GIT_CONFIG_"
+
+# The long options of GNU env that take their value as the next word, so the
+# walk in `_env_clears_settings` steps over the value. A long option may be
+# written as any unambiguous prefix of its name.
+_ENV_VALUE_LONG = ("--chdir", "--split-string", "--argv0")
 
 # `env -S "..."` (--split-string) splits a quoted string into a command of its
 # own. The words inside it are one word to any scan of the string, so a git
@@ -1469,6 +1490,111 @@ def _global_override(options: list[str]) -> str | None:
     return None
 
 
+def _drops_settings_env(segment: list[str]) -> bool:
+    """Whether this segment takes a settings env name out of later commands.
+
+    `unset NAME`, `export -n NAME`, and `declare +x NAME` / `typeset +x NAME`
+    with a `GIT_CONFIG_*` name: bash runs every later command of the string
+    without it, so a git after them runs without `safe.bareRepository=
+    explicit`. `unset` counts whatever its options say; the bare-folder
+    attack needs only the count gone.
+    """
+
+    words, _wrappers, _assigned = _command_words(segment)
+    if not words or not any(
+        word.startswith(_SETTINGS_ENV_PREFIX) for word in words[1:]
+    ):
+        return False
+    if words[0] == "unset":
+        return True
+    flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+    if words[0] == "export":
+        return "n" in flags
+    if words[0] in ("declare", "typeset"):
+        return any(word[:1] == "+" and "x" in word[1:] for word in words[1:])
+    return False
+
+
+def _clears_settings_env(segment: list[str]) -> str | None:
+    """Return the `env` or `exec` option that starts git without the settings env.
+
+    `env -i` / `--ignore-environment` / a bare `-` start the command with an
+    empty environment, `env -u NAME` / `--unset=NAME` with a `GIT_CONFIG_*`
+    name start it without that name, and bash's `exec -c` runs it with an
+    empty environment. Only an `env` or `exec` with a git word after it is
+    read, so `git log -S env` is not a wrapper.
+    """
+
+    for index, word in enumerate(segment):
+        name = _wrapper_name(word)
+        if name not in ("env", "exec") or not _runs_git(segment[index + 1 :]):
+            continue
+        reader = _env_clears_settings if name == "env" else _exec_clears_settings
+        option = reader(segment[index + 1 :])
+        if option is not None:
+            return f"{word} {option}"
+    return None
+
+
+def _env_clears_settings(arguments: list[str]) -> str | None:
+    """Return the option of GNU env in `arguments` that drops the settings env.
+
+    The walk stops at the first word that is not an option: an assignment or
+    the command env runs.
+    """
+
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == "-":
+            return word
+        if word == "--" or not word.startswith("-"):
+            return None
+        if word.startswith("--"):
+            name, equals, value = word.partition("=")
+            if len(name) > 2 and "--ignore-environment".startswith(name):
+                return word
+            if len(name) > 2 and "--unset".startswith(name):
+                target = value if equals else next(iter(arguments[index + 1 :]), "")
+                if target.startswith(_SETTINGS_ENV_PREFIX):
+                    return f"{name} {target}"
+                index += 1 if equals else 2
+                continue
+            takes_value = len(name) > 2 and any(
+                option.startswith(name) for option in _ENV_VALUE_LONG
+            )
+            index += 2 if takes_value and not equals else 1
+            continue
+        cluster = word[1:]
+        step = 1
+        for position, letter in enumerate(cluster):
+            if letter == "i":
+                return word
+            if letter in "uCSa":
+                rest = cluster[position + 1 :]
+                target = rest or next(iter(arguments[index + 1 :]), "")
+                if letter == "u" and target.startswith(_SETTINGS_ENV_PREFIX):
+                    return f"-u {target}"
+                step = 1 if rest else 2
+                break
+        index += step
+    return None
+
+
+def _exec_clears_settings(arguments: list[str]) -> str | None:
+    """Return the `-c` of bash's `exec`, which runs the command with no environment."""
+
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == "--" or not word.startswith("-") or word == "-":
+            return None
+        if "c" in word[1:]:
+            return word
+        index += 2 if word.endswith("a") else 1
+    return None
+
+
 def _has_substitution(segment: list[str]) -> bool:
     """Whether any word of `segment` is built by running another command.
 
@@ -2108,6 +2234,10 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     # and truncates the file as surely as `git diff` would.
     exported = False
     allexport = False
+    # A `GIT_CONFIG_*` name an earlier segment took out of the environment
+    # (`unset`, `export -n`, `declare +x`). Ordered like `exported`: a removal
+    # after the git command cannot reach it.
+    stripped = False
     # A `cd` earlier in the string moves where bash opens a relative `<`
     # target, so a later git's redirection cannot be resolved here. Only a
     # cd, pushd or popd sets it, and nothing clears it: a git segment between
@@ -2211,6 +2341,21 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
         # the shell does not outlive a Bash call, so an export can only reach
         # a later command of the same string, and refusing the earlier one
         # would refuse a command the export cannot touch.
+        if stripped and _runs_git(segment):
+            print(
+                "Blocked: an earlier command in this string (`unset`, `export -n` "
+                "or `declare +x` naming a GIT_CONFIG_* variable) takes the "
+                "safe.bareRepository=explicit setting of .claude/settings.json "
+                "out of git's environment. That setting stops git from using a "
+                "bare repository folder a branch commits, whose config can name "
+                "a program for git to run while it renders a diff: `unset "
+                "GIT_CONFIG_COUNT; git log -p` inside such a folder runs it. Run "
+                "git without clearing the variable (#705).",
+                file=sys.stderr,
+            )
+            return 2
+        if _drops_settings_env(segment):
+            stripped = True
         if _exports_a_name(segment) or (allexport and _is_bare_assignment(segment)):
             exported = True
         if _turns_on_allexport(segment):
@@ -2381,6 +2526,19 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 "-c / --config-env safe.* overrides the setting for one "
                 "command: `git --git-dir=evil log -p` runs the planted "
                 "program. Run git from the checkout without the option (#699).",
+                file=sys.stderr,
+            )
+            return 2
+        cleared = _clears_settings_env(segment)
+        if cleared is not None:
+            print(
+                f"Blocked: `{cleared}` runs git without the GIT_CONFIG_* "
+                "variables that set safe.bareRepository=explicit from "
+                ".claude/settings.json. That setting stops git from using a bare "
+                "repository folder a branch commits, whose config can name a "
+                "program for git to run while it renders a diff: `env -i git "
+                "log -p` or `env -u GIT_CONFIG_COUNT git log -p` inside such a "
+                "folder runs it. Run git without clearing its environment (#705).",
                 file=sys.stderr,
             )
             return 2
