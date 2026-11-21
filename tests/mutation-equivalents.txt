@@ -51,3 +51,189 @@ line: 569
 original: "--work-tree", "--namespace",
 mutant: "--namespace",
 reason: equivalent; _global_override returns --work-tree from _NAMED_REPOSITORY before the step-over list is read
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1504
+original: if not words or not any( word.startswith(_SETTINGS_ENV_PREFIX) for word in words[1:] ):
+mutant: if not any((word.startswith(_SETTINGS_ENV_PREFIX) for word in words[1:])):
+reason: equivalent; with no words any() over words[1:] is False, so the function returns False either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1505
+original: word.startswith(_SETTINGS_ENV_PREFIX) for word in words[1:]
+mutant: word.startswith(_SETTINGS_ENV_PREFIX) for word in words[0:]
+reason: fail-closed; words[0] is the command name, so adding it only refuses a command whose own name starts GIT_CONFIG_
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1507
+original: return False
+mutant: return None
+reason: equivalent; both return False lines of _drops_settings_env, whose caller only tests the result for truth, and None is false like False
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1510
+original: flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+mutant: flags = "".join(word[0:] for word in words[1:] if word[:1] == "-" and word != "--")
+reason: equivalent; the leading dash it adds to flags is never the letter n that the export branch looks for
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1510
+original: flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+mutant: flags = "".join(word[1:] for word in words[0:] if word[:1] == "-" and word != "--")
+reason: equivalent; words[0] is the command name and export carries no n, declare and typeset do not read flags
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1510
+original: flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+mutant: flags = "".join(word[1:] for word in words[1:] if word != '--')
+reason: equivalent; an export naming a GIT_CONFIG_* variable without -n is refused by the export rule (#256) before this result matters
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1510
+original: flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+mutant: flags = "".join(word[1:] for word in words[1:] if word[:1] == '-' or word != '--')
+reason: equivalent; an export naming a GIT_CONFIG_* variable without -n is refused by the export rule (#256) before this result matters
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1510
+original: flags = "".join(word[1:] for word in words[1:] if word[:1] == "-" and word != "--")
+mutant: flags = "".join(word[1:] for word in words[1:] if word[:1] == '-')
+reason: equivalent; -- adds only a dash to flags, never the letter n
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1514
+original: return any(word[:1] == "+" and "x" in word[1:] for word in words[1:])
+mutant: return any(('x' in word[1:]) for word in words[1:])
+reason: fail-closed; a declare with x and no + exports the name, which the export rule (#256) already refuses
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1514
+original: return any(word[:1] == "+" and "x" in word[1:] for word in words[1:])
+mutant: return any(word[:1] == "+" and "x" in word[0:] for word in words[1:])
+reason: equivalent; word[:1] is +, so including it in the search for x changes nothing
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1514
+original: return any(word[:1] == "+" and "x" in word[1:] for word in words[1:])
+mutant: return any(word[:1] == "+" and "x" in word[1:] for word in words[0:])
+reason: equivalent; words[0] is declare or typeset, which never starts with +
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1530
+original: if name not in ("env", "exec") or not _runs_git(segment[index + 1 :]):
+mutant: if name not in ("env", "exec") or not _runs_git(segment[index + 0 :]):
+reason: equivalent; _runs_git finds the git word after env or exec whether or not the env word itself is included
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1530
+original: if name not in ("env", "exec") or not _runs_git(segment[index + 1 :]):
+mutant: if name not in ("env", "exec") or not _runs_git(segment[index + 2 :]):
+reason: equivalent; a git word right after env or exec means no option of theirs comes first, so there is nothing to refuse
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1551
+original: if word == "--" or not word.startswith("-"):
+mutant: if not word.startswith('-'):
+reason: fail-closed; without the -- stop the walk reads an option after --, which only refuses more
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1555
+original: if len(name) > 2 and "--ignore-environment".startswith(name):
+mutant: if '--ignore-environment'.startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1555
+original: if len(name) > 2 and "--ignore-environment".startswith(name):
+mutant: if (len(name) >= 2) and "--ignore-environment".startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1555
+original: if len(name) > 2 and "--ignore-environment".startswith(name):
+mutant: if len(name) > 1 and "--ignore-environment".startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1555
+original: if len(name) > 2 and "--ignore-environment".startswith(name):
+mutant: if len(name) > 3 and "--ignore-environment".startswith(name):
+reason: equivalent; --i is ambiguous in GNU env (--ignore-environment, --ignore-signal), so env refuses to run it
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1557
+original: if len(name) > 2 and "--unset".startswith(name):
+mutant: if '--unset'.startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1557
+original: if len(name) > 2 and "--unset".startswith(name):
+mutant: if (len(name) >= 2) and "--unset".startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1557
+original: if len(name) > 2 and "--unset".startswith(name):
+mutant: if len(name) > 1 and "--unset".startswith(name):
+reason: equivalent; the name -- alone is only reachable as --=value, and GNU env rejects that
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1563
+original: takes_value = len(name) > 2 and any(
+mutant: takes_value = (len(name) >= 2) and any(
+reason: equivalent; the name -- alone is only reachable as --=value, whose value is joined, so the step is one word either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1563
+original: takes_value = len(name) > 2 and any( option.startswith(name) for option in _ENV_VALUE_LONG )
+mutant: takes_value = any((option.startswith(name) for option in _ENV_VALUE_LONG))
+reason: equivalent; the name -- alone is only reachable as --=value, whose value is joined, so the step is one word either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1563
+original: takes_value = len(name) > 2 and any(
+mutant: takes_value = len(name) > 1 and any(
+reason: equivalent; the name -- alone is only reachable as --=value, whose value is joined, so the step is one word either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1568
+original: cluster = word[1:]
+mutant: cluster = word[0:]
+reason: equivalent; the leading dash is not a letter the loop acts on, and rest is read after the letter it finds
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1575
+original: target = rest or next(iter(arguments[index + 1 :]), "")
+mutant: target = next(iter(arguments[index + 1:]), '')
+reason: equivalent; every GIT_CONFIG_* name contains the letter O, so -uGIT_CONFIG_... is refused by the -O rule either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1576
+original: if letter == "u" and target.startswith(_SETTINGS_ENV_PREFIX):
+mutant: if target.startswith(_SETTINGS_ENV_PREFIX):
+reason: fail-closed; it refuses -C or -S with a GIT_CONFIG_* value as well, never less
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1579
+original: break
+mutant: pass
+reason: fail-closed; reading on past a value letter can only find another i or u to refuse
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1590
+original: if word == "--" or not word.startswith("-") or word == "-":
+mutant: if not word.startswith('-') or word == '-':
+reason: equivalent; -- has no c after its dash, so the walk steps over it and stops at the next word
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1590
+original: if word == "--" or not word.startswith("-") or word == "-":
+mutant: if word == '--' or not word.startswith('-'):
+reason: equivalent; - has no c after its dash, so the walk steps over it and stops at the next word
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1592
+original: if "c" in word[1:]:
+mutant: if "c" in word[0:]:
+reason: equivalent; every word reaching this line starts with a dash, which is not c
