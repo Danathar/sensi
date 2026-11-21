@@ -3285,6 +3285,34 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "env --split '-i git log -p'",
+        _REFUSED,
+        "--split is a prefix of GNU env's --split-string, so the quoted string "
+        "is env's own options and its -i empties the environment",
+    ),
+    _Row(
+        "environment",
+        "env --sp='-i git log -p'",
+        _REFUSED,
+        "--sp= is a shorter prefix of --split-string with the string joined in "
+        "one word, and its -i empties the environment",
+    ),
+    _Row(
+        "environment",
+        "env --s '-u GIT_CONFIG_COUNT git log -p'",
+        _REFUSED,
+        "--s is the shortest prefix GNU env accepts for --split-string, and the "
+        "-u inside the string unsets the count",
+    ),
+    _Row(
+        "environment",
+        "env -vS '-i git log -p'",
+        _REFUSED,
+        "S packed after -v is still -S, so env splits the string and its -i "
+        "empties the environment",
+    ),
+    _Row(
+        "environment",
         "env --unset=FOO git log -1",
         _ALLOWED,
         "an --unset of a name outside GIT_CONFIG_* leaves the settings "
@@ -3296,6 +3324,13 @@ _CORPUS: tuple[_Row, ...] = (
         _ALLOWED,
         "-C with its directory joined in one word changes the directory "
         "and leaves the environment as it was",
+    ),
+    _Row(
+        "environment",
+        "env -uS git log -1",
+        _ALLOWED,
+        "S after -u is the name to unset, not -S, so nothing is split and git "
+        "keeps the settings env",
     ),
     _Row(
         "environment",
