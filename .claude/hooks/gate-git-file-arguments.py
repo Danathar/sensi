@@ -1659,7 +1659,46 @@ def _splits_a_string(segment: list[str]) -> bool:
     arguments = _env_arguments(segment)
     if arguments is None:
         return False
-    return any(_ENV_SPLIT_STRING.match(word) for word in arguments)
+    if any(_ENV_SPLIT_STRING.match(word) for word in arguments):
+        return True
+    return _env_options_split(arguments)
+
+
+def _env_options_split(arguments: list[str]) -> bool:
+    """Whether env's own options, read the way GNU env reads them, include -S.
+
+    GNU env takes a long option as any unambiguous prefix of its name
+    (`--split`, `--sp=...`, `--s`) and packs short options into one word
+    (`-vS`, `-iS`), so `_ENV_SPLIT_STRING` alone misses both. The walk stops
+    at the first word that is not an option, as `_env_clears_settings` does.
+    """
+
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if word == "-":
+            index += 1
+            continue
+        if word == "--" or not word.startswith("-"):
+            return False
+        if word.startswith("--"):
+            name, equals, _value = word.partition("=")
+            if len(name) > 2 and "--split-string".startswith(name):
+                return True
+            takes_value = len(name) > 2 and any(
+                option.startswith(name) for option in (*_ENV_VALUE_LONG, "--unset")
+            )
+            index += 2 if takes_value and not equals else 1
+            continue
+        step = 1
+        for position, letter in enumerate(word[1:]):
+            if letter == "S":
+                return True
+            if letter in "uCa":
+                step = 1 if word[position + 2 :] else 2
+                break
+        index += step
+    return False
 
 
 def _gated_prefix(segment: list[str]) -> tuple[str, ...] | None:
