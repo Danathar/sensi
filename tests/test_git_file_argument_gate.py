@@ -3163,6 +3163,161 @@ _CORPUS: tuple[_Row, ...] = (
         "env here is an operand of git log's pickaxe, not a command, so its "
         "-i is git's own option",
     ),
+    # --- the option walks of #705, one row per way they step (#707) ---
+    _Row(
+        "environment",
+        "env --ignore-environment git log -p",
+        _REFUSED,
+        "the long name of env -i, which starts git with an empty "
+        "environment and so without the settings env",
+    ),
+    _Row(
+        "environment",
+        "env --u GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "GNU env reads --u as --unset, the only long option it starts, "
+        "so git starts without the count",
+    ),
+    _Row(
+        "environment",
+        "env --unset GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "--unset with the name as the next word rather than after an "
+        "equals sign takes the same count away",
+    ),
+    _Row(
+        "environment",
+        "env --unset FOO -u GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "the walk steps over the separated value of an earlier --unset "
+        "and still reads the -u after it",
+    ),
+    _Row(
+        "environment",
+        "env --unset=FOO -u GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "an --unset whose value is joined by an equals sign is one "
+        "word, so the walk steps one and reads the -u after it",
+    ),
+    _Row(
+        "environment",
+        "env -u FOO -u GIT_CONFIG_COUNT git log -p",
+        _REFUSED,
+        "the walk steps over the value of an earlier -u and still reads "
+        "the -u that drops the count",
+    ),
+    _Row(
+        "environment",
+        "env --debug -i git log -p",
+        _REFUSED,
+        "--debug takes no value, so the -i after it is an option of env "
+        "and empties git's environment",
+    ),
+    _Row(
+        "environment",
+        "env -v -i git log -p",
+        _REFUSED,
+        "-v takes no value, so the -i after it still starts git with an "
+        "empty environment",
+    ),
+    _Row(
+        "environment",
+        "env --chdir . -i git log -p",
+        _REFUSED,
+        "--chdir takes the next word as its directory, and the -i after "
+        "that still empties git's environment",
+    ),
+    _Row(
+        "environment",
+        "env --chdir=. -i git log -p",
+        _REFUSED,
+        "--chdir with its directory joined by an equals sign is one "
+        "word, and the -i after it still empties the environment",
+    ),
+    _Row(
+        "environment",
+        "env --ch . -i git log -p",
+        _REFUSED,
+        "--ch is an unambiguous prefix of --chdir, so it takes the next "
+        "word too and the -i after it is env's",
+    ),
+    _Row(
+        "environment",
+        "env --c . -i git log -p",
+        _REFUSED,
+        "--c is the shortest prefix of --chdir that GNU env accepts, "
+        "and the -i after its directory is env's",
+    ),
+    _Row(
+        "environment",
+        "env --argv0 x -i git log -p",
+        _REFUSED,
+        "--argv0 takes the next word as the program name, and the -i "
+        "after it still empties the environment",
+    ),
+    _Row(
+        "environment",
+        "env -C. -i git log -p",
+        _REFUSED,
+        "-C with its directory joined in one word is stepped as one "
+        "word, and the -i after it is env's",
+    ),
+    _Row(
+        "environment",
+        "exec -a name -c git log -p",
+        _REFUSED,
+        "exec -a takes the next word as the program name, and the -c "
+        "after it still runs git with no environment",
+    ),
+    _Row(
+        "environment",
+        "exec -l -c git log -p",
+        _REFUSED,
+        "exec -l takes no value, so the -c after it is still exec's and "
+        "runs git with no environment",
+    ),
+    _Row(
+        "environment",
+        "env --split x -i git log -p",
+        _REFUSED,
+        "--split is GNU env's --split-string, which takes the next word as "
+        "its value, so the walk steps over it and still reads the -i",
+    ),
+    _Row(
+        "environment",
+        "env --unset=FOO git log -1",
+        _ALLOWED,
+        "an --unset of a name outside GIT_CONFIG_* leaves the settings "
+        "env in git's environment",
+    ),
+    _Row(
+        "environment",
+        "env -Cdocs git log -1",
+        _ALLOWED,
+        "-C with its directory joined in one word changes the directory "
+        "and leaves the environment as it was",
+    ),
+    _Row(
+        "environment",
+        "exec git describe",
+        _ALLOWED,
+        "exec without options replaces the shell with git and keeps the "
+        "environment, letters of describe included",
+    ),
+    _Row(
+        "environment",
+        "echo +x GIT_CONFIG_COUNT; git log -1",
+        _ALLOWED,
+        "only declare and typeset read +x as taking the export away, so "
+        "an echo of the same words removes nothing",
+    ),
+    _Row(
+        "environment",
+        "declare +g GIT_CONFIG_COUNT; git log -1",
+        _ALLOWED,
+        "declare +g has no x, so the count stays exported and git still "
+        "reads the settings env",
+    ),
     _Row(
         "options",
         "git log --oneline -- --bare",
@@ -3579,6 +3734,21 @@ def test_every_corpus_row_is_decided_the_way_it_says(row: _Row) -> None:
             f"because {row.why}; refusing it costs ordinary work "
             f"(stderr={completed.stderr!r})"
         )
+
+
+@pytest.mark.parametrize("command", ["env -u git", "exec -a git"])
+def test_an_option_value_that_is_the_last_word_is_decided(command: str) -> None:
+    """The env and exec walks of #705 step over an option's value.
+
+    When that value is the last word the walk has to stop at the end of the
+    words rather than read past it. Reading past it raises, the hook exits 1,
+    and Claude Code treats exit 1 as a non-blocking error: the command runs
+    unchecked.
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode in (0, 2), completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 @pytest.mark.parametrize(
