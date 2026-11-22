@@ -237,3 +237,39 @@ line: 1592
 original: if "c" in word[1:]:
 mutant: if "c" in word[0:]:
 reason: equivalent; every word reaching this line starts with a dash, which is not c
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1679
+original: if word == "-":
+mutant: if False:
+reason: equivalent; a bare - that skips this branch is read as a one-word option with no letters, so the walk steps over it by one word all the same
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1682
+original: if word == "--" or not word.startswith("-"):
+mutant: if not word.startswith('-'):
+reason: fail-closed; a bare -- is then read on as an option, so the walk goes on into the command and can only find more to refuse
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1686
+original: if len(name) > 2 and "--split-string".startswith(name):
+mutant: if len(name) >= 2 and '--split-string'.startswith(name):
+reason: fail-closed; it differs only for a name of --, which needs a word like --=x because a bare -- stops the walk, and then it refuses more
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1686
+original: if len(name) > 2 and "--split-string".startswith(name):
+mutant: if len(name) > 1 and '--split-string'.startswith(name):
+reason: fail-closed; it differs only for a name of --, which needs a word like --=x because a bare -- stops the walk, and then it refuses more
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1688
+original: takes_value = len(name) > 2 and any(
+mutant: takes_value = len(name) >= 2 and any(
+reason: equivalent; it differs only for a name of --, which needs a word like --=x, and the = in that word already makes the walk step by one word
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1688
+original: takes_value = len(name) > 2 and any(
+mutant: takes_value = len(name) > 1 and any(
+reason: equivalent; it differs only for a name of --, which needs a word like --=x, and the = in that word already makes the walk step by one word
