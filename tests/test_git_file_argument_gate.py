@@ -3313,6 +3313,69 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "env -vS 'git log -p'",
+        _REFUSED,
+        "the split option is the first word and the string comes after it, so "
+        "the walk has to begin at the first word and read the packed S there",
+    ),
+    _Row(
+        "environment",
+        "env - -vS 'git log -p'",
+        _REFUSED,
+        "a bare - before the packed option is stepped over one word at a "
+        "time, so the -vS after it is still read and splits the string",
+    ),
+    _Row(
+        "environment",
+        "env --chdir docs -vS 'git log -p'",
+        _REFUSED,
+        "--chdir takes the next word as its value, so the walk steps over "
+        "both words and still reads the -vS that follows",
+    ),
+    _Row(
+        "environment",
+        "env --chdir=docs -vS 'git log -p'",
+        _REFUSED,
+        "--chdir with its value joined by = is one word, so the walk steps "
+        "over only that word and still reads the -vS that follows",
+    ),
+    _Row(
+        "environment",
+        "env --c docs -vS 'git log -p'",
+        _REFUSED,
+        "--c is a prefix of --chdir, so it takes a value like the full name "
+        "does and the walk still reaches the -vS after that value",
+    ),
+    _Row(
+        "environment",
+        "env --debug -vS 'git log -p'",
+        _REFUSED,
+        "--debug is a long option that takes no value, so the walk steps over "
+        "one word and still reads the -vS right after it",
+    ),
+    _Row(
+        "environment",
+        "env -v --sp='git log -p'",
+        _REFUSED,
+        "a short option before a --sp= string is stepped over one word, so "
+        "the shortened long option after it is still read as --split-string",
+    ),
+    _Row(
+        "environment",
+        "env -uX -vS 'git log -p'",
+        _REFUSED,
+        "-u with its name joined in one word takes no next word, so the walk "
+        "steps over one word and still reads the -vS after it",
+    ),
+    _Row(
+        "environment",
+        "env -u FOO -vS 'git log -p'",
+        _REFUSED,
+        "-u with its name in the next word steps over both words, so the walk "
+        "still reads the -vS that follows them",
+    ),
+    _Row(
+        "environment",
         "env --unset=FOO git log -1",
         _ALLOWED,
         "an --unset of a name outside GIT_CONFIG_* leaves the settings "
@@ -3331,6 +3394,22 @@ _CORPUS: tuple[_Row, ...] = (
         _ALLOWED,
         "S after -u is the name to unset, not -S, so nothing is split and git "
         "keeps the settings env",
+    ),
+    _Row(
+        "environment",
+        "env git diff docs/SECURITY-AI.md",
+        _ALLOWED,
+        "the first word is the command, not an option, so the walk stops "
+        "there and finds no split string; refusing it would take away a "
+        "prompt the user could have answered",
+    ),
+    _Row(
+        "environment",
+        "env --chdir git",
+        _ALLOWED,
+        "--chdir takes git as its value and leaves no command, so the walk "
+        "ends at the last word with nothing split and the hook decides "
+        "instead of raising",
     ),
     _Row(
         "environment",
