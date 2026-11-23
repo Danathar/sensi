@@ -574,7 +574,6 @@ _GIT_VALUE_OPTIONS = frozenset(
         "--namespace",
         "--attr-source",
         "--super-prefix",
-        "--shallow-file",
     }
 )
 
@@ -1392,12 +1391,13 @@ def _assigned_name(word: str) -> str:
     """Return the variable an assignment word or a builtin's operand names.
 
     `HOME=x`, `HOME+=x` and `HOME[0]=x` all name `HOME`; so do `-vHOME`
-    (printf's attached spelling) and a bare `HOME`.
+    (printf's attached spelling) and a bare `HOME`. A separate `-v` comes
+    back empty, and the word after it is read on its own.
     """
 
-    if word.startswith("-v") and len(word) > 2:
+    if word.startswith("-v"):
         word = word[2:]
-    return re.split(r"[\[+=]", word, maxsplit=1)[0]
+    return re.split(r"[\[+=]", word)[0]
 
 
 def _assigns_a_reaching_name(segment: list[str]) -> str | None:
@@ -1416,7 +1416,8 @@ def _assigns_a_reaching_name(segment: list[str]) -> str | None:
     elif words and words[0] in _ASSIGNING_BUILTINS:
         # `builtin read HOME` and `command read HOME` assign as `read` does,
         # so the wrappers `_command_words` steps over are not a way past.
-        names = [_assigned_name(word) for word in words[1:]]
+        # The builtin's own name is read too: none of them is a reaching name.
+        names = [_assigned_name(word) for word in words]
     else:
         return None
     return next((name for name in names if _reaches_git(name)), None)

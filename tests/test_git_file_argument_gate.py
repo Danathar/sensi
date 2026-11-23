@@ -3511,6 +3511,57 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "XDG_CONFIG_HOME=planted; git log -p",
+        _REFUSED,
+        "git reads $XDG_CONFIG_HOME/git/config as global config, and the "
+        "desktop exports the name",
+    ),
+    _Row(
+        "environment",
+        "HOME=planted; echo hi; git log -p",
+        _REFUSED,
+        "a command between the assignment and git does not take the value "
+        "back, so the first reaching name stays armed",
+    ),
+    _Row(
+        "environment",
+        "printf -v HOME %s planted; git log -p",
+        _REFUSED,
+        "printf -v writes its output into the name it is given instead of printing it",
+    ),
+    _Row(
+        "environment",
+        "printf -vPATH %s planted; git log -1",
+        _REFUSED,
+        "printf takes -v's name attached to the option as well as after it "
+        "(a name with no O, which the -O check would refuse on its own)",
+    ),
+    _Row(
+        "environment",
+        "for HOME in planted; do git log -p; done",
+        _REFUSED,
+        "a for loop assigns its name before the body runs",
+    ),
+    _Row(
+        "environment",
+        "select HOME in planted; do git log -p; done",
+        _REFUSED,
+        "select assigns its name from the line it reads, as for does",
+    ),
+    _Row(
+        "environment",
+        "mapfile -t PATH < list.txt; git log -1",
+        _REFUSED,
+        "mapfile assigns PATH the first line of list.txt, so bash looks git up there",
+    ),
+    _Row(
+        "environment",
+        "readarray -t PATH < list.txt; git log -1",
+        _REFUSED,
+        "readarray is mapfile under another name and assigns PATH the same way",
+    ),
+    _Row(
+        "environment",
         "git log -1; HOME=planted",
         _ALLOWED,
         "an assignment after the git command cannot reach it, the order the "
