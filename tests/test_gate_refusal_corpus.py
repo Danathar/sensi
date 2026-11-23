@@ -50,7 +50,7 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "86a3ba4c237693b7b4bf9758bae55c7b4a62a19e2176b496be0a166808d2f7cf"
+CANONICAL_SHA256 = "64246cb4d92cf1226a9eb07d3f1381942850fb090cfa59fcf50e23eb5c212558"
 
 
 def allow_prefixes(settings: dict) -> list[str]:
@@ -112,7 +112,22 @@ GIT_OPTIONS_WITH_VALUE = {
     "--work-tree",
     "--namespace",
     "--config-env",
+    "--attr-source",
+    "--shallow-file",
 }
+
+# Allow rows this gate refuses on purpose. The corpus says these commands may
+# be allowed; this gate is stricter and refuses them anyway, and the owner
+# decided to keep it that way when the same row met the same stricter gate in
+# aurora-zfs-simple (#713 has the link). Each id is expected to be refused,
+# and the list is checked both ways: a listed row the gate now allows fails,
+# and so does an id that is not an allow row run here, so an entry cannot go
+# stale.
+#
+#   config-removal-allow-env-split-other-u  `env -S -u FOO git log -1`: the
+#       gate refuses every `env -S` / `--split-string` that names git, because
+#       the split string is a command its word scans never see.
+OVER_REFUSED_ROWS = frozenset({"config-removal-allow-env-split-other-u"})
 MAX_BRACE_WORDS = 32
 
 
@@ -474,11 +489,29 @@ class CorpusVerdictTests(unittest.TestCase):
             with self.subTest(row=row["id"], command=row["command"]):
                 verdict, result = decide(row["command"], self.hook)
                 self.assertIn(result.returncode, (0, 2), result.stderr)
+                if row["id"] in OVER_REFUSED_ROWS:
+                    self.assertEqual(
+                        (row["verdict"], verdict),
+                        (ALLOW, REFUSE),
+                        f"{row['id']} is listed in OVER_REFUSED_ROWS as an allow "
+                        "row this gate refuses; if the gate now allows it, "
+                        "remove the id from the list",
+                    )
+                    continue
                 self.assertEqual(
                     verdict,
                     row["verdict"],
                     f"the corpus says {row['verdict']} {row['command']!r}: {row['why']}",
                 )
+
+    def test_every_over_refused_row_is_run_here(self) -> None:
+        """Each id in `OVER_REFUSED_ROWS` is an allow row this allow list reaches.
+
+        An id the corpus renamed or dropped, or whose prefix the allow list
+        stopped covering, would otherwise sit on the list and check nothing.
+        """
+        allowed_here = {row["id"] for row in self.rows if row["verdict"] == ALLOW}
+        self.assertLessEqual(OVER_REFUSED_ROWS, allowed_here)
 
 
 def probe(case: type[unittest.TestCase], name: str, **fixture) -> unittest.TestResult:

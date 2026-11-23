@@ -589,6 +589,38 @@ _GIT_VALUE_OPTIONS = frozenset(
 # ordinary command clears one, so over-refusing here costs nothing.
 _SETTINGS_ENV_PREFIX = "GIT_CONFIG_"
 
+# The names whose value decides which config git loads or which program a
+# command name runs, and that are already exported when a Bash call starts:
+# the settings env above, `HOME` and `PATH` in every session, and
+# `XDG_CONFIG_HOME` wherever the desktop sets it. Giving one of them a value
+# reaches every later command of the string with no export in sight, so
+# `GIT_CONFIG_COUNT=0; git log -p` undoes `safe.bareRepository=explicit`,
+# `HOME=planted; git diff HEAD~1 HEAD` loads `planted/.gitconfig`, and
+# `PATH=planted; git log -1` runs `planted/git` (each ran a planted program on
+# git 2.47.3, #713). A name outside the list is left alone, as the shared
+# corpus asks (`TZ=UTC; git log -1` is allowed): a stand-alone assignment to a
+# name nothing exported sets a shell variable no child sees, which is why
+# `declare GIT_EXTERNAL_DIFF; GIT_EXTERNAL_DIFF=prog; git diff HEAD` stays
+# allowed and only the `GIT_CONFIG_*` names of the settings env count.
+_REACHING_NAMES = frozenset({"HOME", "PATH", "XDG_CONFIG_HOME"})
+
+# The builtins that assign the name they are given, and so reach later
+# commands as a stand-alone `NAME=value` does: `read -r HOME <<< planted`,
+# `printf -v HOME %s planted`, `mapfile -t PATH < list`, `getopts o HOME`,
+# `let HOME=1`, and the loop variable of `for` and `select`. Every operand of
+# these is read as a name that may be assigned, whatever the options say;
+# `read -p HOME` would be over-refused, and that is the cheap direction.
+_ASSIGNING_BUILTINS = frozenset(
+    {"read", "mapfile", "readarray", "printf", "getopts", "let", "for", "select"}
+)
+
+# `git --shallow-file FILE` reads FILE as the list of shallow commits and
+# prints the first line it cannot parse: `git --shallow-file .env log -1`
+# printed `fatal: bad shallow line: ` and the first line of .env (git 2.47.3,
+# #713), past the `Read` deny rule. It is refused wherever it stands among
+# git's global options.
+_READS_A_FILE = frozenset({"--shallow-file"})
+
 # The long options of GNU env that take their value as the next word, so the
 # walk in `_env_clears_settings` steps over the value. A long option may be
 # written as any unambiguous prefix of its name.
@@ -1349,6 +1381,48 @@ def _is_bare_assignment(segment: list[str]) -> bool:
     return assigned and not words and not wrappers
 
 
+def _reaches_git(name: str) -> bool:
+    """Whether `name` is one of `_REACHING_NAMES` or a settings env name."""
+
+    return name in _REACHING_NAMES or name.startswith(_SETTINGS_ENV_PREFIX)
+
+
+def _assigned_name(word: str) -> str:
+    """Return the variable an assignment word or a builtin's operand names.
+
+    `HOME=x`, `HOME+=x` and `HOME[0]=x` all name `HOME`; so do `-vHOME`
+    (printf's attached spelling) and a bare `HOME`. A separate `-v` comes
+    back empty, and the word after it is read on its own.
+    """
+
+    if word.startswith("-v"):
+        word = word[2:]
+    return re.split(r"[\[+=]", word)[0]
+
+
+def _assigns_a_reaching_name(segment: list[str]) -> str | None:
+    """Return the name in `_REACHING_NAMES` this segment assigns, if any.
+
+    A stand-alone `NAME=value`, with no command after it, and the builtins in
+    `_ASSIGNING_BUILTINS` both give a value to a name that is already
+    exported, and bash hands the new value to every later command of the
+    string. A leading assignment in front of a command is not this: it
+    reaches that command only, and the git and allow-row checks refuse it.
+    """
+
+    words, _wrappers, _assigned = _command_words(segment)
+    if _is_bare_assignment(segment):
+        names = [_assigned_name(word) for word in segment if _ASSIGNMENT.match(word)]
+    elif words and words[0] in _ASSIGNING_BUILTINS:
+        # `builtin read HOME` and `command read HOME` assign as `read` does,
+        # so the wrappers `_command_words` steps over are not a way past.
+        # The builtin's own name is read too: none of them is a reaching name.
+        names = [_assigned_name(word) for word in words]
+    else:
+        return None
+    return next((name for name in names if _reaches_git(name)), None)
+
+
 def _allowed_git_prefix(words: list[str]) -> tuple[str, ...] | None:
     """Return the git allow row `words` runs under, if any.
 
@@ -1465,7 +1539,8 @@ def _names_another_repository(words: list[str]) -> str | None:
 def _global_override(options: list[str]) -> str | None:
     """Return the first global option in `options` that names a repository.
 
-    That is `--git-dir`, `--work-tree` or `--bare`, or a `-c` /
+    That is `--git-dir`, `--work-tree` or `--bare`, `--shallow-file` (which
+    reads a file rather than naming a repository), or a `-c` /
     `--config-env` that sets a key in the `safe` section. The walk stops at
     the first word that is not an option, which is the subcommand.
     """
@@ -1476,7 +1551,7 @@ def _global_override(options: list[str]) -> str | None:
         if not word.startswith("-"):
             return None
         name, _, attached = word.partition("=")
-        if name in _NAMED_REPOSITORY:
+        if name in _NAMED_REPOSITORY or name in _READS_A_FILE:
             return name
         if word in _CONFIG_OPTIONS:
             key = next(iter(options[index + 1 :]), "")
@@ -2277,6 +2352,9 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     # (`unset`, `export -n`, `declare +x`). Ordered like `exported`: a removal
     # after the git command cannot reach it.
     stripped = False
+    # A name in `_REACHING_NAMES` an earlier segment gave a value to, with no
+    # export in sight (`HOME=planted;`, `read -r HOME`). Ordered the same way.
+    reached: str | None = None
     # A `cd` earlier in the string moves where bash opens a relative `<`
     # target, so a later git's redirection cannot be resolved here. Only a
     # cd, pushd or popd sets it, and nothing clears it: a git segment between
@@ -2393,6 +2471,24 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 file=sys.stderr,
             )
             return 2
+        if reached is not None and (_runs_git(segment) or _gated_prefix(segment)):
+            print(
+                f"Blocked: an earlier command in this string gives `{reached}` "
+                "a new value, and the name is already exported, so bash hands "
+                "that value to this command with no export in sight. A "
+                "stand-alone `NAME=value` and the builtins that assign "
+                "(`read`, `mapfile`, `readarray`, `printf -v`, `getopts`, "
+                "`let`, `for`, `select`) all do this. `GIT_CONFIG_COUNT=0; git "
+                "log -p` undoes the safe.bareRepository=explicit setting of "
+                ".claude/settings.json, `HOME=planted; git diff HEAD~1 HEAD` "
+                "loads a .gitconfig a branch committed, and `PATH=planted; git "
+                "log -1` runs a planted git: each ran a planted program (#713). "
+                "Run the command without changing the variable.",
+                file=sys.stderr,
+            )
+            return 2
+        if reached is None:
+            reached = _assigns_a_reaching_name(segment)
         if _drops_settings_env(segment):
             stripped = True
         if _exports_a_name(segment) or (allexport and _is_bare_assignment(segment)):
@@ -2564,7 +2660,10 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 "work tree outright, which the setting allows by design, and "
                 "-c / --config-env safe.* overrides the setting for one "
                 "command: `git --git-dir=evil log -p` runs the planted "
-                "program. Run git from the checkout without the option (#699).",
+                "program. --shallow-file makes git read a file of its choosing "
+                "and print the first line it cannot parse: `git --shallow-file "
+                ".env log -1` prints a line of .env (#713). Run git from the "
+                "checkout without the option (#699).",
                 file=sys.stderr,
             )
             return 2
