@@ -128,9 +128,9 @@ supply-chain concern.
   `}`) or a process substitution (`<(`/`>(`). This is a blanket catch-all on
   top of the specific option refusals above, not a replacement for them.
   The rest of what the hook refuses is the shared refusal corpus
-  (`tests/fixtures/gate-refusal-corpus.json`), which every repository of the
-  fleet runs its own gate against. `tests/test_gate_refusal_docs.py` fails
-  when a class of refusal in that corpus is missing from this page, so the
+  (the gate-refusal-corpus fixture under the tests directory), which every
+  repository of the fleet runs its own gate against. The gate-refusal docs
+  test fails when a class of refusal in that corpus is missing from this page, so the
   paragraphs below name each class.
   A string of several commands is a compound command: an allowed first command
   does not cover a later one, and a newline separates commands as a `;` does,
@@ -139,13 +139,13 @@ supply-chain concern.
   is not a revision, with no flag at all, so `git diff /dev/null ./.env` and
   the same with the operands after `--` print the file as `--no-index` does,
   and are refused on the same rule. `--output=PATH` writes the diff to any
-  path, and `git log -p --output=.env -1` truncates `.env` before it writes;
+  path, and `git log -p --output=.env -1` truncates that file before it writes;
   it is refused in every spelling, the shell's own (`$'--output=x'`,
   `--outpu{t,t}=x`) included.
   git reads its configuration from its environment, and the setting that
   matters is the `safe.bareRepository=explicit` that `.claude/settings.json`
   puts there: it is what stops git using a bare folder a branch planted, with
-  the `diff.*.textconv` program that folder's config names. Three things undo
+  the textconv program that folder's config names. Three things undo
   it, and the hook refuses each. Overriding it for one command: `-c` or
   `--config-env` with a key in the `safe` section, in any case, as in
   `git -c safe.bareRepository=all log -p`. Naming a repository outright, which
