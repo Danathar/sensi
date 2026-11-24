@@ -50,7 +50,7 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "64246cb4d92cf1226a9eb07d3f1381942850fb090cfa59fcf50e23eb5c212558"
+CANONICAL_SHA256 = "8c013df1e981d6a17c6d5c8bd7d5589ff8f33fc798d9f6ce046d58d54844f6ae"
 
 
 def allow_prefixes(settings: dict) -> list[str]:

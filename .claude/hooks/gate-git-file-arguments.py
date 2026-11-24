@@ -1114,6 +1114,72 @@ def _segments(words: list[str], masked: list[str]) -> list[tuple[list[str], list
     return [segment for segment in found if segment[0]]
 
 
+# What an arithmetic command `(( ... ))`, an arithmetic expansion `$(( ... ))`
+# and the `for (( ... ))` header assign: `NAME = 1`, `NAME += 1`, `NAME++` and
+# `++NAME` all give NAME a value, with no `NAME=value` word in sight, and
+# `==`, `!=`, `<=` and `>=` do not.
+_ARITHMETIC_ASSIGNMENT = re.compile(
+    r"(?:^|[\s,(;])(?:(?:\+\+|--)\s*([A-Za-z_]\w*)"
+    r"|([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?"
+    r"(?:\+\+|--|(?:[-+*/%&^|]|<<|>>)?=(?!=)))"
+)
+
+
+def _arithmetic_assignments(
+    words: list[str], masked: list[str]
+) -> tuple[list[str], list[str]]:
+    """Put a stand-alone assignment in front of each arithmetic that assigns.
+
+    `(( PATH = 1 )); git log -1` gives PATH a value, and the name is already
+    exported, so bash looks git up in a folder named 1. No word of it reads
+    `NAME=value`, so the segment scan for #713 never saw it (the shared
+    corpus rows `path-arithmetic`, `home-arithmetic` and
+    `xdg-config-home-arithmetic-expansion`). Each `((` ... `))` region that
+    assigns a name gets a segment `NAME=0` in front of the command it sits
+    in: `git log $(( PATH = 1 ))` looks git up after the expansion, so the
+    value reaches that command too. The words of the region stay where they
+    are, so a command substitution inside it is still read. The over-refusing
+    direction is the cheap one: `( ( PATH = 1 ) )` with a space is read as
+    arithmetic as well.
+    """
+
+    out_words: list[str] = []
+    out_masked: list[str] = []
+    index = 0
+    while index < len(masked):
+        if masked[index] == "(" and masked[index + 1 : index + 2] == ["("]:
+            depth, end = 0, len(masked)
+            for pos in range(index, len(masked)):
+                if masked[pos] == "(":
+                    depth += 1
+                elif masked[pos] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = pos + 1
+                        break
+            body = " ".join(
+                word
+                for word, twin in zip(words[index:end], masked[index:end], strict=True)
+                if twin not in ("(", ")")
+            )
+            found = _ARITHMETIC_ASSIGNMENT.findall(body)
+            names = [first or second for first, second in found]
+            if names:
+                start = len(out_masked)
+                while start and not (
+                    out_masked[start - 1] in _SEPARATORS
+                    or set(out_masked[start - 1]) <= set(";&|")
+                ):
+                    start -= 1
+                inserted = [f"{name}=0" for name in names] + [";"]
+                out_words[start:start] = inserted
+                out_masked[start:start] = inserted
+        out_words.append(words[index])
+        out_masked.append(masked[index])
+        index += 1
+    return out_words, out_masked
+
+
 def _writing_redirection(segment: list[str]) -> str | None:
     """Return the first redirection in `segment` that opens a path for writing.
 
@@ -2364,7 +2430,7 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     # runs them and git never receives them, so the operand scan below does
     # not read them as paths outside the repository.
     stepped_over: list[str] = []
-    for segment, twins in _segments(words, masked):
+    for segment, twins in _segments(*_arithmetic_assignments(words, masked)):
         built = _brace_built_name(segment, twins)
         if built is not None:
             word, name = built
@@ -2476,9 +2542,10 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 f"Blocked: an earlier command in this string gives `{reached}` "
                 "a new value, and the name is already exported, so bash hands "
                 "that value to this command with no export in sight. A "
-                "stand-alone `NAME=value` and the builtins that assign "
+                "stand-alone `NAME=value`, the builtins that assign "
                 "(`read`, `mapfile`, `readarray`, `printf -v`, `getopts`, "
-                "`let`, `for`, `select`) all do this. `GIT_CONFIG_COUNT=0; git "
+                "`let`, `for`, `select`) and an arithmetic `(( NAME = 1 ))` "
+                "or `$(( NAME = 1 ))` all do this. `GIT_CONFIG_COUNT=0; git "
                 "log -p` undoes the safe.bareRepository=explicit setting of "
                 ".claude/settings.json, `HOME=planted; git diff HEAD~1 HEAD` "
                 "loads a .gitconfig a branch committed, and `PATH=planted; git "

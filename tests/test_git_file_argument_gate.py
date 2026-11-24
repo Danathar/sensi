@@ -3562,6 +3562,62 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "(( PATH = 1 )); git log -1",
+        _REFUSED,
+        "an arithmetic command assigns PATH with no NAME=value word, so bash "
+        "looks git up in a folder named 1 a branch can commit",
+    ),
+    _Row(
+        "environment",
+        "(( HOME = 1 )); git diff HEAD~1 HEAD",
+        _REFUSED,
+        "the same assignment to the exported HOME, so git reads 1/.gitconfig",
+    ),
+    _Row(
+        "environment",
+        ": $(( XDG_CONFIG_HOME = 1 )); git log -p -1",
+        _REFUSED,
+        "an arithmetic expansion assigns as the command does",
+    ),
+    _Row(
+        "environment",
+        "(( i = 1, PATH += 1 )); git log -1",
+        _REFUSED,
+        "a compound assignment further along the expression counts",
+    ),
+    _Row(
+        "environment",
+        "(( PATH++ )); git log -1",
+        _REFUSED,
+        "an increment assigns its name",
+    ),
+    _Row(
+        "environment",
+        "git log $(( PATH = 1 ))",
+        _REFUSED,
+        "bash looks git up after it expands the arithmetic, so the value "
+        "reaches the command the expansion sits in",
+    ),
+    _Row(
+        "environment",
+        "(( i = 1 )); git log -1",
+        _ALLOWED,
+        "arithmetic on a name git takes nothing from",
+    ),
+    _Row(
+        "environment",
+        "(( PATH == 1 )); git log -1",
+        _ALLOWED,
+        "a comparison assigns nothing",
+    ),
+    _Row(
+        "environment",
+        "( echo PATH ); git log -1",
+        _ALLOWED,
+        "a subshell that prints the word PATH assigns nothing",
+    ),
+    _Row(
+        "environment",
         "git log -1; HOME=planted",
         _ALLOWED,
         "an assignment after the git command cannot reach it, the order the "
@@ -3686,6 +3742,12 @@ _MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "if reached is not None and (_runs_git(segment) or _gated_prefix(segment)):",
         "if False:",
         "HOME=planted; git diff HEAD~1 HEAD",
+    ),
+    (
+        "the stand-alone assignment put in front of an arithmetic that assigns",
+        "for segment, twins in _segments(*_arithmetic_assignments(words, masked)):",
+        "for segment, twins in _segments(words, masked):",
+        "(( PATH = 1 )); git log -1",
     ),
     (
         "the builtins that assign the name they are given",
