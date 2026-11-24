@@ -273,3 +273,75 @@ line: 1688
 original: takes_value = len(name) > 2 and any(
 mutant: takes_value = len(name) > 1 and any(
 reason: equivalent; it differs only for a name of --, which needs a word like --=x, and the = in that word already makes the walk step by one word
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1151
+original: depth, end = 0, len(masked)
+mutant: depth, end = -1, len(masked)
+reason: equivalent; the opening (( always gives two ( in a row, so depth reaches 0 one ) sooner and only the last ) of the region is left out, which the body drops anyway
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1157
+original: if depth == 0:
+mutant: if depth == 1:
+reason: equivalent; the region ends one ) before the )) closes it, which leaves out only that ), and the body drops parentheses anyway; an arithmetic whose groups close past it is a bash syntax error
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1158
+original: end = pos + 1
+mutant: end = pos + 0
+reason: equivalent; the region loses only its last ), and the body drops parentheses anyway
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1158
+original: end = pos + 1
+mutant: end = pos + 2
+reason: equivalent; the region takes one more word, and after )) bash accepts only a separator, a redirection operator or ), none of which can finish an assignment the pattern reads
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1162
+original: for word, twin in zip(words[index:end], masked[index:end], strict=True)
+mutant: for word, twin in zip(words[index:end], masked[index:end], strict=False)
+reason: equivalent; words and masked are always the same length, so zip stops at the same place either way
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1167
+original: if names:
+mutant: if True:
+reason: equivalent; with no name found it puts only a ; in front of the command, and an empty command between two separators adds no segment the gate reads
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1170
+original: out_masked[start - 1] in _SEPARATORS or set(out_masked[start - 1]) <= set(";&|")
+mutant: (out_masked[start - 1] in _SEPARATORS and set(out_masked[start - 1]) <= set(';&|'))
+reason: fail-closed; it walks back past a ( or ) to the previous ; & or |, so the assignment lands earlier and reaches every command it reached before
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1170
+original: out_masked[start - 1] in _SEPARATORS or set(out_masked[start - 1]) <= set(";&|")
+mutant: (out_masked[start - 1] in _SEPARATORS)
+reason: equivalent; the only words made of ; & and | that are not separators are the case-arm ends ;; ;& ;;&, and bash takes a pattern or esac after them, never a ((
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1170
+original: out_masked[start - 1] in _SEPARATORS or set(out_masked[start - 1]) <= set(";&|")
+mutant: (set(out_masked[start - 1]) <= set(';&|'))
+reason: fail-closed; it walks back past a ( or ) to the previous ; & or |, so the assignment lands earlier and reaches every command it reached before
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1171
+original: or set(out_masked[start - 1]) <= set(";&|")
+mutant: or (set(out_masked[start - 1]) < set(';&|'))
+reason: equivalent; every separator made of ; & and | is already caught by the in _SEPARATORS test before it, and no word holds all three characters
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1171
+original: or set(out_masked[start - 1]) <= set(";&|")
+mutant: or (set(out_masked[start - 1]) > set(';&|'))
+reason: equivalent; no word is made of ; & | and something more, so only the in _SEPARATORS test is left, and it differs only for the case-arm ends ;; ;& ;;&, which a (( never follows
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1173
+original: start -= 1
+mutant: start -= 0
+reason: fail-closed; the walk never ends, the hook runs out of its time budget and refuses; it is reached only when the arithmetic assigns a name, so only a command already refused is held up
