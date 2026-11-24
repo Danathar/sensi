@@ -127,6 +127,83 @@ supply-chain concern.
   is one shaped like a brace expansion (a `{`, then a `,` or `..`, then a
   `}`) or a process substitution (`<(`/`>(`). This is a blanket catch-all on
   top of the specific option refusals above, not a replacement for them.
+  The rest of what the hook refuses is the shared refusal corpus
+  (`tests/fixtures/gate-refusal-corpus.json`), which every repository of the
+  fleet runs its own gate against. `tests/test_gate_refusal_docs.py` fails
+  when a class of refusal in that corpus is missing from this page, so the
+  paragraphs below name each class.
+  A string of several commands is a compound command: an allowed first command
+  does not cover a later one, and a newline separates commands as a `;` does,
+  so `git status && git diff /dev/null ./.env` is read as two commands and the
+  second is refused. `git diff` falls back to plain-file mode when an operand
+  is not a revision, with no flag at all, so `git diff /dev/null ./.env` and
+  the same with the operands after `--` print the file as `--no-index` does,
+  and are refused on the same rule. `--output=PATH` writes the diff to any
+  path, and `git log -p --output=.env -1` truncates `.env` before it writes;
+  it is refused in every spelling, the shell's own (`$'--output=x'`,
+  `--outpu{t,t}=x`) included.
+  git reads its configuration from its environment, and the setting that
+  matters is the `safe.bareRepository=explicit` that `.claude/settings.json`
+  puts there: it is what stops git using a bare folder a branch planted, with
+  the `diff.*.textconv` program that folder's config names. Three things undo
+  it, and the hook refuses each. Overriding it for one command: `-c` or
+  `--config-env` with a key in the `safe` section, in any case, as in
+  `git -c safe.bareRepository=all log -p`. Naming a repository outright, which
+  the setting allows by design: `--git-dir` in either spelling, `--work-tree`
+  and `--bare`. Taking the settings out of git's environment, so that the
+  `GIT_CONFIG_*` variables are gone when git starts: `unset`, `export -n` and
+  `declare +x` of a `GIT_CONFIG_*` name before git, `env -u` and `env --unset`
+  of one, `env -i`, `--ignore-environment` and a bare `env -`, each of which
+  empties the whole environment, and bash's `exec -c`, however env's own
+  options (`-S`, `-a NAME`) are arranged in front of them. Giving a value to
+  one of the names that decide which configuration git loads or which program
+  a command name runs also reaches every later command of the string with no
+  export in sight: `GIT_CONFIG_COUNT=0; git log -p`, `HOME=planted; git diff
+  HEAD~1 HEAD`, `PATH=planted:$PATH; git log -1` and `XDG_CONFIG_HOME=planted`
+  are refused as a stand-alone assignment, as `(( HOME = 1 ))`, and through a
+  builtin that assigns its operand: `read -r HOME`, `printf -v HOME`,
+  `mapfile -t PATH`, `readarray`, `getopts`, `let` and the variable of a `for`
+  or `select` loop. A name outside that list is left alone (`TZ=UTC; git log
+  -1` passes). `git --shallow-file FILE` reads FILE as the list of shallow
+  commits and quotes the first line it cannot parse, so it is refused wherever
+  it stands among git's global options. Two more options of that kind are not
+  reachable through this repository's allow list, so the corpus rows for them
+  are not run here, but the corpus holds them as refusals: `git blame
+  --contents FILE`, which prints every line of the file, and skopeo's
+  `--registries-conf FILE`.
+  A command name can be written so that the shell turns it into `git`, `gh`,
+  `python3` or `ruff` after the hook has read it: `{git,} diff`, `g?t diff`
+  beside a file named `git`, `$'\x67it'`, and a name split by a backslash and
+  a newline. With `shopt -s extglob` on, which a string handed to `bash -c`
+  can switch on for its own next line, a group such as `g@(i)t` matches `git`
+  too. The hook reads each of those spellings as a name that may be a guarded
+  command, and reads an extglob group as the `*` it could match, and refuses
+  the string. A program in front that is neither a wrapper nor a guarded
+  command runs the words after it, so `setarch x86_64 git diff --no-index
+  /dev/null .env`, `prlimit`, `strace -o /dev/null` and `script -qc '...'`
+  reach the same git: the hook reads every later word of such a command as the
+  gate reads a command of its own, and `setarch x86_64 gh pr view 1 --json
+  number --jq .number` still passes. A wrapper in front of an allow-listed
+  command (`timeout 5`, `flock FILE`, `chrt`, `ionice`, `taskset`, `unshare`,
+  `watch`, `find -exec` and `env -S`, as well as `xargs`) does not change what
+  the command does, so the protected action is refused behind any of them
+  whether or not Claude Code would prompt first: the bypass and auto
+  permission modes prompt for nothing.
+  gh's `--jq` (`-q`) filter reads the environment. gh evaluates it with gojq,
+  whose `env` builtin is the whole process environment, so `gh pr view 1
+  --json number --jq env` printed `GH_TOKEN` with no prompt, and `$ENV` is the
+  same thing under another spelling. A filter that names the bare `env` is
+  refused in every spelling of the option, and behind any program that runs
+  gh; a filter that names a field (`--jq .title`) is left alone.
+  Two commands the corpus refuses are not on this repository's allow list at
+  all, so the settings file already stops them from running unseen, and the
+  corpus test runs their rows only once an allow row reaches them.
+  `git push` is an `ask` row, so a person sees each one, and `git push
+  --force` and `-f` are denied; the corpus refuses the pushes that delete a
+  remote branch (`--delete`, `-d`, an empty-source refspec such as
+  `:old-branch`, and `--prune`). `git branch` is allowed only in its seven
+  listing forms, so `git branch -D` and `-M` and `-f`, which delete, rename
+  and move a local branch, match no allow row and prompt as well.
 - **Exfiltrate repository content to a third-party service** as a side effect of
   a task — no posting diffs, logs, or fixtures to a pastebin, an external API,
   or an issue in another repository.
