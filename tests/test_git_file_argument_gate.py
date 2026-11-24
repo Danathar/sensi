@@ -3589,7 +3589,8 @@ _CORPUS: tuple[_Row, ...] = (
         "environment",
         "(( PATH++ )); git log -1",
         _REFUSED,
-        "an increment assigns its name",
+        "an increment assigns its name just as a plain assignment does, "
+        "so the gate reads it as a change to the search path",
     ),
     _Row(
         "environment",
@@ -3608,7 +3609,8 @@ _CORPUS: tuple[_Row, ...] = (
         "environment",
         "(( PATH == 1 )); git log -1",
         _ALLOWED,
-        "a comparison assigns nothing",
+        "a comparison assigns nothing, so the search path is left as it was "
+        "and the command is allowed",
     ),
     _Row(
         "environment",
