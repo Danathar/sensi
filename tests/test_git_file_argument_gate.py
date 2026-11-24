@@ -3620,6 +3620,68 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
+        "(( --GIT_CONFIG_COUNT )); git log -p",
+        _REFUSED,
+        "a prefix decrement assigns its name too: the count drops to 0 and git "
+        "stops reading safe.bareRepository=explicit from the settings env",
+    ),
+    _Row(
+        "environment",
+        "echo ok && (( PATH = 1 )); git log -1",
+        _REFUSED,
+        "the assignment goes in front of the whole list, not between echo and "
+        "&&, where it would only be an argument echo prints",
+    ),
+    _Row(
+        "environment",
+        "git status; if (( PATH = 1 )); then git log -1; fi",
+        _REFUSED,
+        "the assignment goes in front of the if, back to the last separator, "
+        "not between the if and the arithmetic",
+    ),
+    _Row(
+        "environment",
+        "(( (j), PATH = 1 )); git log -1",
+        _REFUSED,
+        "the region runs to the )) that closes it, past a nested group that "
+        "closes first, so the assignment after the group is read",
+    ),
+    _Row(
+        "environment",
+        "git log -1 && (( PATH = 1 ))",
+        _ALLOWED,
+        "an arithmetic after the git command cannot reach it, as a plain "
+        "assignment there cannot",
+    ),
+    _Row(
+        "environment",
+        "( echo PATH=1 ); git log -1",
+        _ALLOWED,
+        "a single parenthesis is a subshell, not arithmetic, and echo only "
+        "prints PATH=1",
+    ),
+    _Row(
+        "environment",
+        "(( i = 1 )); git log --grep HOME=1 -1",
+        _ALLOWED,
+        "the region ends at its own )), so a HOME=1 git is asked to search "
+        "for is not read as an assignment",
+    ),
+    _Row(
+        "environment",
+        "(( (i) )); git log --grep HOME=1 -1",
+        _ALLOWED,
+        "a nested group inside the arithmetic still closes where bash closes it",
+    ),
+    _Row(
+        "environment",
+        "(( i = 1 )); ( echo HOME=1 ); git log -1",
+        _ALLOWED,
+        "the region stops at its first matching )), not at a later subshell "
+        "that happens to balance the count",
+    ),
+    _Row(
+        "environment",
         "git log -1; HOME=planted",
         _ALLOWED,
         "an assignment after the git command cannot reach it, the order the "
