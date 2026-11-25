@@ -1404,6 +1404,16 @@
       "why": "mapfile assigns PATH, so bash looks git up in the first line of list"
     },
     {
+      "id": "path-getopts",
+      "class": "configuration reach",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "getopts ab PATH; git log -1",
+      "why": "getopts stores into the name it is given, ? once no option is left, so bash looks git up in a folder named ? a branch can commit"
+    },
+    {
       "id": "settings-env-read",
       "class": "configuration reach",
       "verdict": "refuse",
@@ -1550,8 +1560,158 @@
       "requires": [
         "git status"
       ],
-      "command": "cd \"$HOME\" && git status",
+      "command": "echo \"$HOME\" && git status",
       "why": "reading HOME is not assigning it"
+    },
+    {
+      "id": "dir-change-cd-plain-file",
+      "class": "directory change",
+      "verdict": "refuse",
+      "requires": [
+        "git diff"
+      ],
+      "command": "cd /tmp && git diff -- x .env",
+      "why": "git runs outside any repository, falls back to --no-index with no flag and prints /tmp/.env, while both operands look like in-tree paths"
+    },
+    {
+      "id": "dir-change-cd-semicolon",
+      "class": "directory change",
+      "verdict": "refuse",
+      "requires": [
+        "git diff"
+      ],
+      "command": "cd /tmp; git diff -- x .env",
+      "why": "the same move ended by ; rather than &&"
+    },
+    {
+      "id": "dir-change-subshell",
+      "class": "directory change",
+      "verdict": "refuse",
+      "requires": [
+        "git diff"
+      ],
+      "command": "(cd /tmp && git diff -- x .env)",
+      "why": "the same move inside a subshell"
+    },
+    {
+      "id": "dir-change-pushd",
+      "class": "directory change",
+      "verdict": "refuse",
+      "requires": [
+        "git diff"
+      ],
+      "command": "pushd /tmp && git diff -- x .env",
+      "why": "pushd moves the shell as cd does"
+    },
+    {
+      "id": "dir-change-bare-cd",
+      "class": "directory change",
+      "verdict": "refuse",
+      "requires": [
+        "git diff"
+      ],
+      "command": "cd && git diff -- .netrc .env",
+      "why": "a cd with no operand goes to HOME and prints two files there"
+    },
+    {
+      "id": "dir-change-allow-inside",
+      "class": "directory change",
+      "verdict": "allow",
+      "requires": [
+        "git log"
+      ],
+      "command": "cd tests && git log -1",
+      "why": "a literal relative directory with no .. stays inside the checkout"
+    },
+    {
+      "id": "comment-apostrophe",
+      "class": "comment",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 # it's the last one\ngit log --output=x -1",
+      "why": "the apostrophe is comment text to bash, so the second line runs; a gate that opens a quote there reads it as data"
+    },
+    {
+      "id": "comment-double-quote",
+      "class": "comment",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 # 5\" wide\ngit log --output=x -1",
+      "why": "a double quote in a comment opens no quote either"
+    },
+    {
+      "id": "comment-backslash",
+      "class": "comment",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 # one \\\ngit log --output=x -1",
+      "why": "a backslash at the end of a comment joins no line, so the second line is a command of its own"
+    },
+    {
+      "id": "comment-apostrophe-substitution",
+      "class": "comment",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 # it's the last one\necho $(git log --output=x -1)",
+      "why": "the second line runs a command substitution the apostrophe must not hide"
+    },
+    {
+      "id": "comment-allow-apostrophe",
+      "class": "comment",
+      "verdict": "allow",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 # it's the last one",
+      "why": "an apostrophe in a comment is ordinary prose"
+    },
+    {
+      "id": "heredoc-unquoted-apostrophe",
+      "class": "here-document",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 <<EOF\nit's\nEOF\ngit log --output=x -1\ncat <<EOF\nit's\nEOF",
+      "why": "an apostrophe in a here-document body is text to bash, so the line between the two bodies runs; a gate that pairs the two apostrophes reads it as one quoted word"
+    },
+    {
+      "id": "heredoc-unquoted-hash-substitution",
+      "class": "here-document",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 <<EOF\n# $(git log --output=x -1)\nEOF",
+      "why": "a # in an unquoted here-document body starts no comment, and bash runs the command substitution after it"
+    },
+    {
+      "id": "heredoc-quoted-apostrophe",
+      "class": "here-document",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 <<'EOF'\nit's\nEOF\ngit log --output=x -1",
+      "why": "the apostrophe in a body with a quoted delimiter is text too; a gate that opens a quote there reads every command after the body as data"
+    },
+    {
+      "id": "heredoc-quoted-apostrophe-pair",
+      "class": "here-document",
+      "verdict": "refuse",
+      "requires": [
+        "git log"
+      ],
+      "command": "git log -1 <<'EOF'\nit's\nEOF\ngit log --output=x -1\ncat <<'EOF'\nit's\nEOF",
+      "why": "the apostrophes of two such bodies pair with nothing, so the line between them runs; a gate that only refuses an unclosed quote reads them as one word"
     }
   ]
 }

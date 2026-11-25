@@ -171,6 +171,21 @@ supply-chain concern.
   are not run here, but the corpus holds them as refusals: `git blame
   --contents FILE`, which prints every line of the file, and skopeo's
   `--registries-conf FILE`.
+  A directory change can leave the checkout, and every path check the hook
+  makes resolves inside it: `cd /tmp && git diff -- x .env` names two files
+  that look like the repository's, while git, run outside any repository,
+  falls back to plain-file mode and prints the .env file in /tmp. After a
+  `cd`, `pushd` or `popd` that may leave the checkout, a later git, gh,
+  python3 or ruff command in the same string is refused. Only a `cd` or `pushd` into a
+  directory of the checkout named literally, with no `..` and no CDPATH, is
+  followed, so `cd tests && git log -1` passes.
+  Inside a comment a quote opens nothing and a backslash joins no line, and
+  in a here-document body a quote or a `#` is text too, so an apostrophe
+  there (`# it's`, or `it's` between `<<EOF` and `EOF`) does not hide the
+  next line from the hook. The hook cuts each here-document body out before
+  it reads the command. A body whose delimiter is unquoted and that holds a
+  `$(...)` or a backtick, which bash runs, is refused, and so is a `<<` in a
+  string that also holds arithmetic or a `${`, where it may be a shift.
   A command name can be written so that the shell turns it into `git`, `gh`,
   `python3` or `ruff` after the hook has read it: `{git,} diff`, `g?t diff`
   beside a file named `git`, `$'\x67it'`, and a name split by a backslash and

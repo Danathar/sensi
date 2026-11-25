@@ -270,7 +270,8 @@ import contextlib
 import fnmatch
 import io
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import signal
@@ -891,32 +892,174 @@ def _join_continuations(command: str) -> str:
     return "".join(kept)
 
 
-def _strip_comments(command: str) -> str:
-    """Return the command with every shell comment removed.
+class _Unreadable(Exception):
+    """A command this hook cannot read the way bash does; the message says why."""
 
-    A `#` that begins a word after whitespace (or the start of the string)
-    starts a comment bash drops through the end of the line, so `python3
-    scripts/run_tests.py # output > file` opens nothing and must not be
-    refused for the `>` in the comment. The spans are found on the
-    quote-masked copy, where a quoted `#` is a `Q`, and cut from the command
-    itself; `_lex` is then handed a string with no comment in it, and its
-    `commenters = ""` still holds for the `#` this leaves in place: one inside
-    a word (`HEAD^#x`), which is a character of the word, and one straight
-    after an operator (`;#`), which is kept as a word and can only
-    over-refuse.
+
+# A `#` starts a comment where it begins a word after whitespace or at the
+# start of the string. One straight after an operator (`;#`) is kept as a word,
+# which can only over-refuse; one after a `)` may be inside a word
+# (`$(date)#x`), where bash reads it as text.
+_COMMENT_AFTER = " \t\n"
+# The spellings that can make an unquoted `<<` something other than a
+# here-document: arithmetic (`((`, `$((`, `$[`) reads it as a shift, and a
+# `${...}` as text of a pattern. Telling those apart from a here-document is
+# not modelled, so a string that has both is refused.
+_SHIFT_CONTEXTS = ("((", "$[", "${")
+# The characters that end the delimiter word of a `<<`.
+_WORD_END = " \t\n;&|()<>"
+
+
+def _strip_comments(command: str) -> str:
+    r"""Return the command with every comment and here-document body removed.
+
+    A `#` that begins a word starts a comment bash drops through the end of
+    the line, so `python3 scripts/run_tests.py # output > file` opens nothing
+    and must not be refused for the `>` in the comment. Inside a comment a
+    quote opens nothing and a backslash joins no line: `git log -1 # it's`
+    followed by a second line runs that line, and a reader that opened a
+    quote at the apostrophe read the line as data. So this runs first, on the
+    command as typed, walking the quote state itself; a `\<newline>` outside
+    a comment is kept for `_join_continuations`, and a `#` after one still
+    starts a comment, as it does once bash has joined the lines.
+
+    A here-document body is the standard input of its command, not shell
+    syntax: a quote or a `#` in it is text, and a line between two bodies runs
+    (`git log -1 <<EOF`, `it's`, `EOF`, then a second git line). Each body is
+    cut out through its delimiter line. An unquoted delimiter leaves `$(...)`
+    and backticks in the body live, and their commands would be cut out with
+    it, so a body that holds one is refused; with a quoted delimiter
+    (`<<'EOF'`) the body is literal. A `<<` beside arithmetic or a `${` may be
+    a shift rather than a here-document, and cutting out lines bash runs would
+    hide them, so that string is refused too.
     """
 
-    masked = _mask_quotes(command)
     kept: list[str] = []
+    bodies: list[tuple[str, bool, bool]] = []
+    quote = ""
+    last = "\n"
     index = 0
-    while index < len(command):
-        if masked[index] == "#" and (index == 0 or masked[index - 1] in " \t\n"):
-            end = masked.find("\n", index)
-            index = len(command) if end == -1 else end
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if quote:
+            step = 2 if quote == '"' and char == "\\" else 1
+            if char == quote:
+                quote = ""
+            kept.append(command[index : index + step])
+            index += step
             continue
-        kept.append(command[index])
+        if char == "\\":
+            kept.append(command[index : index + 2])
+            if command[index + 1 : index + 2] != "\n":
+                last = "\\"
+            index += 2
+            continue
+        if char == "#" and last in _COMMENT_AFTER:
+            end = command.find("\n", index)
+            index = length if end == -1 else end
+            continue
+        if char == "$" and command.startswith("'", index + 1):
+            end = _ansi_c_end(command, index + 2)
+            stop = length if end is None else end + 1
+            kept.append(command[index:stop])
+            last = "'"
+            index = stop
+            continue
+        if (
+            command.startswith("<<", index)
+            and not command.startswith("<<<", index)
+            and last != "<"
+        ):
+            if any(context in command for context in _SHIFT_CONTEXTS):
+                raise _Unreadable(
+                    "the command has a `<<` and also arithmetic or a `${`, where "
+                    "`<<` is a shift and not a here-document. This hook cuts a "
+                    "here-document's body out before it reads the command, and "
+                    "cutting out lines bash runs would hide them. Run the two "
+                    "parts as separate commands."
+                )
+            end, delimiter, quoted = _here_document_delimiter(command, index)
+            bodies.append((delimiter, command.startswith("<<-", index), quoted))
+            kept.append(command[index:end])
+            index = end
+            continue
+        if char in "'\"":
+            quote = char
+        kept.append(char)
+        last = char
         index += 1
+        if char == "\n":
+            index = _skip_here_documents(command, index, bodies)
     return "".join(kept)
+
+
+def _here_document_delimiter(command: str, start: int) -> tuple[int, str, bool]:
+    """Read the delimiter of the `<<` or `<<-` at `start`.
+
+    Return the index just past the delimiter word, the delimiter as bash
+    compares it (quotes and backslashes removed), and whether any part of it
+    was quoted, which makes the body literal.
+    """
+
+    index = start + 2
+    if command.startswith("-", index):
+        index += 1
+    while index < len(command) and command[index] in " \t":
+        index += 1
+    delimiter: list[str] = []
+    quoted = False
+    quote = ""
+    while index < len(command) and (quote or command[index] not in _WORD_END):
+        char = command[index]
+        index += 1
+        if char == quote:
+            quote = ""
+        elif quote:
+            delimiter.append(char)
+        elif char in "'\"":
+            quote = char
+            quoted = True
+        elif char == "\\":
+            delimiter.append(command[index : index + 1])
+            index += 1
+            quoted = True
+        else:
+            delimiter.append(char)
+    if not delimiter:
+        raise _Unreadable(
+            "a `<<` names no here-document delimiter, which bash reads as a "
+            "syntax error. Rewrite the command."
+        )
+    return index, "".join(delimiter), quoted
+
+
+def _skip_here_documents(
+    command: str, index: int, bodies: list[tuple[str, bool, bool]]
+) -> int:
+    """Return the index past the bodies that start at `index`, in order.
+
+    Each body runs through the line that is its delimiter (leading tabs
+    dropped for `<<-`), or to the end of the string when no line is. `bodies`
+    is emptied.
+    """
+
+    for delimiter, strip_tabs, quoted in bodies:
+        lines: list[str] = []
+        for line in command[index:].split("\n"):
+            index += len(line) + 1
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                break
+            lines.append(line)
+        body = "\n".join(lines).replace("\\\n", "")
+        if not quoted and ("$(" in body or "`" in body):
+            raise _Unreadable(
+                "a here-document with an unquoted delimiter runs the $(...) or "
+                "backtick in its body, and this hook does not read a body. Quote "
+                "the delimiter (`<<'EOF'`) or run the inner command on its own."
+            )
+    bodies.clear()
+    return index
 
 
 def _newlines_to_separators(command: str) -> str:
@@ -1274,6 +1417,39 @@ def _changes_directory(segment: list[str]) -> bool:
 
     words = _command_words(segment)[0]
     return bool(words) and words[0] in {"cd", "pushd", "popd"}
+
+
+def _directory_after(
+    segment: list[str], here: Path | None, cdpath: bool
+) -> Path | None:
+    """Return where the `cd`, `pushd` or `popd` in `segment` leaves the shell.
+
+    None means it may be outside the checkout. Every path check here resolves
+    against the checkout, so after `cd /tmp` the operands of `git diff -- x
+    .env` look like files of the repository while git, outside any
+    repository, falls back to --no-index and prints /tmp/.env. Only one
+    literal operand naming a directory inside the checkout, with no `..`, is
+    followed: no operand (HOME), `-` (OLDPWD), `~`, `+N` and options, a word
+    bash expands, any `popd` with no operand, and a relative name while
+    CDPATH is set or named in the string all count as leaving.
+    """
+
+    words = _command_words(segment)[0]
+    if here is None or cdpath or len(words) != 2:
+        return None
+    target = words[1]
+    if (
+        target.startswith(("-", "+", "~"))
+        or any(char in target for char in _UNEXPANDED)
+        or _brace_would_expand(target)
+        or ".." in PurePosixPath(target).parts
+    ):
+        return None
+    try:
+        resolved = (here / target).resolve()
+    except (ValueError, RuntimeError):
+        return None
+    return resolved if resolved.is_relative_to(_REPO) else None
 
 
 def _is_outside_repo(word: str) -> bool:
@@ -2330,10 +2506,13 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
 
     try:
         command = _drop_quote_dollars(
-            _newlines_to_separators(_strip_comments(_join_continuations(command)))
+            _newlines_to_separators(_join_continuations(_strip_comments(command)))
         )
         words = _lex(command)
         masked = _lex(_mask_quotes(command))
+    except _Unreadable as unreadable:
+        print(f"Blocked: {unreadable}", file=sys.stderr)
+        return 2
     except ValueError:
         # Unbalanced quoting. What bash would run is not what this saw, and the
         # command is malformed for bash too, so refusing costs nothing.
@@ -2426,6 +2605,10 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
     # cd, pushd or popd sets it, and nothing clears it: a git segment between
     # the cd and the redirection does not move bash back.
     moved = False
+    # Where the cds so far leave the shell, or None once one may have left the
+    # checkout (`_directory_after`). Nothing brings it back.
+    here: Path | None = Path.cwd() if Path.cwd().is_relative_to(_REPO) else _REPO
+    cdpath = "CDPATH" in command or "CDPATH" in os.environ
     # The system's copies of the wrappers, where they lead a command. bash
     # runs them and git never receives them, so the operand scan below does
     # not read them as paths outside the repository.
@@ -2554,6 +2737,19 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 file=sys.stderr,
             )
             return 2
+        if here is None and (_runs_git(segment) or _gated_prefix(segment)):
+            print(
+                "Blocked: a `cd`, `pushd` or `popd` earlier in this string may "
+                "leave the checkout, and every path this hook checks is "
+                "resolved inside it. `cd /tmp && git diff -- x .env` names two "
+                "files that look like the repository's, while git, run outside "
+                "any repository, falls back to --no-index and prints /tmp/.env. "
+                "A cd into a directory of the checkout named literally, with no "
+                "`..` (`cd tests && git log -1`), passes; otherwise run the "
+                "command from the checkout, in a call of its own.",
+                file=sys.stderr,
+            )
+            return 2
         if reached is None:
             reached = _assigns_a_reaching_name(segment)
         if _drops_settings_env(segment):
@@ -2564,6 +2760,7 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
             allexport = True
         if _changes_directory(segment):
             moved = True
+            here = _directory_after(segment, here, cdpath)
         if not _runs_git(segment):
             prefix = _gated_prefix(segment)
             if prefix and (

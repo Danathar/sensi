@@ -1356,6 +1356,167 @@ def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:
     assert completed.returncode == 2, "a mid-word # hid the operands after it"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A quote or a backslash inside a comment is comment text, so the
+        # next line is a command of its own (#721).
+        "git log -1 # it's\ngit status >out",
+        "git log -1 # 5\" wide\ngit status >out",
+        "git log -1 # one \\\ngit status >out",
+        "git status # it's\nHOME=planted; git log -1",
+        # An escaped space is part of a word, so the `#` after it is not a
+        # comment and the apostrophe opens a quote that never closes.
+        "git log -1 \\ # it's",
+        # An escape outside a comment is still read as one character.
+        "git log -1 -\\-output=x",
+    ],
+)
+def test_a_quote_or_backslash_in_a_comment_hides_no_line(command: str) -> None:
+    """The line after a comment is read, whatever the comment holds."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -1 # it's the last one",
+        'git log -1 "it\'s # x"',
+        'git log -1 --format="\\"" # it\'s',
+        "git log -1 --format='\\' # it's",
+        "git log -1 \\' # it's",
+        "git log -1 $'\\'' # it's",
+        # A `#` after a backslash-newline starts a comment, as it does once
+        # bash has joined the lines.
+        "git log -1 \\\n# > out",
+    ],
+)
+def test_a_comment_with_a_quote_in_it_is_still_dropped(command: str) -> None:
+    """A quote in a comment, and a `#` in quotes, are read as bash reads them."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The line between or after the bodies runs (#721).
+        "git log -1 <<'EOF'\nx\nEOF\ngit status >out",
+        "git log -1 <<EOF\nx\nEOF\ngit status >out",
+        "git log -1 <<-EOF\n\tx\n\tEOF\ngit status >out",
+        "git log -1 <<\\EOF\nx\nEOF\ngit status >out",
+        # An unquoted delimiter leaves the substitutions in the body live.
+        "git log -1 <<EOF\n`git status >out`\nEOF",
+        "git log -1 <<EOF\n$\\\n(git status >out)\nEOF",
+        # No delimiter, or one whose quote never closes.
+        "git log -1 <<",
+        "git log -1 <<'EOF",
+        # A `<<` that may be a shift rather than a here-document.
+        "(( x = 1 << 2 ))",
+        ": $[ 1 << 2 ]",
+        ": ${x/<<E/}",
+    ],
+)
+def test_a_here_document_hides_no_command(command: str) -> None:
+    """A body is cut out through its delimiter line, and no further."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -1 <<'EOF'\n'\nit's\nEOF",
+        "git log -1 <<EOF\nit's\nEOF",
+        "git log -1 << 'EOF'\nit's\nEOF",
+        "git log -1 <<'E F'\nit's\nE F",
+        "git log -1 <<'A\"B'\nx\nA\"B",
+        "git log -1 <<\"A'\"\nx\nA'",
+        "git log -1 <<-EOF\n\tit's\n\tEOF",
+        "git log -1 <<EOF",
+        # With a quoted delimiter the body is literal, so bash runs nothing
+        # in it.
+        "git log -1 <<'EOF'\n$(git log --output=x -1)\nEOF",
+        "git log -1 <<\\EOF\n$(git log --output=x -1)\nEOF",
+    ],
+)
+def test_a_quote_in_a_here_document_body_is_text(command: str) -> None:
+    """The body is the command's standard input, not shell syntax."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd && git status",
+        "cd - && git status",
+        "cd ~ && git status",
+        "pushd +1 && git status",
+        "popd && git status",
+        "cd $HOME && git status",
+        "cd t* && git status",
+        "cd {..,} && git status",
+        "cd tests/.. && git status",
+        "cd /tmp && git status",
+        "cd /tmp; git rev-parse HEAD",
+        "(cd /tmp && git status)",
+        "cd /tmp && cd tests && git status",
+        "CDPATH=/tmp; cd tests && git status",
+        "cd /tmp && python3 scripts/run_tests.py",
+    ],
+)
+def test_git_after_a_cd_that_may_leave_the_checkout_is_refused(command: str) -> None:
+    """Every path check resolves inside the checkout, so a cd out of it is refused.
+
+    `cd /tmp && git diff -- x .env` names two operands that look like the
+    repository's, while git, outside any repository, falls back to
+    --no-index and prints /tmp/.env (#721).
+    """
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 2, f"{command!r} was not blocked"
+    assert "may leave the checkout" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd tests && git status",
+        "pushd tests && git log -1",
+        "cd tests && cd fixtures && git log -1",
+        "git status && cd /tmp",
+        "cd /tmp && ls",
+    ],
+)
+def test_a_cd_inside_the_checkout_is_followed(command: str) -> None:
+    """A literal directory of the checkout, or a cd after git, is left alone."""
+
+    completed = _run(_payload(command))
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_a_cd_is_not_followed_while_the_session_sets_cdpath() -> None:
+    """With CDPATH set, `cd tests` may go to a `tests` folder somewhere else."""
+
+    completed = subprocess.run(
+        [str(_HOOK)],
+        input=_payload("cd tests && git status"),
+        cwd=str(_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "CDPATH": "/tmp"},
+    )
+    assert completed.returncode == 2
+    assert "may leave the checkout" in completed.stderr
+
+
 def test_bash_really_truncates_the_target_on_a_command_that_is_not_git(
     tmp_path: Path,
 ) -> None:

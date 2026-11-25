@@ -34,6 +34,7 @@ SECURITY_AI = ROOT / "docs/SECURITY-AI.md"
 # spellings lists each one. A new class in the corpus has no entry here and
 # fails until someone declares what the page says about it.
 CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "comment": ("inside a comment",),
     "compound command": ("compound command",),
     "configuration override": ("safe.bareRepository", "--config-env"),
     "configuration reach": ("XDG_CONFIG_HOME", "printf -v", "mapfile"),
@@ -47,8 +48,10 @@ CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
         "exec -c",
         "GIT_CONFIG",
     ),
+    "directory change": ("directory change", "pushd"),
     "environment": ("GIT_EXTERNAL_DIFF",),
     "gh --jq environment": ("--jq",),
+    "here-document": ("here-document",),
     "local ref": ("git branch -D",),
     "name spelling": ("extglob", "g?t"),
     "named repository": ("--git-dir", "--work-tree", "--bare"),
