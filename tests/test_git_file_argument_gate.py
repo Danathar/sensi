@@ -1362,7 +1362,7 @@ def test_a_comment_is_dropped_only_where_bash_drops_it() -> None:
         # A quote or a backslash inside a comment is comment text, so the
         # next line is a command of its own (#721).
         "git log -1 # it's\ngit status >out",
-        "git log -1 # 5\" wide\ngit status >out",
+        'git log -1 # 5" wide\ngit status >out',
         "git log -1 # one \\\ngit status >out",
         "git status # it's\nHOME=planted; git log -1",
         # An escaped space is part of a word, so the `#` after it is not a

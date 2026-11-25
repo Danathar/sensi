@@ -980,8 +980,11 @@ def _strip_comments(command: str) -> str:
                     "parts as separate commands."
                 )
             end, delimiter, quoted = _here_document_delimiter(command, index)
-            bodies.append((delimiter, command.startswith("<<-", index), quoted))
-            kept.append(command[index:end])
+            strip_tabs = command.startswith("<<-", index)
+            bodies.append((delimiter, strip_tabs, quoted))
+            # The `-` of `<<-` belongs to the operator. Left in, the later
+            # word split reads `-EOF` as an option of the command.
+            kept.append("<<" + command[index + (3 if strip_tabs else 2) : end])
             index = end
             continue
         if char in "'\"":
