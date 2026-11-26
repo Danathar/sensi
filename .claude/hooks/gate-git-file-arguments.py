@@ -199,6 +199,8 @@ Each rests on a documented property of the permission matcher, not on a guess:
   `declare +x` of a `GIT_CONFIG_*` name before git (#705): each takes away
   the `safe.bareRepository=explicit` the settings env sets, which is the
   ruling on atomic-image-builder#772 that #699 applied to `-c safe.*`.
+  `env -C DIR` / `--chdir=DIR` in front of git is refused as the `cd` it is
+  (`_env_changes_directory`), whatever the folder.
 * git's own global options - `git -c diff.external=prog diff`,
   `--config-env`, `--exec-path` - which do reach git and do load a program.
   `Bash(git diff:*)` is `Bash(git diff *)`: the space is part of the rule, so
@@ -470,6 +472,17 @@ _COMMAND_WRAPPERS = frozenset(
         "env",
         "exec",
     }
+)
+
+# The reserved words bash reads before the command of a compound statement:
+# `if true; then HOME=planted; git diff; fi` runs `HOME=planted` as a command
+# of its own, so the keyword is not the command name. Read as one, it hid the
+# assignment, an `unset GIT_CONFIG_COUNT` or a `cd /tmp` from every check that
+# reads a segment's command (`{ HOME=planted; git diff; }` ran a planted
+# diff.external program, git 2.47.3). `for`, `select` and `case` are not here:
+# the word after them is a loop variable or a subject, not a command.
+_LEADING_RESERVED_WORDS = frozenset(
+    {"!", "if", "elif", "then", "else", "while", "until", "do", "{"}
 )
 
 # Everything up to the last `/` or `\` of a word: the matcher's own pattern.
@@ -1517,7 +1530,8 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
     matcher reads it; `_spelled_wrapper` refuses the paths that are not the
     system's own copy. A `$` left behind by a nested
     `$(...)` is dropped from the end of a word, so the words are the ones
-    typed around the substitution.
+    typed around the substitution. A shell keyword that opens the segment
+    (`then`, `do`, `{`, see `_LEADING_RESERVED_WORDS`) is stepped over too.
     """
 
     words: list[str] = []
@@ -1543,6 +1557,8 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
             word = word[:-1]
             if not word:
                 continue
+        if not (words or wrappers or assigned) and word in _LEADING_RESERVED_WORDS:
+            continue
         if not words and _wrapper_name(word) in _COMMAND_WRAPPERS:
             wrappers.append(word)
             continue
@@ -1898,6 +1914,36 @@ def _env_clears_settings(arguments: list[str]) -> str | None:
                 step = 1 if rest else 2
                 break
         index += step
+    return None
+
+
+def _env_changes_directory(segment: list[str]) -> str | None:
+    """Return the `env -C` / `--chdir` option that starts git in another folder.
+
+    `env --chdir=.. git diff -- repo/README.md repo/.env` names two operands
+    that look like files of the checkout, while git, started outside any
+    repository, falls back to --no-index and printed the .env file (git
+    2.47.3). It is the `cd` refused below in env's own spelling, and the
+    attached forms (`-C..`, `--chdir=..`, the abbreviation `--chd=..`) carry
+    no separate word for the path checks to read, so every spelling is
+    refused, a folder inside the checkout included. Only an `env` with a git
+    word after it is read (`git log -S env -C` names no wrapper). Every word
+    between `env` and the git word is read, an option's value
+    included, so `env -u -C git log` is over-refused; that is the cheap side.
+    """
+
+    for index, word in enumerate(segment):
+        if _wrapper_name(word) != "env" or not _runs_git(segment[index + 1 :]):
+            continue
+        for option in segment[index + 1 :]:
+            if _is_named(option, "git"):
+                break
+            name = option.partition("=")[0]
+            if name.startswith("--"):
+                if len(name) > 2 and "--chdir".startswith(name):
+                    return option
+            elif name.startswith("-") and "C" in name:
+                return option
     return None
 
 
@@ -2944,6 +2990,19 @@ def _decide(command: str, depth: int, checks: list[int]) -> int:
                 "program for git to run while it renders a diff: `env -i git "
                 "log -p` or `env -u GIT_CONFIG_COUNT git log -p` inside such a "
                 "folder runs it. Run git without clearing its environment (#705).",
+                file=sys.stderr,
+            )
+            return 2
+        chdir = _env_changes_directory(segment)
+        if chdir is not None:
+            print(
+                f"Blocked: `env {chdir}` starts git in another folder, and every "
+                "path this hook checks is resolved inside the checkout. `env "
+                "--chdir=.. git diff -- repo/README.md repo/.env` names two "
+                "files that look like the repository's, while git, run outside "
+                "any repository, falls back to --no-index and prints .env. It "
+                "is the `cd` refused here, spelled as an env option. Run git "
+                "from the checkout without it.",
                 file=sys.stderr,
             )
             return 2

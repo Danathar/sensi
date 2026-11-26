@@ -178,7 +178,13 @@ supply-chain concern.
   `cd`, `pushd` or `popd` that may leave the checkout, a later git, gh,
   python3 or ruff command in the same string is refused. Only a `cd` or `pushd` into a
   directory of the checkout named literally, with no `..` and no CDPATH, is
-  followed, so `cd tests && git log -1` passes.
+  followed, so `cd tests && git log -1` passes. `env -C DIR` and
+  `env --chdir=DIR` start git in another folder the same way and are refused
+  in front of git whatever the folder, since the attached spellings leave no
+  path for the hook to read. A shell keyword in front of a command (`if`,
+  `then`, `else`, `do`, `while`, `!`, `{`) is not its name: in `if true; then
+  HOME=planted; git diff; fi` the hook reads the assignment, the `unset` or
+  the `cd` after the keyword as it would without one.
   Inside a comment a quote opens nothing and a backslash joins no line, and
   in a here-document body a quote or a `#` is text too, so an apostrophe
   there (`# it's`, or `it's` between `<<EOF` and `EOF`) does not hide the
