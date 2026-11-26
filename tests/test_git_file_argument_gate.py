@@ -3283,6 +3283,61 @@ _CORPUS: tuple[_Row, ...] = (
         _REFUSED,
         "env -i starts git with an empty environment, the settings env included",
     ),
+    # --- env -C / --chdir starts git in another folder ---------------------
+    _Row(
+        "environment",
+        "env --chdir=.. git diff -- repo/README.md repo/.env",
+        _REFUSED,
+        "git started outside any repository falls back to --no-index and "
+        "prints the checkout's .env, while both operands look like the "
+        "repository's own files",
+    ),
+    _Row(
+        "environment",
+        "env -C.. git diff -- repo/README.md repo/.env",
+        _REFUSED,
+        "the short option with its folder attached leaves no separate word for "
+        "the path checks to read",
+    ),
+    _Row(
+        "environment",
+        "env --chd=.. git diff HEAD",
+        _REFUSED,
+        "GNU env takes any unambiguous abbreviation of --chdir",
+    ),
+    _Row(
+        "environment",
+        "env -u FOO --chdir tests git log -1",
+        _REFUSED,
+        "the walk steps over -u's value and still finds --chdir, and a folder "
+        "inside the checkout is refused too",
+    ),
+    _Row(
+        "environment",
+        "git log -S env -C",
+        _ALLOWED,
+        "an env and a -C that git receives as operands are not a wrapper",
+    ),
+    _Row(
+        "environment",
+        "env git log -C -1",
+        _ALLOWED,
+        "the walk stops at the git word, so git log's own -C (copy detection) "
+        "is not read as env's",
+    ),
+    _Row(
+        "environment",
+        "env -u CC git log -1",
+        _ALLOWED,
+        "a value that holds a C but is not an option is not env's -C, and the "
+        "name it unsets is outside the settings env",
+    ),
+    _Row(
+        "environment",
+        "env -- git log -1",
+        _ALLOWED,
+        "a bare -- ends env's options and is no abbreviation of --chdir",
+    ),
     _Row(
         "environment",
         "env - git log -p",
@@ -3545,9 +3600,9 @@ _CORPUS: tuple[_Row, ...] = (
     _Row(
         "environment",
         "env -Cdocs git log -1",
-        _ALLOWED,
-        "-C with its directory joined in one word changes the directory "
-        "and leaves the environment as it was",
+        _REFUSED,
+        "-C with its directory joined in one word is env's directory change, "
+        "refused whatever the folder, since no separate word names the path",
     ),
     _Row(
         "environment",
@@ -3566,9 +3621,9 @@ _CORPUS: tuple[_Row, ...] = (
     ),
     _Row(
         "environment",
-        "env --chdir git",
+        "env --argv0 git",
         _ALLOWED,
-        "--chdir takes git as its value and leaves no command, so the walk "
+        "--argv0 takes git as its value and leaves no command, so the walk "
         "ends at the last word with nothing split and the hook decides "
         "instead of raising",
     ),
@@ -3696,6 +3751,129 @@ _CORPUS: tuple[_Row, ...] = (
         _REFUSED,
         "printf takes -v's name attached to the option as well as after it "
         "(a name with no O, which the -O check would refuse on its own)",
+    ),
+    # --- a shell keyword in front of the command it opens ------------------
+    _Row(
+        "environment",
+        "if true; then HOME=planted; git diff; fi",
+        _REFUSED,
+        "then is a keyword, not the command: the assignment after it reaches "
+        "git and loaded planted/.gitconfig, whose diff.external program ran",
+    ),
+    _Row(
+        "environment",
+        "{ HOME=planted; git diff; }",
+        _REFUSED,
+        "a brace group opens with { as a word of its own, and the assignment "
+        "after it is still the command",
+    ),
+    _Row(
+        "environment",
+        "if true; then unset GIT_CONFIG_COUNT; git log -p; fi",
+        _REFUSED,
+        "unset after then takes the safe.bareRepository setting away as a "
+        "plain unset does",
+    ),
+    _Row(
+        "environment",
+        "while true; do unset GIT_CONFIG_COUNT; git log -p; break; done",
+        _REFUSED,
+        "do opens the loop body the way then opens a branch",
+    ),
+    _Row(
+        "environment",
+        "! unset GIT_CONFIG_COUNT; git log -p",
+        _REFUSED,
+        "! negates the status of the unset and still runs it",
+    ),
+    _Row(
+        "environment",
+        "if false; then :; else GIT_CONFIG_COUNT=0; git log -p; fi",
+        _REFUSED,
+        "else opens a branch as then does, so the count assignment after it reaches git",
+    ),
+    _Row(
+        "environment",
+        "if true; then cd /tmp; git diff -- x .env; fi",
+        _REFUSED,
+        "the cd after then leaves the checkout as a plain cd does",
+    ),
+    _Row(
+        "environment",
+        "if unset GIT_CONFIG_COUNT; then git log -p; fi",
+        _REFUSED,
+        "the test of an if runs as a command, so the unset after if still "
+        "takes the setting away",
+    ),
+    _Row(
+        "environment",
+        "if false; then :; elif unset GIT_CONFIG_COUNT; then git log -p; fi",
+        _REFUSED,
+        "elif opens a second test that runs as a command, as if does",
+    ),
+    _Row(
+        "environment",
+        "while unset GIT_CONFIG_COUNT; do git log -p; break; done",
+        _REFUSED,
+        "the test of a while loop runs as a command before the body",
+    ),
+    _Row(
+        "environment",
+        "until unset GIT_CONFIG_COUNT; do git log -p; done",
+        _REFUSED,
+        "until runs its test the way while does, with the result inverted",
+    ),
+    _Row(
+        "environment",
+        "git checkout -b x then",
+        _REFUSED,
+        "a then after a command's first word is an argument, here a start "
+        "point, and is not stepped over",
+    ),
+    _Row(
+        "environment",
+        "HOME=planted then; git log -1",
+        _ALLOWED,
+        "after an assignment then is a command name, so HOME reaches only "
+        "that command and not the git after it",
+    ),
+    _Row(
+        "environment",
+        "command then cd -; git log -1",
+        _ALLOWED,
+        "after a wrapper then is the command it runs, so no cd happens and "
+        "git still runs in the checkout",
+    ),
+    _Row(
+        "environment",
+        "env --c=.. git log -1",
+        _REFUSED,
+        "--c is the shortest abbreviation of --chdir that GNU env accepts",
+    ),
+    _Row(
+        "environment",
+        "git log -S -C git",
+        _ALLOWED,
+        "with no env in front, a -C before a later git word is git's own "
+        "option and moves nothing",
+    ),
+    _Row(
+        "environment",
+        "if git diff --quiet; then echo same; fi",
+        _ALLOWED,
+        "stepping over if leaves git diff as the command, which is allowed",
+    ),
+    _Row(
+        "environment",
+        "if cd tests; then git log -1; fi",
+        _ALLOWED,
+        "a cd into a folder of the checkout after if is followed as a plain one is",
+    ),
+    _Row(
+        "environment",
+        "if true; then TZ=UTC; git log -1; fi",
+        _ALLOWED,
+        "a name outside the reaching names stays allowed after a keyword too",
     ),
     _Row(
         "environment",
