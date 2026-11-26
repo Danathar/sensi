@@ -1384,6 +1384,9 @@ def test_a_quote_or_backslash_in_a_comment_hides_no_line(command: str) -> None:
     [
         "git log -1 # it's the last one",
         'git log -1 "it\'s # x"',
+        # A closing quote ends the string, and an escaped one does not.
+        'git log -1 "a" # it\'s',
+        'git log -1 --format="a\\"b" # it\'s',
         'git log -1 --format="\\"" # it\'s',
         "git log -1 --format='\\' # it's",
         "git log -1 \\' # it's",
@@ -1408,6 +1411,10 @@ def test_a_comment_with_a_quote_in_it_is_still_dropped(command: str) -> None:
         "git log -1 <<EOF\nx\nEOF\ngit status >out",
         "git log -1 <<-EOF\n\tx\n\tEOF\ngit status >out",
         "git log -1 <<\\EOF\nx\nEOF\ngit status >out",
+        # The body starts on the next line, so what follows the delimiter on
+        # the `<<` line is still read.
+        "git log -1 <<EOF >out\nx\nEOF",
+        "git log -1 <<EOF; git status >out\nx\nEOF",
         # An unquoted delimiter leaves the substitutions in the body live.
         "git log -1 <<EOF\n`git status >out`\nEOF",
         "git log -1 <<EOF\n$\\\n(git status >out)\nEOF",
@@ -1437,6 +1444,8 @@ def test_a_here_document_hides_no_command(command: str) -> None:
         "git log -1 <<'A\"B'\nx\nA\"B",
         "git log -1 <<\"A'\"\nx\nA'",
         "git log -1 <<-EOF\n\tit's\n\tEOF",
+        # Only the `-` of `<<-` is dropped; the quote after it is kept whole.
+        "git log -1 <<-'EOF'\n\tit's\n\tEOF",
         "git log -1 <<EOF",
         # With a quoted delimiter the body is literal, so bash runs nothing
         # in it.

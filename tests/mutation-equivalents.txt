@@ -363,3 +363,9 @@ line: 1938
 original: for option in segment[index + 1 :]:
 mutant: for option in segment[index + 0 :]:
 reason: equivalent; the extra word is env itself, which starts with neither - nor --, so it is never read as -C or --chdir
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1000
+original: kept.append("<<" + command[index + (3 if strip_tabs else 2) : end])
+mutant: kept.append("<<" + command[index + (3 if strip_tabs else 1) : end])
+reason: equivalent; it keeps `<<<` for `<<`, and the later reader treats both the same: a redirection that opens no path, with the same word after it
