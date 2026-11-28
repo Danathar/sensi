@@ -484,6 +484,26 @@ _COMMAND_WRAPPERS = frozenset(
 _LEADING_RESERVED_WORDS = frozenset(
     {"!", "if", "elif", "then", "else", "while", "until", "do", "{"}
 )
+# Two more reserved words open a command with a word that is not its name.
+# `function f { HOME=planted; }; f; git diff` defines `f` as `f() { ...; }`
+# does, and `coproc HOME=planted git diff` (or `coproc C { ...; }`) runs the
+# command in the background with the assignment still in front of git; both
+# ran a planted diff.external program (#728). `_command_words` steps over
+# `function` with the name after it, and `coproc` with a NAME before `{`.
+#
+# The options of the wrappers bash runs in the current shell, which
+# `_command_words` steps over while no command word has been read. The `time`
+# keyword takes `-p` (POSIX output) and `--`; `command` takes `-p` (default
+# PATH) and `--`; `builtin` takes `--`. Read as the command name, the option
+# hid what came after it: `time -p HOME=planted git diff` ran a planted
+# diff.external program, and `command -p unset GIT_CONFIG_COUNT` took the
+# settings env away before a later git (#728). `command -v` and `-V` only
+# print, and the other wrappers exec a program, which cannot be a builtin.
+_IN_SHELL_WRAPPER_OPTIONS = {
+    "time": frozenset({"-p", "--"}),
+    "command": frozenset({"-p", "--"}),
+    "builtin": frozenset({"--"}),
+}
 
 # Everything up to the last `/` or `\` of a word: the matcher's own pattern.
 _PATH_HEAD = re.compile(r"^.*[\\/]")
@@ -1557,7 +1577,21 @@ def _command_words(segment: list[str]) -> tuple[list[str], list[str], bool]:
             word = word[:-1]
             if not word:
                 continue
-        if not (words or wrappers or assigned) and word in _LEADING_RESERVED_WORDS:
+        if not (words or wrappers or assigned):
+            if word in _LEADING_RESERVED_WORDS:
+                continue
+            if word == "function":
+                index += 1  # the function's name; the `{` of its body follows
+                continue
+            if word == "coproc":
+                if segment[index + 1 : index + 2] == ["{"]:
+                    index += 1  # the NAME bash takes only before a compound command
+                continue
+        if (
+            not words
+            and wrappers
+            and word in _IN_SHELL_WRAPPER_OPTIONS.get(_wrapper_name(wrappers[-1]), ())
+        ):
             continue
         if not words and _wrapper_name(word) in _COMMAND_WRAPPERS:
             wrappers.append(word)

@@ -184,7 +184,10 @@ supply-chain concern.
   path for the hook to read. A shell keyword in front of a command (`if`,
   `then`, `else`, `do`, `while`, `!`, `{`) is not its name: in `if true; then
   HOME=planted; git diff; fi` the hook reads the assignment, the `unset` or
-  the `cd` after the keyword as it would without one.
+  the `cd` after the keyword as it would without one. The same holds for
+  `function NAME { ... }`, for `coproc` (and the `NAME` it takes before
+  `{`), and for the options of the wrappers bash runs in the current shell:
+  `-p` and `--` of `time` and of `command`, and `--` of `builtin`.
   Inside a comment a quote opens nothing and a backslash joins no line, and
   in a here-document body a quote or a `#` is text too, so an apostrophe
   there (`# it's`, or `it's` between `<<EOF` and `EOF`) does not hide the

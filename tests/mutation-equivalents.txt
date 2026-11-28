@@ -369,3 +369,9 @@ line: 1000
 original: kept.append("<<" + command[index + (3 if strip_tabs else 2) : end])
 mutant: kept.append("<<" + command[index + (3 if strip_tabs else 1) : end])
 reason: equivalent; it keeps `<<<` for `<<`, and the later reader treats both the same: a redirection that opens no path, with the same word after it
+
+file: .claude/hooks/gate-git-file-arguments.py
+line: 1588
+original: index += 1  # the NAME bash takes only before a compound command
+mutant: index += 2  # the NAME bash takes only before a compound command
+reason: equivalent; the step runs only when the next word is `{`, which the following pass steps over as a leading reserved word anyway
